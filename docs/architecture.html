@@ -1,0 +1,378 @@
+<title>Model Cartographer — architecture</title>
+<style>
+  :root{
+    --paper:#F7F6F2; --ink:#242B33; --muted:#6B7280; --hair:#DBD8D0;
+    --teal:#136A5B; --teal-bg:#E7F0ED; --coral:#BC4F2C; --coral-bg:#F6EAE3;
+    --blue:#3E5F82; --blue-bg:#E9EEF4; --gray-bg:#EEECE6;
+    --mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  }
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);margin:0;line-height:1.6;}
+  .wrap{max-width:980px;margin:0 auto;padding:48px 24px 80px;}
+  header h1{font-family:var(--mono);font-size:26px;font-weight:600;margin:0 0 4px;letter-spacing:-.02em;}
+  header p{color:var(--muted);margin:0;max-width:62ch;}
+  .lede{font-size:15px;}
+  h2{font-family:var(--mono);font-size:15px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;margin:56px 0 6px;}
+  h2 + p.sub{color:var(--muted);font-size:14px;margin:0 0 20px;max-width:70ch;}
+  .diagram-box{border:1px solid var(--hair);background:#FBFAF7;border-radius:6px;padding:20px 12px;overflow-x:auto;margin-top:24px;}
+  .legend{display:flex;gap:20px;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:10px;padding:0 8px;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .sw{width:11px;height:11px;border-radius:2px;display:inline-block;border:1px solid rgba(0,0,0,.15);}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:16px;}
+  .card{border:1px solid var(--hair);border-radius:6px;background:#FFFFFE;padding:16px 18px;display:flex;flex-direction:column;gap:8px;}
+  .card.teal{border-top:3px solid var(--teal);border-radius:0 0 6px 6px;}
+  .card.coral{border-top:3px solid var(--coral);border-radius:0 0 6px 6px;}
+  .card.blue{border-top:3px solid var(--blue);border-radius:0 0 6px 6px;}
+  .card.gray{border-top:3px solid #9A968C;border-radius:0 0 6px 6px;}
+  .card h3{font-family:var(--mono);font-size:14px;font-weight:600;margin:0;}
+  .tag{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);}
+  .card p{font-size:13.5px;margin:0;color:#3A414B;}
+  .io{font-family:var(--mono);font-size:12px;background:var(--gray-bg);border-radius:4px;padding:8px 10px;line-height:1.55;}
+  .io b{font-weight:600;}
+  ul.inv{margin:0;padding-left:18px;font-size:13px;color:#3A414B;}
+  ul.inv li{margin:2px 0;}
+  ul.inv li::marker{color:var(--coral);}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-family:var(--mono);font-size:12.5px;margin-top:18px;}
+  .flow .step{border:1px solid var(--hair);background:#FFFFFE;border-radius:4px;padding:6px 12px;}
+  .flow .step em{font-style:normal;color:var(--muted);font-size:11px;display:block;}
+  .flow .arr{color:var(--muted);}
+  .foot{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:20px;}
+  @media(max-width:700px){.foot{grid-template-columns:1fr;}}
+  .foot .panel{border:1px solid var(--hair);border-radius:6px;padding:16px 18px;background:#FBFAF7;font-size:13.5px;}
+  .foot h3{font-family:var(--mono);font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.07em;}
+  .foot ol,.foot ul{margin:0;padding-left:18px;}
+  .foot li{margin:3px 0;}
+  code{font-family:var(--mono);font-size:.92em;background:var(--gray-bg);padding:1px 5px;border-radius:3px;}
+  text{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>Model Cartographer</h1>
+  <p class="lede">Active discovery of LLM capability frontiers. Latent tasks are the controlled experimental object; natural language is a rendered surface; the failure decomposition engine is the centerpiece. Design v3 — locked.</p>
+</header>
+
+<h2>System dataflow</h2>
+<p class="sub">Solid arrows are the main experimental loop. The feedback edge from estimator to scheduler is what makes this adaptive rather than a grid sweep — it is load-bearing.</p>
+
+<div class="diagram-box">
+<svg viewBox="0 0 940 780" width="940" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Model Cartographer system dataflow diagram">
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#8A8578"/></marker>
+<marker id="ac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#BC4F2C"/></marker>
+</defs>
+
+<!-- TASK SYSTEM group -->
+<rect x="20" y="20" width="420" height="290" rx="6" fill="none" stroke="#C9C5BA" stroke-dasharray="4 4"/>
+<text x="36" y="44" font-size="11" fill="#6B7280" letter-spacing="1.5">TASK SYSTEM</text>
+
+<rect x="40" y="60" width="180" height="58" rx="4" fill="#E7F0ED" stroke="#136A5B"/>
+<text x="130" y="84" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0E4A40">latent world generator</text>
+<text x="130" y="102" text-anchor="middle" font-size="10.5" fill="#136A5B">5 dims · seeded · composable</text>
+
+<rect x="250" y="60" width="170" height="58" rx="4" fill="#E7F0ED" stroke="#136A5B"/>
+<text x="335" y="84" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0E4A40">mutation engine</text>
+<text x="335" y="102" text-anchor="middle" font-size="10.5" fill="#136A5B">edits latent vars only</text>
+
+<rect x="40" y="150" width="180" height="58" rx="4" fill="#E7F0ED" stroke="#136A5B"/>
+<text x="130" y="174" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0E4A40">template renderer</text>
+<text x="130" y="192" text-anchor="middle" font-size="10.5" fill="#136A5B">deterministic baseline</text>
+
+<rect x="250" y="150" width="170" height="58" rx="4" fill="#E7F0ED" stroke="#136A5B"/>
+<text x="335" y="174" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0E4A40">nemotron renderer</text>
+<text x="335" y="192" text-anchor="middle" font-size="10.5" fill="#136A5B">variation layer</text>
+
+<rect x="250" y="238" width="170" height="52" rx="4" fill="#F6EAE3" stroke="#BC4F2C"/>
+<text x="335" y="260" text-anchor="middle" font-size="12.5" font-weight="600" fill="#7A3218">fidelity gate</text>
+<text x="335" y="277" text-anchor="middle" font-size="10.5" fill="#BC4F2C">round-trip · reject · log</text>
+
+<rect x="40" y="238" width="180" height="52" rx="4" fill="#EEECE6" stroke="#9A968C"/>
+<text x="130" y="260" text-anchor="middle" font-size="12.5" font-weight="600" fill="#44413A">verifier</text>
+<text x="130" y="277" text-anchor="middle" font-size="10.5" fill="#6B675D">truth from latent task</text>
+
+<line x1="220" y1="89" x2="250" y2="89" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="335" y1="118" x2="335" y2="150" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="130" y1="118" x2="130" y2="150" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="335" y1="208" x2="335" y2="238" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+
+<!-- PROBE SYSTEM group -->
+<rect x="480" y="20" width="440" height="290" rx="6" fill="none" stroke="#C9C5BA" stroke-dasharray="4 4"/>
+<text x="496" y="44" font-size="11" fill="#6B7280" letter-spacing="1.5">PROBE SYSTEM</text>
+
+<rect x="500" y="60" width="190" height="70" rx="4" fill="#E7F0ED" stroke="#136A5B"/>
+<text x="595" y="86" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0E4A40">adaptive scheduler</text>
+<text x="595" y="103" text-anchor="middle" font-size="10.5" fill="#136A5B">waves · bisection · budget</text>
+<text x="595" y="118" text-anchor="middle" font-size="10.5" fill="#136A5B">exploration/exploitation</text>
+
+<rect x="720" y="60" width="180" height="70" rx="4" fill="#E9EEF4" stroke="#3E5F82"/>
+<text x="810" y="86" text-anchor="middle" font-size="12.5" font-weight="600" fill="#2A4159">execution layer</text>
+<text x="810" y="103" text-anchor="middle" font-size="10.5" fill="#3E5F82">Serverless Jobs</text>
+<text x="810" y="118" text-anchor="middle" font-size="10.5" fill="#3E5F82">retry · cost accounting</text>
+
+<rect x="720" y="170" width="180" height="70" rx="4" fill="#E9EEF4" stroke="#3E5F82"/>
+<text x="810" y="196" text-anchor="middle" font-size="12.5" font-weight="600" fill="#2A4159">Token Factory</text>
+<text x="810" y="213" text-anchor="middle" font-size="10.5" fill="#3E5F82">Nemotron Nano · Super · Ultra</text>
+<text x="810" y="228" text-anchor="middle" font-size="10.5" fill="#3E5F82">subjects under test</text>
+
+<rect x="500" y="170" width="190" height="70" rx="4" fill="#EEECE6" stroke="#9A968C"/>
+<text x="595" y="192" text-anchor="middle" font-size="12.5" font-weight="600" fill="#44413A">synthetic harness</text>
+<text x="595" y="209" text-anchor="middle" font-size="10.5" fill="#6B675D">fake models · known rules</text>
+<text x="595" y="224" text-anchor="middle" font-size="10.5" fill="#6B675D">same client interface</text>
+
+<line x1="690" y1="95" x2="720" y2="95" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="810" y1="130" x2="810" y2="170" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="690" y1="205" x2="713" y2="130" stroke="#8A8578" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a)"/>
+
+<!-- tasks flow to scheduler -->
+<path d="M 440 160 C 470 150 470 110 500 100" fill="none" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<text x="452" y="128" font-size="10" fill="#6B7280">tasks</text>
+
+<!-- results store -->
+<rect x="330" y="360" width="300" height="64" rx="4" fill="#EEECE6" stroke="#9A968C"/>
+<text x="480" y="386" text-anchor="middle" font-size="13" font-weight="600" fill="#44413A">results store</text>
+<text x="480" y="404" text-anchor="middle" font-size="10.5" fill="#6B675D">canonical records · lineage · realized dims · cost</text>
+
+<line x1="810" y1="240" x2="632" y2="366" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<text x="740" y="310" font-size="10" fill="#6B7280">outcomes</text>
+<line x1="130" y1="290" x2="330" y2="372" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<text x="200" y="332" font-size="10" fill="#6B7280">verdicts</text>
+
+<!-- feedback loop -->
+<path d="M 630 380 C 900 380 930 90 900 78 " fill="none" stroke="#BC4F2C" stroke-width="1.6" stroke-dasharray="6 4"/>
+<path d="M 900 78 C 880 62 720 55 692 68" fill="none" stroke="#BC4F2C" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ac)"/>
+<text x="795" y="345" font-size="10.5" fill="#BC4F2C" font-weight="600">frontier estimates feed next wave</text>
+
+<!-- ANALYSIS group -->
+<rect x="20" y="470" width="900" height="180" rx="6" fill="none" stroke="#C9C5BA" stroke-dasharray="4 4"/>
+<text x="36" y="494" font-size="11" fill="#6B7280" letter-spacing="1.5">ANALYSIS</text>
+
+<rect x="40" y="510" width="230" height="80" rx="4" fill="#F6EAE3" stroke="#BC4F2C" stroke-width="1.6"/>
+<text x="155" y="536" text-anchor="middle" font-size="13" font-weight="600" fill="#7A3218">failure decomposition</text>
+<text x="155" y="554" text-anchor="middle" font-size="10.5" fill="#BC4F2C">singles → pairs → higher-order</text>
+<text x="155" y="570" text-anchor="middle" font-size="10.5" fill="#BC4F2C">emits structured hypotheses</text>
+
+<rect x="300" y="510" width="200" height="80" rx="4" fill="#E7F0ED" stroke="#136A5B"/>
+<text x="400" y="536" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0E4A40">confirmation + stats</text>
+<text x="400" y="554" text-anchor="middle" font-size="10.5" fill="#136A5B">fresh seeds · effect sizes</text>
+<text x="400" y="570" text-anchor="middle" font-size="10.5" fill="#136A5B">multiple-comparison control</text>
+
+<rect x="530" y="510" width="180" height="80" rx="4" fill="#E7F0ED" stroke="#136A5B"/>
+<text x="620" y="536" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0E4A40">frontier estimator</text>
+<text x="620" y="554" text-anchor="middle" font-size="10.5" fill="#136A5B">logistic fits · CIs</text>
+<text x="620" y="570" text-anchor="middle" font-size="10.5" fill="#136A5B">brittleness split</text>
+
+<rect x="740" y="510" width="160" height="80" rx="4" fill="#E9EEF4" stroke="#3E5F82"/>
+<text x="820" y="536" text-anchor="middle" font-size="12.5" font-weight="600" fill="#2A4159">evidence analyst</text>
+<text x="820" y="554" text-anchor="middle" font-size="10.5" fill="#3E5F82">Nemotron Ultra writes</text>
+<text x="820" y="570" text-anchor="middle" font-size="10.5" fill="#3E5F82">the diagnosis report</text>
+
+<line x1="400" y1="424" x2="190" y2="510" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="460" y1="424" x2="410" y2="510" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="530" y1="424" x2="605" y2="510" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="600" y1="424" x2="800" y2="510" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="270" y1="550" x2="300" y2="550" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+
+<!-- mutation request back edge -->
+<path d="M 40 545 C 10 540 10 100 40 92" fill="none" stroke="#BC4F2C" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#ac)"/>
+<text x="12" y="330" font-size="10.5" fill="#BC4F2C" transform="rotate(-90 18 330)">requests mutants via SDK</text>
+
+<!-- PRODUCTS -->
+<rect x="180" y="690" width="260" height="64" rx="4" fill="#E7F0ED" stroke="#136A5B" stroke-width="1.6"/>
+<text x="310" y="716" text-anchor="middle" font-size="13" font-weight="600" fill="#0E4A40">atlas</text>
+<text x="310" y="734" text-anchor="middle" font-size="10.5" fill="#136A5B">failure geometry · model comparison · cost</text>
+
+<rect x="500" y="690" width="260" height="64" rx="4" fill="#E9EEF4" stroke="#3E5F82"/>
+<text x="630" y="716" text-anchor="middle" font-size="13" font-weight="600" fill="#2A4159">router (demo)</text>
+<text x="630" y="734" text-anchor="middle" font-size="10.5" fill="#3E5F82">frontier-derived policy · serves Nemotron</text>
+
+<line x1="330" y1="590" x2="310" y2="690" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+<line x1="640" y1="590" x2="630" y2="690" stroke="#8A8578" stroke-width="1.4" marker-end="url(#a)"/>
+</svg>
+</div>
+<div class="legend">
+  <span><span class="sw" style="background:#E7F0ED;border-color:#136A5B"></span>cartographer engine</span>
+  <span><span class="sw" style="background:#F6EAE3;border-color:#BC4F2C"></span>centerpiece / critical gates</span>
+  <span><span class="sw" style="background:#E9EEF4;border-color:#3E5F82"></span>Nebius + Nemotron</span>
+  <span><span class="sw" style="background:#EEECE6;border-color:#9A968C"></span>data + validation</span>
+  <span style="color:#BC4F2C">- - → feedback / control edges</span>
+</div>
+
+<h2>Component board</h2>
+<p class="sub">One card per buildable unit, in dependency order. Each card is a contract: what goes in, what comes out, and the invariants that must never break. Work top-left to bottom-right.</p>
+
+<div class="grid">
+
+<div class="card gray">
+  <span class="tag">phase 0 · validation</span>
+  <h3>synthetic harness</h3>
+  <p>Fake "models" with hand-written failure rules — single-factor, planted interactions, noisy variants. Implements the same client interface as the real execution layer.</p>
+  <div class="io"><b>in</b> rendered tasks<br><b>out</b> pass/fail per rule + injected noise</div>
+  <ul class="inv">
+    <li>Decomposition must recover planted rules before any real run is trusted</li>
+    <li>Must also NOT find interactions where none were planted</li>
+  </ul>
+</div>
+
+<div class="card gray">
+  <span class="tag">phase 0.5 · foundation</span>
+  <h3>schemas + results store</h3>
+  <p>Canonical experiment record: latent params, realized dim values, rendering id + mode, mutation lineage, model, verdict, tokens, cost, latency, seed.</p>
+  <div class="io"><b>in</b> every event in the system<br><b>out</b> queryable history for all analysis</div>
+  <ul class="inv">
+    <li>Realized dimension values logged for every task, not just the mutated knob</li>
+    <li>Cost fields present from day one</li>
+  </ul>
+</div>
+
+<div class="card teal">
+  <span class="tag">phase 1 · task system</span>
+  <h3>latent world generator</h3>
+  <p>One compositional generator: entities, objects, events, beliefs, timestamps. All five launch dimensions fall out of one world model.</p>
+  <div class="io"><b>in</b> dim params + seed<br><b>out</b> latent task + ground-truth answer</div>
+  <ul class="inv">
+    <li>Latent representation is the sole source of truth</li>
+    <li>Dims: entity/state · temporal/causal · coreference · distractors · context length</li>
+  </ul>
+</div>
+
+<div class="card teal">
+  <span class="tag">phase 1 · task system</span>
+  <h3>mutation engine</h3>
+  <p>Controlled transformations of latent variables; surface is re-rendered afterward, never edited directly.</p>
+  <div class="io"><b>in</b> latent task + factor spec<br><b>out</b> mutant latent task(s)</div>
+  <ul class="inv">
+    <li>Mutations edit latent vars only</li>
+    <li>Side effects on other dims are measured and logged, not assumed zero</li>
+  </ul>
+</div>
+
+<div class="card teal">
+  <span class="tag">phase 2 · task system</span>
+  <h3>template renderer + verifier</h3>
+  <p>Deterministic latent→text rendering (trusted baseline mode) and deterministic verification against the latent answer. No LLM judge anywhere.</p>
+  <div class="io"><b>in</b> latent task / model response<br><b>out</b> prompt text / pass–fail verdict</div>
+  <ul class="inv">
+    <li>Accidental ambiguity is a bug: rewrite, or define "indeterminate" as the expected answer</li>
+    <li>Verifier reads truth from latent task only</li>
+  </ul>
+</div>
+
+<div class="card blue">
+  <span class="tag">phase 2 · runs continuously</span>
+  <h3>real-model pilot</h3>
+  <p>~50 tasks through Nano/Super/Ultra the day rendering works. Validates parsing, refusals, rate limits, real costs, and that difficulty knobs actually span easy→hard.</p>
+  <div class="io"><b>in</b> rendered tasks<br><b>out</b> validated execution client + cost calibration</div>
+  <ul class="inv">
+    <li>Pilot code graduates into the campaign client — not throwaway</li>
+  </ul>
+</div>
+
+<div class="card coral">
+  <span class="tag">phase 3 · centerpiece</span>
+  <h3>failure decomposition engine</h3>
+  <p>Given a failure region: test single factors, then pairs, higher-order only when justified. Finds the minimal factor set that reproduces the failure.</p>
+  <div class="io"><b>in</b> failure + budget<br><b>out</b> structured hypotheses (factors, direction, seeds, evidence)</div>
+  <ul class="inv">
+    <li>Never collapse results into one scalar difficulty</li>
+    <li>Output format is machine-confirmable by phase 7</li>
+    <li>Validated on synthetics before touching real data</li>
+  </ul>
+</div>
+
+<div class="card coral">
+  <span class="tag">phase 4 · critical gate</span>
+  <h3>nemotron renderer + fidelity gate</h3>
+  <p>LLM rendering as a variation layer over the same latent task. Every rendering passes round-trip extraction; mismatches are rejected and regenerated.</p>
+  <div class="io"><b>in</b> latent task<br><b>out</b> verified natural-language variant</div>
+  <ul class="inv">
+    <li>Fidelity checks are mandatory, never sampled</li>
+    <li>Rejection rate logged per dimension</li>
+    <li>Renderer tier ≠ subject tier (self-contamination guard)</li>
+    <li>LLM-rendered results that contradict template-mode results are flagged, not averaged</li>
+  </ul>
+</div>
+
+<div class="card teal">
+  <span class="tag">phase 5 · probe system</span>
+  <h3>adaptive scheduler</h3>
+  <p>Wave-based dependency queue: coarse exploration → boundary refinement → interaction probes → confirmation batches. Consumes frontier estimates each generation.</p>
+  <div class="io"><b>in</b> current estimates + budget<br><b>out</b> next parallel wave of experiments</div>
+  <ul class="inv">
+    <li>The estimator→scheduler feedback edge must exist — without it this is a grid sweep</li>
+    <li>Stop rules: boundary localized (estimation) vs. hypothesis survives ablation (investigation)</li>
+  </ul>
+</div>
+
+<div class="card blue">
+  <span class="tag">phase 5 · infrastructure</span>
+  <h3>execution layer</h3>
+  <p>The single path to models: Serverless Jobs fan out waves; Token Factory serves Nano/Super/Ultra. Retries, rate limiting, and cost accounting live here once.</p>
+  <div class="io"><b>in</b> wave of (task, model) requests<br><b>out</b> raw outcomes → results store</div>
+  <ul class="inv">
+    <li>Ablation and scheduler share this path — no second API client anywhere</li>
+  </ul>
+</div>
+
+<div class="card teal">
+  <span class="tag">phase 6–7 · analysis</span>
+  <h3>campaign + confirmation</h3>
+  <p>Full sweep across three tiers, then candidate hypotheses re-tested on held-out fresh seeds and fresh renderings, with effect sizes, intervals, and multiple-comparison control.</p>
+  <div class="io"><b>in</b> structured hypotheses<br><b>out</b> confirmed findings with uncertainty</div>
+  <ul class="inv">
+    <li>Confirmation seeds are never seen during search</li>
+    <li>Report effect sizes, not pass/fail verdicts</li>
+  </ul>
+</div>
+
+<div class="card teal">
+  <span class="tag">phase 8–9 · products</span>
+  <h3>atlas · analyst · router</h3>
+  <p>Atlas visualizes failure geometry and cross-model differences with cost overlays. Evidence Analyst (Nemotron Ultra) writes the capability diagnosis from stored results. Router demo derives a tiering policy from measured frontiers.</p>
+  <div class="io"><b>in</b> results store + confirmed findings<br><b>out</b> demo URL · report · routing receipt</div>
+  <ul class="inv">
+    <li>Analyst narrates evidence; it never invents findings</li>
+    <li>Router is a downstream demo, never the headline</li>
+  </ul>
+</div>
+
+</div>
+
+<h2>Build order</h2>
+<p class="sub">Dependency sequence, not a calendar. The pilot forks at phase 2 and runs alongside everything after it.</p>
+<div class="flow">
+  <span class="step">0<em>synthetic</em></span><span class="arr">→</span>
+  <span class="step">0.5<em>schemas</em></span><span class="arr">→</span>
+  <span class="step">1<em>generator</em></span><span class="arr">→</span>
+  <span class="step">2<em>render+verify ⑂ pilot</em></span><span class="arr">→</span>
+  <span class="step">3<em>decomposition</em></span><span class="arr">→</span>
+  <span class="step">4<em>LLM render gate</em></span><span class="arr">→</span>
+  <span class="step">5<em>scheduler+jobs</em></span><span class="arr">→</span>
+  <span class="step">6<em>campaign</em></span><span class="arr">→</span>
+  <span class="step">7<em>confirmation</em></span><span class="arr">→</span>
+  <span class="step">8<em>atlas</em></span><span class="arr">→</span>
+  <span class="step">9<em>submission</em></span>
+</div>
+
+<div class="foot">
+  <div class="panel">
+    <h3>Cut order under pressure</h3>
+    <ol>
+      <li>Dimensions: 5 → 3 (keep state, temporal, distractors)</li>
+      <li>Router demo</li>
+      <li>Atlas polish</li>
+      <li>Nemotron rendering (template mode still yields valid results)</li>
+    </ol>
+    <p style="margin:10px 0 0;color:var(--muted)">Never cut: synthetic harness · fidelity gate · confirmation · pilot.</p>
+  </div>
+  <div class="panel">
+    <h3>Compliance anchors</h3>
+    <ul>
+      <li>Runs on Token Factory + Serverless Jobs (narrate both in video audio)</li>
+      <li>Nemotron in three roles: subject · renderer · analyst</li>
+      <li>Public repo, MIT/Apache license visible in sidebar</li>
+      <li>Live demo URL through judging · video ≤ 3 min</li>
+      <li>Written platform feedback (also enters feedback prize)</li>
+    </ul>
+  </div>
+</div>
+</div>

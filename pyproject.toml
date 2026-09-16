@@ -1,0 +1,8 @@
+[project]
+name = "cartographer"
+version = "0.0.1"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
