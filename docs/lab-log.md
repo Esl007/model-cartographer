@@ -7,6 +7,24 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-17 — FINDING (confirmed) — Ultra pronoun-actor-tracking bug, causally isolated; earlier "3-for-3 tiers" claim partially retracted
+
+Manually re-verified all 3 belief FAILs from `camp-belief-nemotron-3-ultra-550b-a55b-001` by regenerating each world from its stored seed/params and reading the true per-event actor/witness ground truth (not just the rendered prose). Then ran a live ablation directly against Ultra (`nvidia/Nemotron-3-Ultra-550b-a55b`, temp=0.0, same 8000/16000 token budget as the campaign): for each case, replaced ONLY the ambiguous pronoun with the true actor's name (everything else byte-identical) and resampled both the original and disambiguated prompt 3x each for a fair comparison.
+
+**Correction:** the "Priya" failure — which I previously reported as "matching Nano's confirmed continuity-of-observation mode, present in all three tiers" — does NOT reproduce. 4 of 5 total samples of that exact prompt (1 campaign trial + 4 fresh resamples) answered correctly. That claim is retracted as premature; it was very likely MoE routing/sampling noise (Ultra is a 550B mixture-of-experts model — known to have real run-to-run output variance even at temperature 0 due to expert-routing effects), not a stable capability gap. Lesson: a single-trial FAIL should never be reported as a finding without a resample check, even when it superficially matches a pattern seen in other models.
+
+**Real finding, causally isolated — a distinct and more specific mechanism than "continuity of observation":** in the Dexter and Felix cases, a bystander who is EXPLICITLY named as a witness in one sentence becomes the ACTOR of the very next event via a pronoun ("he"/"she"). Per the renderer's own stated resolution rule (unique most-recent same-gender entity), the pronoun correctly and unambiguously binds to that bystander — this is not a rendering bug, the ground truth actor really is the bystander. Ultra gets it wrong anyway, in a way that looks like it defaults to assuming the chain's ESTABLISHED mover (the entity who acted in prior events) keeps acting, rather than updating on the pronoun's correct recency-based binding to the newly-active bystander.
+
+Ablation results (temp=0, 3 samples per condition):
+- **Dexter/box: 3/3 wrong with the pronoun, 3/3 right with the name substituted.** Clean 6/6 separation, zero overlap — the strongest single result in the project so far.
+- **Felix/basket: 1/3 wrong with the pronoun (vs. 2/3 right), 3/3 right with the name.** Same direction, weaker/noisier signal, consistent with a milder instance of the same bias.
+
+**Naming this failure mode precisely** (distinct from the Nano/Super continuity-of-observation mode, though related): **protagonist-continuity bias in pronoun-driven actor tracking** — the model appears to weight "who has been acting" more heavily than "who was the pronoun's antecedent by the stated recency rule," specifically at the moment a witnessed bystander hands off to become the actor.
+
+**Why this matters for the instrument's credibility:** this is the second time in one day the project caught and corrected its own premature claim (after the witness-rendering bug) — this time by resampling before trusting a single record, which is a cheaper and faster check than the full regenerate-and-verify-ground-truth step, and should become standard practice before any FAIL is reported as a finding. Recommend: extend `confirm_hypothesis`'s fresh-seed re-testing to also resample the SAME seed/config a few times as a first-pass noise filter before spending budget on fresh-seed confirmation.
+
+---
+
 ## 2026-09-17 — FIX (fixed) — ultra-model token budgets, and a stop button for /launch
 
 Trigger: a breaking-point campaign against `nvidia/Nemotron-3-Ultra-550b-a55b`
