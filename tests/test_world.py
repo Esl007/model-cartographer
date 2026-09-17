@@ -245,3 +245,44 @@ def test_store_integration(tmp_path) -> None:
     fetched = store.by_run("world-run-1")
     assert len(fetched) == 1
     assert fetched[0].realized_dims == realized
+
+
+def test_widened_state_difficulty_generates_clean_across_seeds() -> None:
+    from cartographer.render import build_name_map, render
+
+    for seed in range(5):
+        params = _base_params(
+            chain_length=30,
+            scramble=0.9,
+            coref_pressure=4,
+            distractor_events=40,
+            distractor_similarity="near_duplicate",
+            filler_events=80,
+            query_kind="state",
+        )
+        world = generate(params, seed=seed)
+        assert not validate(world), f"seed={seed}"
+
+        realized = measure(world)
+        assert realized["entity_state"] == 30, f"seed={seed} entity_state={realized['entity_state']}"
+
+    # Render one such world: name uniqueness holds and prompt renders without error.
+    params = _base_params(
+        chain_length=30,
+        scramble=0.9,
+        coref_pressure=4,
+        distractor_events=40,
+        distractor_similarity="near_duplicate",
+        filler_events=80,
+        query_kind="state",
+    )
+    world = generate(params, seed=0)
+    name_map = build_name_map(world, seed=0)
+
+    assert len(set(name_map.entity.values())) == len(name_map.entity)
+    assert len(set(name_map.location.values())) == len(name_map.location)
+    assert len(set(name_map.obj.values())) == len(name_map.obj)
+
+    rendered = render(world, name_map, seed=0)
+    assert isinstance(rendered.prompt, str)
+    assert rendered.prompt.strip()

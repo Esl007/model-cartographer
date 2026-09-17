@@ -85,6 +85,8 @@ class ExperimentRecord:
     tokens_out: int = 0
     cost_usd: float = 0.0
     latency_ms: float = 0.0
+    reasoning_text: str | None = None
+    finish_reason: str | None = None
     created_at: str = field(default_factory=_utc_now_iso)
 
     def to_json_dict(self) -> dict:
@@ -110,6 +112,8 @@ class ExperimentRecord:
             "tokens_out": self.tokens_out,
             "cost_usd": self.cost_usd,
             "latency_ms": self.latency_ms,
+            "reasoning_text": self.reasoning_text,
+            "finish_reason": self.finish_reason,
             "created_at": self.created_at,
         }
 
@@ -141,5 +145,7 @@ class ExperimentRecord:
             tokens_out=data["tokens_out"],
             cost_usd=data["cost_usd"],
             latency_ms=data["latency_ms"],
+            reasoning_text=data.get("reasoning_text"),
+            finish_reason=data.get("finish_reason"),
             created_at=data["created_at"],
         )

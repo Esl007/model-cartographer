@@ -182,3 +182,170 @@ def test_run_pilot_dry_run(tmp_path, monkeypatch):
     assert summary["total_cost_usd"] > 0
     assert summary["n_records"] == 27
     store.close()
+
+
+# --- observability: finish_reason + reasoning ------------------------------
+
+
+def test_client_chat_parses_reasoning_and_finish_reason(monkeypatch):
+    def fake_post(url, headers, body):
+        body_dict = {
+            "choices": [
+                {
+                    "message": {"content": "the front office", "reasoning": "I think it's the office."},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+        return 200, json.dumps(body_dict).encode("utf-8")
+
+    monkeypatch.setattr(client_mod, "_post", fake_post)
+    c = Client(GROQ, "gsk_fake")
+    result = c.chat(model="openai/gpt-oss-20b", prompt="hello")
+
+    assert result.finish_reason == "stop"
+    assert result.reasoning == "I think it's the office."
+
+
+def test_client_chat_no_reasoning_field_is_none(monkeypatch):
+    def fake_post(url, headers, body):
+        return 200, _canned_ok_body()
+
+    monkeypatch.setattr(client_mod, "_post", fake_post)
+    c = Client(GROQ, "gsk_fake")
+    result = c.chat(model="openai/gpt-oss-20b", prompt="hello")
+
+    assert result.reasoning is None
+    assert result.finish_reason is None
+
+
+def test_reasoning_and_finish_reason_round_trip_through_pilot(tmp_path, monkeypatch):
+    def fake_post(url, headers, body):
+        body_dict = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "the front office",
+                        "reasoning": "Deduced from the last move mentioned.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+        return 200, json.dumps(body_dict).encode("utf-8")
+
+    monkeypatch.setattr(client_mod, "_post", fake_post)
+    client = Client(GROQ, "gsk_fake")
+
+    store = ResultsStore(tmp_path / "reasoning_test.sqlite")
+    run_pilot(client, store, run_id="reasoning-run", n_per_cell=1, progress=lambda msg: None)
+
+    records = store.by_run("reasoning-run")
+    assert len(records) > 0
+    for r in records:
+        assert r.reasoning_text == "Deduced from the last move mentioned."
+        assert r.finish_reason == "stop"
+    store.close()
+
+
+def test_finish_reason_length_forces_error_with_cap_hit(tmp_path, monkeypatch):
+    def fake_post(url, headers, body):
+        body_dict = {
+            "choices": [
+                {"message": {"content": "the front"}, "finish_reason": "length"}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+        return 200, json.dumps(body_dict).encode("utf-8")
+
+    monkeypatch.setattr(client_mod, "_post", fake_post)
+    client = Client(GROQ, "gsk_fake")
+
+    store = ResultsStore(tmp_path / "cap_hit_test.sqlite")
+    run_pilot(client, store, run_id="cap-hit-run", n_per_cell=1, progress=lambda msg: None)
+
+    records = store.by_run("cap-hit-run")
+    assert len(records) > 0
+    for r in records:
+        assert r.verdict == Verdict.ERROR
+        assert "cap_hit=1" in r.verifier_detail
+    store.close()
+
+
+def test_open_legacy_schema_db_migrates_and_appends(tmp_path):
+    import sqlite3
+
+    from cartographer.store.schema import ExperimentRecord, RenderMode
+
+    db_path = tmp_path / "legacy.sqlite"
+
+    legacy_schema = """
+    CREATE TABLE experiments (
+        record_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        wave_id INTEGER NOT NULL,
+        parent_id TEXT,
+        mutation TEXT,
+        model_name TEXT NOT NULL,
+        latent_params TEXT NOT NULL,
+        realized_dims TEXT NOT NULL,
+        render_mode TEXT NOT NULL,
+        renderer_model TEXT,
+        task_seed INTEGER NOT NULL,
+        rendering_seed INTEGER NOT NULL,
+        trial_seed INTEGER NOT NULL,
+        prompt_text TEXT,
+        response_text TEXT,
+        verdict TEXT NOT NULL,
+        verifier_detail TEXT,
+        tokens_in INTEGER NOT NULL,
+        tokens_out INTEGER NOT NULL,
+        cost_usd REAL NOT NULL,
+        latency_ms REAL NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    """
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(legacy_schema)
+    conn.execute(
+        "INSERT INTO experiments (record_id, run_id, wave_id, parent_id, mutation, "
+        "model_name, latent_params, realized_dims, render_mode, renderer_model, "
+        "task_seed, rendering_seed, trial_seed, prompt_text, response_text, verdict, "
+        "verifier_detail, tokens_in, tokens_out, cost_usd, latency_ms, created_at) "
+        "VALUES ('old-1', 'run-legacy', 0, NULL, NULL, 'legacy_model', '{}', '{}', "
+        "'TEMPLATE', NULL, 1, 1, 1, 'prompt', 'response', 'PASS', 'detail', 1, 1, "
+        "0.0, 1.0, '2020-01-01T00:00:00+00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = ResultsStore(db_path)
+
+    old_records = store.by_run("run-legacy")
+    assert len(old_records) == 1
+    assert old_records[0].reasoning_text is None
+    assert old_records[0].finish_reason is None
+
+    new_record = ExperimentRecord(
+        run_id="run-legacy",
+        model_name="new_model",
+        latent_params={},
+        realized_dims={},
+        render_mode=RenderMode.TEMPLATE,
+        task_seed=2,
+        trial_seed=2,
+        verdict=Verdict.PASS,
+        reasoning_text="some reasoning",
+        finish_reason="stop",
+    )
+    store.append(new_record)
+
+    records = store.by_run("run-legacy")
+    assert len(records) == 2
+    by_id = {r.record_id: r for r in records}
+    assert by_id["old-1"].reasoning_text is None
+    assert by_id[new_record.record_id].reasoning_text == "some reasoning"
+    assert by_id[new_record.record_id].finish_reason == "stop"
+    store.close()

@@ -28,20 +28,42 @@ _DIFFICULTY_CELLS = {
     "hard": dict(chain_length=7, scramble=0.9, coref_pressure=4, distractor_events=12, filler_events=8),
 }
 
+# Per-query-kind overrides of the "hard" cell. state saturates models at
+# chain_length=7, so it gets a much harder cell; belief/order get a bumped
+# chain length to match.
+_HARD_CELL_OVERRIDES: dict[str, dict] = {
+    "state": dict(
+        chain_length=15, scramble=0.9, coref_pressure=4,
+        distractor_events=20, filler_events=8,
+        distractor_similarity="near_duplicate",
+    ),
+    "belief": dict(chain_length=8),
+    "order": dict(chain_length=8),
+}
+
+
+def _cell_for(query_kind: str, difficulty: str) -> dict:
+    cell = dict(_DIFFICULTY_CELLS[difficulty])
+    cell.setdefault("distractor_similarity", "same_category")
+    if difficulty == "hard":
+        cell.update(_HARD_CELL_OVERRIDES.get(query_kind, {}))
+    return cell
+
 
 def build_pilot_tasks(n_per_cell: int = 2) -> list[tuple[DimParams, int]]:
     """Build the spread grid: 3 query_kinds x 3 difficulty cells x n_per_cell seeds."""
     tasks: list[tuple[DimParams, int]] = []
     seed_counter = 0
     for query_kind in _QUERY_KINDS:
-        for difficulty, cell in _DIFFICULTY_CELLS.items():
+        for difficulty in _DIFFICULTY_CELLS:
+            cell = _cell_for(query_kind, difficulty)
             for _ in range(n_per_cell):
                 params = DimParams(
                     chain_length=cell["chain_length"],
                     scramble=cell["scramble"],
                     coref_pressure=cell["coref_pressure"],
                     distractor_events=cell["distractor_events"],
-                    distractor_similarity="same_category",
+                    distractor_similarity=cell["distractor_similarity"],
                     filler_events=cell["filler_events"],
                     query_kind=query_kind,
                 )
@@ -52,7 +74,8 @@ def build_pilot_tasks(n_per_cell: int = 2) -> list[tuple[DimParams, int]]:
 
 
 def _difficulty_of(params: DimParams) -> str:
-    for name, cell in _DIFFICULTY_CELLS.items():
+    for name in _DIFFICULTY_CELLS:
+        cell = _cell_for(params.query_kind, name)
         if (
             params.chain_length == cell["chain_length"]
             and params.scramble == cell["scramble"]
@@ -99,9 +122,12 @@ def run_pilot(
             else:
                 verdict = verify(result.text, rendered, name_map)
 
-            verifier_detail = f"kind={params.query_kind};sim={params.distractor_similarity}"
+            verifier_detail = f"kind={params.query_kind};sim={params.distractor_similarity};difficulty={difficulty}"
             if result.error:
                 verifier_detail += f";error={result.error}"
+            if result.finish_reason == "length":
+                verdict = Verdict.ERROR
+                verifier_detail += ";cap_hit=1"
 
             cost = cost_usd(model, result.tokens_in, result.tokens_out)
 
@@ -128,6 +154,8 @@ def run_pilot(
                 tokens_out=result.tokens_out,
                 cost_usd=cost,
                 latency_ms=result.latency_ms,
+                reasoning_text=result.reasoning,
+                finish_reason=result.finish_reason,
             )
             store.append(record)
 
@@ -170,7 +198,7 @@ def main() -> None:
     os.makedirs("results", exist_ok=True)
     store = ResultsStore("results/pilot.sqlite")
 
-    summary = run_pilot(client, store, run_id="pilot-groq-003")
+    summary = run_pilot(client, store, run_id="pilot-groq-004")
 
     print(f"run_id: {summary['run_id']}")
     print(f"tasks: {summary['n_tasks']}  models: {summary['n_models']}  records: {summary['n_records']}")

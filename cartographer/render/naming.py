@@ -34,6 +34,11 @@ _ROOM_NAMES = [
     "the reception area", "the loading dock", "the mail room",
     "the library", "the basement", "the rooftop terrace",
     "the east wing", "the west wing", "the courtyard", "the garage",
+    "the north stairwell", "the south stairwell",
+    "the print room", "the utility closet", "the boiler room",
+    "the atrium", "the cafeteria", "the security office", "the gym",
+    "the meditation room", "the photo studio", "the wine cellar",
+    "the greenhouse", "the observation deck",
 ]
 _OBJECT_ADJECTIVES = [
     "blue", "red", "green", "old", "small", "large", "worn", "shiny",

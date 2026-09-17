@@ -33,6 +33,8 @@ class ChatResult:
     tokens_out: int
     latency_ms: float
     error: str | None = None
+    finish_reason: str | None = None
+    reasoning: str | None = None
 
 
 def _post(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
@@ -94,10 +96,13 @@ class Client:
 
         try:
             payload = json.loads(raw)
-            text = payload["choices"][0]["message"]["content"]
+            choice = payload["choices"][0]
+            text = choice["message"]["content"]
             usage = payload.get("usage", {})
             tokens_in = int(usage.get("prompt_tokens", 0))
             tokens_out = int(usage.get("completion_tokens", 0))
+            finish_reason = choice.get("finish_reason")
+            reasoning = choice.get("message", {}).get("reasoning")
         except (KeyError, IndexError, ValueError, TypeError) as exc:
             return ChatResult(
                 text="",
@@ -113,4 +118,6 @@ class Client:
             tokens_out=tokens_out,
             latency_ms=latency_ms,
             error=None,
+            finish_reason=finish_reason,
+            reasoning=reasoning,
         )

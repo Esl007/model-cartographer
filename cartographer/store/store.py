@@ -31,9 +31,19 @@ CREATE TABLE IF NOT EXISTS experiments (
     tokens_out INTEGER NOT NULL,
     cost_usd REAL NOT NULL,
     latency_ms REAL NOT NULL,
+    reasoning_text TEXT,
+    finish_reason TEXT,
     created_at TEXT NOT NULL
 );
 """
+
+# Columns added after the original schema. Each entry is (name, ddl_type);
+# applied via idempotent ALTER TABLE so pre-existing dbs (which lack them)
+# are migrated in place without touching existing row data.
+_MIGRATION_COLUMNS = [
+    ("reasoning_text", "TEXT"),
+    ("finish_reason", "TEXT"),
+]
 
 _INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_experiments_model_name ON experiments(model_name);",
@@ -66,6 +76,8 @@ def _record_to_row(record: ExperimentRecord) -> tuple:
         record.tokens_out,
         record.cost_usd,
         record.latency_ms,
+        record.reasoning_text,
+        record.finish_reason,
         record.created_at,
     )
 
@@ -98,8 +110,21 @@ def _row_to_record(row: sqlite3.Row) -> ExperimentRecord:
         tokens_out=row["tokens_out"],
         cost_usd=row["cost_usd"],
         latency_ms=row["latency_ms"],
+        reasoning_text=_row_get(row, "reasoning_text"),
+        finish_reason=_row_get(row, "finish_reason"),
         created_at=row["created_at"],
     )
+
+
+def _row_get(row: sqlite3.Row, key: str):
+    """sqlite3.Row access that tolerates rows from a pre-migration schema
+    that lack the column entirely (older cursors on a db opened before the
+    ALTER TABLE ran within this connection would still have it, but this
+    guards defensively for any row shape without the key)."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return None
 
 
 _INSERT_SQL = """
@@ -108,8 +133,8 @@ INSERT INTO experiments (
     latent_params, realized_dims, render_mode, renderer_model,
     task_seed, rendering_seed, trial_seed, prompt_text, response_text,
     verdict, verifier_detail, tokens_in, tokens_out, cost_usd, latency_ms,
-    created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    reasoning_text, finish_reason, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -128,8 +153,21 @@ class ResultsStore:
         self._conn = sqlite3.connect(str(path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(_SCHEMA)
+        self._migrate()
         for stmt in _INDEXES:
             self._conn.execute(stmt)
+        self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Idempotently add columns introduced after the original schema to
+        an existing `experiments` table. Safe to call on a brand-new db
+        (columns already present from `_SCHEMA`) or an old one missing them."""
+        existing = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(experiments)")
+        }
+        for name, ddl_type in _MIGRATION_COLUMNS:
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE experiments ADD COLUMN {name} {ddl_type}")
         self._conn.commit()
 
     def append(self, record: ExperimentRecord) -> None:

@@ -197,3 +197,28 @@ def test_end_to_end_replay(tmp_path) -> None:
         assert record.verdict == expected_verdict
 
     assert abs(estimate - 6.0) < 0.1
+
+
+def test_reasoning_and_finish_reason_round_trip(tmp_path) -> None:
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    record = _full_record(
+        reasoning_text="The model thought about it carefully.",
+        finish_reason="stop",
+        mutation=None,
+        parent_id=None,
+    )
+    store.append(record)
+    fetched = store.by_run("run-1")
+    assert len(fetched) == 1
+    assert fetched[0].reasoning_text == "The model thought about it carefully."
+    assert fetched[0].finish_reason == "stop"
+    assert fetched[0].to_json_dict() == record.to_json_dict()
+
+
+def test_reasoning_and_finish_reason_default_none(tmp_path) -> None:
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    record = _full_record(mutation=None, parent_id=None)
+    store.append(record)
+    fetched = store.by_run("run-1")
+    assert fetched[0].reasoning_text is None
+    assert fetched[0].finish_reason is None
