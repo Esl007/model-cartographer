@@ -54,6 +54,8 @@ results store.
 | 17:21:42 | C `21fada2` | Parallel wave execution (deterministic at any thread count), `/live` completed-run state, browser `/launch` page |
 | 17:25:23–17:32:20 | R `camp-belief-nvidia-nemotron-3-nano-30b-a3b-001` | 140 calls, $0.0218 — **run via `/launch`, not yet analyzed** |
 | 17:40:51–17:41:30 | R `camp-state-nvidia-nemotron-3-nano-30b-a3b-001` | 30 calls, $0.0046 — **run via `/launch`, not yet analyzed** |
+| 19:13:13 | C `0cb65c1` | /live active-run + ETA fixes, shared nav shell, dark theme (viewer redesign track; also carried the new order/breaking_point launch presets) |
+| 19:16:54 | C `813ac8e` | Escalation mode (`schedule/escalate.py`: ray ramp → bisect → logistic t* → decompose → confirm), order campaign preset, witness_cutoff in the belief sweep; 5 Super belief failures verified real against regenerated ground truth (1 continuity over-generalization, 4 pronoun misresolution — first recorded Super failures) |
 
 **Total spend to date across all providers: ≈ $0.31.**
 
