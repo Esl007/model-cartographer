@@ -60,6 +60,60 @@ _FILLER_TEMPLATES = [
     "{actor} reorganized some papers on the desk.",
     "{actor} glanced at the clock.",
 ]
+_WITNESS_SINGLE_TEMPLATES = [
+    "{witness} was nearby and saw this happen.",
+    "{witness} happened to be watching.",
+    "{witness} noticed this from across the room.",
+]
+_WITNESS_MULTI_TEMPLATES = [
+    "{witnesses} were nearby and saw this happen.",
+    "{witnesses} happened to be watching.",
+    "{witnesses} noticed this from across the room.",
+]
+
+
+def _event_actor_ids(event) -> set[str]:
+    """Entity ids already implied as 'present' by the main sentence — no
+    separate witness clause is owed to these even if they're also listed in
+    event.witnesses."""
+    if isinstance(event, Move):
+        return {event.actor}
+    if isinstance(event, Transfer):
+        return {event.giver, event.receiver}
+    if isinstance(event, Tell):
+        return {event.speaker, event.listener}
+    if isinstance(event, Filler):
+        return {event.actor}
+    return set()
+
+
+def _join_names(names: list[str]) -> str:
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return ", ".join(names[:-1]) + f", and {names[-1]}"
+
+
+def _render_witness_sentence(event, idx: int, seed: int, name_map: NameMap) -> str | None:
+    """A sentence marking the presence of any non-actor witnesses to `event`,
+    sharing `event`'s time anchor. Returns None if there are none."""
+    non_actor_witnesses = sorted(getattr(event, "witnesses", frozenset()) - _event_actor_ids(event))
+    if not non_actor_witnesses:
+        return None
+    anchor = _time_anchor(event.time)
+    names = [_entity_name(eid, name_map) for eid in non_actor_witnesses]
+    if len(names) == 1:
+        template = _WITNESS_SINGLE_TEMPLATES[
+            _stable_int("tpl_witness1", str(seed), str(idx), modulus=len(_WITNESS_SINGLE_TEMPLATES))
+        ]
+        sentence = template.format(witness=names[0])
+    else:
+        template = _WITNESS_MULTI_TEMPLATES[
+            _stable_int("tpl_witnessN", str(seed), str(idx), modulus=len(_WITNESS_MULTI_TEMPLATES))
+        ]
+        sentence = template.format(witnesses=_join_names(names))
+    return f"{anchor} {sentence}"
 
 
 @dataclass(frozen=True)
@@ -279,10 +333,26 @@ def _render_question(world: World, name_map: NameMap) -> tuple[str, str]:
 def render(world: World, name_map: NameMap, seed: int) -> RenderedTask:
     sentences: list[str] = []
     participants_per_sentence: list[list[str]] = []
+    sentence_event_idx: list[int] = []
+    sentence_is_witness: list[bool] = []
+    witness_sentence_count = 0
     for idx in world.narration_order:
         event = world.events[idx]
         sentences.append(_render_event_sentence(event, idx, seed, name_map))
         participants_per_sentence.append(_event_participants(event))
+        sentence_event_idx.append(idx)
+        sentence_is_witness.append(False)
+
+        witness_sentence = _render_witness_sentence(event, idx, seed, name_map)
+        if witness_sentence is not None:
+            sentences.append(witness_sentence)
+            non_actor_witnesses = sorted(
+                getattr(event, "witnesses", frozenset()) - _event_actor_ids(event)
+            )
+            participants_per_sentence.append(non_actor_witnesses)
+            sentence_event_idx.append(idx)
+            sentence_is_witness.append(True)
+            witness_sentence_count += 1
 
     sentences, pronoun_meta = _apply_pronouns(sentences, participants_per_sentence, world, name_map)
 
@@ -292,6 +362,9 @@ def render(world: World, name_map: NameMap, seed: int) -> RenderedTask:
 
     meta = {
         "narration_order": list(world.narration_order),
+        "witness_sentences": witness_sentence_count,
+        "sentence_event_idx": sentence_event_idx,
+        "sentence_is_witness": sentence_is_witness,
         "query_kind": world.query.kind,
         **pronoun_meta,
     }

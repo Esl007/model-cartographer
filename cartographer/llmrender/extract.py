@@ -13,14 +13,20 @@ EXTRACT_PROMPT_TEMPLATE = """You will receive a short story. Extract every movem
 tell event mentioned in the story into a JSON array, one object per event, \
 using EXACTLY this schema:
 
-- move: {{"time": "8:04", "type": "move", "actor": "<name>", "object": "<name>", "destination": "<name>"}}
-- transfer: {{"time": "8:05", "type": "transfer", "giver": "<name>", "object": "<name>", "receiver": "<name>"}}
-- tell: {{"time": "8:06", "type": "tell", "speaker": "<name>", "listener": "<name>", "object": "<name>", "claimed_location": "<name>"}}
+- move: {{"time": "8:04", "type": "move", "actor": "<name>", "object": "<name>", "destination": "<name>", "witnesses": ["<name>", ...]}}
+- transfer: {{"time": "8:05", "type": "transfer", "giver": "<name>", "object": "<name>", "receiver": "<name>", "witnesses": ["<name>", ...]}}
+- tell: {{"time": "8:06", "type": "tell", "speaker": "<name>", "listener": "<name>", "object": "<name>", "claimed_location": "<name>", "witnesses": ["<name>", ...]}}
+
+The "witnesses" field lists anyone the story says was present, watching, or \
+otherwise observed the event happening, OTHER than the people already named \
+in the event's other fields (e.g. don't repeat "actor" or "giver"/"receiver" \
+in "witnesses"). If the story does not mention anyone else present, use an \
+empty list [].
 
 Example output:
 [
-  {{"time": "8:04", "type": "move", "actor": "Elena", "object": "the blue box", "destination": "the kitchen"}},
-  {{"time": "8:06", "type": "tell", "speaker": "Marcus", "listener": "Elena", "object": "the blue box", "claimed_location": "the lobby"}}
+  {{"time": "8:04", "type": "move", "actor": "Elena", "object": "the blue box", "destination": "the kitchen", "witnesses": ["Priya"]}},
+  {{"time": "8:06", "type": "tell", "speaker": "Marcus", "listener": "Elena", "object": "the blue box", "claimed_location": "the lobby", "witnesses": []}}
 ]
 
 Use the exact time stated in the story for each event's "time" field. \

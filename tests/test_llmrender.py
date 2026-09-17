@@ -105,6 +105,35 @@ def test_world_facts_tell_carries_claimed_location():
     assert found, "no seed in range produced a Tell event"
 
 
+def test_world_facts_every_fact_has_witnesses_field():
+    world, name_map = _world_and_names(seed=3, chain_length=4, distractor_events=3, filler_events=3)
+    facts = world_facts(world, name_map)
+    assert facts
+    for fact in facts:
+        assert "witnesses" in fact
+        assert isinstance(fact["witnesses"], list)
+
+
+def test_world_facts_witnesses_excludes_actor_and_includes_bystander():
+    # belief queries add exactly one non-actor witness to a chain Move; find
+    # such a world and confirm world_facts surfaces it (and that the actor
+    # itself is never duplicated into "witnesses").
+    found = False
+    for seed in range(20):
+        world, name_map = _world_and_names(
+            seed=seed, query_kind="belief", coref_pressure=1, chain_length=2
+        )
+        move_facts = [f for f in world_facts(world, name_map) if f["type"] == "move"]
+        for mf in move_facts:
+            if mf["witnesses"]:
+                found = True
+                assert mf["actor"] not in mf["witnesses"]
+                break
+        if found:
+            break
+    assert found, "no seed in range produced a move fact with a non-actor witness"
+
+
 # --- comparator ---------------------------------------------------------------
 
 
@@ -170,6 +199,44 @@ def test_facts_match_tolerates_article_and_case_differences():
     ok, violations = facts_match(facts, varied)
     assert ok
     assert violations == []
+
+
+def test_facts_match_dropped_witness_is_missing_witness():
+    # find a world/seed whose facts include a non-empty witnesses list
+    found = False
+    for seed in range(20):
+        world, name_map = _world_and_names(
+            seed=seed, query_kind="belief", coref_pressure=1, chain_length=2
+        )
+        facts = world_facts(world, name_map)
+        witnessed_idx = next((i for i, f in enumerate(facts) if f["witnesses"]), None)
+        if witnessed_idx is None:
+            continue
+        found = True
+        extracted = [dict(f) for f in facts]
+        extracted[witnessed_idx] = dict(extracted[witnessed_idx])
+        extracted[witnessed_idx]["witnesses"] = []  # LLM extractor dropped the bystander
+
+        ok, violations = facts_match(facts, extracted)
+        assert not ok
+        assert any(v.startswith("missing_witness:") for v in violations)
+        break
+    assert found, "no seed in range produced a fact with a non-empty witnesses list"
+
+
+def test_facts_match_witnesses_tolerate_case_and_article_differences():
+    world, name_map = _world_and_names(seed=4, chain_length=2, coref_pressure=1, query_kind="belief")
+    facts = world_facts(world, name_map)
+    witnessed_idx = next((i for i, f in enumerate(facts) if f["witnesses"]), None)
+    if witnessed_idx is None:
+        return  # no witnessed fact for this fixed seed/config; other test covers the positive case
+    varied = [dict(f) for f in facts]
+    varied[witnessed_idx] = dict(varied[witnessed_idx])
+    varied[witnessed_idx]["witnesses"] = [w.upper() for w in varied[witnessed_idx]["witnesses"]]
+
+    ok, violations = facts_match(facts, varied)
+    assert ok
+    assert not any(v.startswith("missing_witness:") for v in violations)
 
 
 # --- gate: accept path ---------------------------------------------------------

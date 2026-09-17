@@ -24,7 +24,10 @@ Rules:
 - Every sentence describing a fact MUST include its exact time anchor, \
 formatted like "At 8:04, ...".
 - Narrate every fact in the list. Do not omit any.
-- Do not invent or add any event that is not in the list.
+- If a fact has a non-empty "witnesses" list, explicitly state that each \
+named witness was present/observed the event — do not silently drop them.
+- Do not invent or add any event that is not in the list, and do not invent \
+witnesses beyond those listed.
 - Do not reveal, resolve, or comment on what any character believes, knows, \
 or is thinking — narrate only what happened, in third person, without \
 editorializing about anyone's mental state.
