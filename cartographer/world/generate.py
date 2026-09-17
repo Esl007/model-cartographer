@@ -44,6 +44,22 @@ class DimParams:
     filler_events: int
     query_kind: str  # "state" | "belief" | "order"
     expect_unknown: bool = False
+    witness_cutoff: float = 0.0
+    """Fraction (0..1) of the causal chain after which the belief query
+    agent's witnessing of the chain STOPS while the object keeps moving.
+
+    At 0.0: current behavior (agent witnesses every chain event except the
+    final one, per the existing belief-chain logic). At higher values, the
+    agent only witnesses the first `ceil(witness_cutoff-complement)`... see
+    `_witness_cutoff_index` for the exact split. The agent keeps appearing
+    in the story afterward via ordinary filler sentences (so their absence
+    from later Move witness clauses reads as "present but not looking," not
+    "vanished") -- this makes the correct belief answer an EARLY location,
+    maximally divergent from the object's true final location, directly
+    probing the continuity-of-observation failure mode documented in
+    docs/lab-log.md (Nemotron Nano finding). Only has any effect for
+    belief queries; ignored otherwise.
+    """
 
 
 def _make_entities(n: int, seed: int) -> list[Entity]:
@@ -74,6 +90,29 @@ def _make_objects(n: int, seed: int) -> list[Obj]:
     return objects
 
 
+def _witness_cutoff_last_index(chain_length: int, witness_cutoff: float) -> int:
+    """Last chain-event index (0-based) the belief query agent witnesses.
+
+    At witness_cutoff==0.0 this must reproduce the pre-existing behavior:
+    the agent witnesses every chain event except the very last one (i.e.
+    last witnessed index = chain_length - 2, or chain_length - 1 if
+    chain_length == 1 since there's nothing else to witness).
+
+    As witness_cutoff -> 1.0, the agent's witnessing collapses toward only
+    the first event (index 0), so the object accumulates the maximum
+    number of further unwitnessed moves -- the correct belief answer then
+    sits maximally early/divergent from the true final location.
+    """
+    if chain_length <= 1:
+        return 0
+    default_last = chain_length - 2  # cutoff==0.0 baseline
+    # Linearly interpolate the "last witnessed index" down from default_last
+    # (at cutoff=0.0) to 0 (at cutoff=1.0), always witnessing at least the
+    # first event.
+    last = default_last - witness_cutoff * default_last
+    return max(0, min(default_last, round(last)))
+
+
 def generate(params: DimParams, seed: int) -> World:
     n_entities = max(3, params.coref_pressure + 3)
     n_locations = max(4, params.chain_length + 2)
@@ -95,9 +134,11 @@ def generate(params: DimParams, seed: int) -> World:
         time_counter[0] += 1
         return t
 
-    def pick_entity(*parts: str) -> str:
-        idx = _stable_int(*parts, str(seed), modulus=len(entity_ids))
-        return entity_ids[idx]
+    def pick_entity(*parts: str, exclude: set[str] | None = None) -> str:
+        exclude = exclude or set()
+        candidates = [e for e in entity_ids if e not in exclude] or entity_ids
+        idx = _stable_int(*parts, str(seed), modulus=len(candidates))
+        return candidates[idx]
 
     def pick_location(*parts: str, exclude: set[str] | None = None) -> str:
         exclude = exclude or set()
@@ -107,16 +148,30 @@ def generate(params: DimParams, seed: int) -> World:
 
     query_agent = pick_entity("query_agent") if params.query_kind == "belief" else None
 
+    last_witnessed_chain_idx = (
+        _witness_cutoff_last_index(params.chain_length, params.witness_cutoff)
+        if params.query_kind == "belief"
+        else -1
+    )
+
     chain_events: list[int] = []
     cur_loc = pick_location("start_loc")
     for k in range(params.chain_length):
         dst = pick_location("chain_dst", str(k), exclude={cur_loc})
-        actor = pick_entity("chain_actor", str(k))
+
+        past_cutoff = (
+            params.query_kind == "belief"
+            and query_agent is not None
+            and not params.expect_unknown
+            and k > last_witnessed_chain_idx
+        )
+        actor_exclude = {query_agent} if past_cutoff and query_agent is not None else None
+        actor = pick_entity("chain_actor", str(k), exclude=actor_exclude)
 
         witness_set = {actor}
         if params.query_kind == "belief" and query_agent is not None and not params.expect_unknown:
             is_last = k == params.chain_length - 1
-            if not is_last:
+            if not is_last and k <= last_witnessed_chain_idx:
                 witness_set.add(query_agent)
 
         move = Move(
@@ -208,6 +263,32 @@ def generate(params: DimParams, seed: int) -> World:
                 witnesses=frozenset({actor}),
             )
         )
+
+    # Witness-cutoff filler: guarantee the belief query agent keeps
+    # appearing in the story (via ordinary Filler mechanics) after their
+    # witnessing of the causal chain has stopped, so their disappearance
+    # doesn't just read as "left the scene" -- they're still around, doing
+    # unrelated things, just not looking at the object anymore. Only
+    # emitted when the cutoff actually truncated witnessing (i.e. there is
+    # at least one further, unwitnessed chain move after the agent's last
+    # witnessed one).
+    if (
+        params.query_kind == "belief"
+        and query_agent is not None
+        and not params.expect_unknown
+        and 0 <= last_witnessed_chain_idx < params.chain_length - 1
+    ):
+        n_cutoff_filler = min(3, params.chain_length - 1 - last_witnessed_chain_idx)
+        for i in range(n_cutoff_filler):
+            seed_val = _stable_int("cutoff_filler_seed", str(i), modulus=1_000_000)
+            events.append(
+                Filler(
+                    actor=query_agent,
+                    description_seed=seed_val,
+                    time=next_time(),
+                    witnesses=frozenset({query_agent}),
+                )
+            )
 
     if params.coref_pressure > 0 and events:
         same_gender_pool = [e for e in entities if e.gender == entities[0].gender]

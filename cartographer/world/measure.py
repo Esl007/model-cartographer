@@ -68,13 +68,45 @@ def measure(world: World) -> dict[str, float]:
 
     context_length = float(len(world.events))
 
+    witness_gap = float(_witness_gap(world, chain_indices))
+
     return {
         "entity_state": entity_state,
         "temporal": float(temporal),
         "coreference": float(coreference),
         "distractors": distractors,
         "context_length": context_length,
+        "witness_gap": witness_gap,
     }
+
+
+def _witness_gap(world: World, chain_indices: set[int]) -> int:
+    """Number of causal-chain Move events, after the query agent's LAST
+    witnessed causal-chain event, that the agent did NOT witness.
+
+    0 whenever the query isn't a belief query, the agent has no recorded
+    chain-witnessing at all (falls back to a Tell-derived belief instead --
+    not a "gap" in the sense this dim measures), or witness_cutoff is
+    inactive (agent witnesses through the second-to-last chain event, the
+    pre-cutoff default, leaving no unwitnessed chain moves afterward when
+    the chain has <=1 further moves -- see below for the exact boundary).
+    """
+    query = world.query
+    if query.kind != "belief" or query.agent is None:
+        return 0
+    agent = query.agent
+    chain_moves_in_order = [
+        i for i in sorted(chain_indices) if isinstance(world.events[i], Move)
+    ]
+    witnessed_chain_positions = [
+        pos
+        for pos, i in enumerate(chain_moves_in_order)
+        if agent in world.events[i].witnesses
+    ]
+    if not witnessed_chain_positions:
+        return 0
+    last_witnessed_pos = max(witnessed_chain_positions)
+    return len(chain_moves_in_order) - 1 - last_witnessed_pos
 
 
 def _participants(event) -> set[str]:

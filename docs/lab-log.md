@@ -7,7 +7,134 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
-## 2026-09-17 — PLANNED (open) — harden task generator to find Ultra's breaking points
+## 2026-09-17 — PHASE (shipped) — Phase 7 confirmation module (decompose's missing check)
+
+Added `cartographer/confirm/` (new package): decompose finds candidate
+factor-set explanations for a failure using probes drawn from a seed range
+the search itself controls; nothing previously re-checked those
+explanations against seeds the search never touched. `confirm_hypothesis`
+does that: given a `FailureHypothesis`, it recovers the failing/baseline
+configs from the hypothesis's own evidence (decompose's `evidence[0]` and
+`evidence[1]` are always the `verify_failing`/`verify_baseline` probes, in
+that fixed order, for every hypothesis kind including "unexplained" --
+confirmed by direct inspection, not assumed), re-probes both on fresh
+seeds, and reports `effect_size = baseline_pass_rate - failing_pass_rate`
+with a Wilson 95% CI per rate (`cartographer/confirm/stats.py`, closed-form,
+no scipy) and a pooled two-proportion z-test p-value.
+`confirmed = raw_p < 0.05 and effect_size > 0.2` -- both a statistical and a
+practical-significance bar, so a technically-significant but tiny effect
+doesn't count. `confirm_all` runs a family of hypotheses through
+Holm-Bonferroni step-down correction (`stats.holm_bonferroni`) and
+substitutes each hypothesis's corrected per-comparison threshold for the
+flat 0.05 one.
+
+**Seed convention (documented in `confirmation.py`'s module docstring, not
+runtime-enforced since this module can't see what seed range a given
+decompose call used):** search-time probing uses `seed_base < 10_000`;
+confirmation uses `seed_base >= 10_000` (the default). Each hypothesis in a
+`confirm_all` family gets its own disjoint fresh-seed block
+(`2 * n_fresh_seeds * k_trials` apart) so no hypothesis's probing can leak
+into another's and re-running is byte-identical.
+
+Tests (`tests/test_confirm.py`, 9 new): decompose's own
+`pairwise_interaction` hypothesis confirms with effect size >0.9 and
+p<0.001 on fresh seeds; a hand-built FALSE hypothesis (claims `distractors`
+cause a failure on `clean_threshold`, which only depends on `temporal`) is
+correctly *not* confirmed (effect size <0.2); a 3-hypothesis family (1 real
+pairwise-interaction result + 2 hand-built false single-factor claims)
+confirms exactly the real one under Holm-Bonferroni; determinism for both
+`confirm_hypothesis` and `confirm_all`; `to_json_dict()` shape; and direct
+unit tests of the three stdlib stats primitives (Wilson interval bounds
+and n=0 degenerate case, two-proportion z-test's null/maximally-different
+cases, Holm-Bonferroni against a hand-computed 3-p-value example).
+`scripts/confirm_demo.py` (main-guarded, not run by tests) runs
+decompose-then-confirm across four zoo models plus one explicit
+`confirm_all` family call and prints a table -- verified by hand, all four
+zoo hypotheses confirm with effect size 1.00 as expected (the zoo's
+underlying rules are deterministic given trial_seed, so a correctly
+recovered factor set should separate cleanly).
+
+---
+
+## 2026-09-17 — PHASE (shipped) — witness_cutoff: generator hardening targeting the Nano failure mode
+
+Implements item 2 (and the belief-ceiling half of item 1) of the PLANNED
+entry directly below, which is why that entry's status now reads
+"superseded by this entry" rather than "open."
+
+**New `DimParams.witness_cutoff: float = 0.0`** (`cartographer/world/generate.py`).
+At 0.0, behavior is byte-identical to before (belief query agent witnesses
+every causal-chain Move except the very last one). As it rises toward 1.0,
+the agent's witnessing collapses toward only the chain's earliest moves
+(`_witness_cutoff_last_index` linearly interpolates the "last witnessed
+index" from `chain_length - 2` down to `0`), while the object keeps moving,
+unwitnessed by the agent, for the remainder of the chain. This makes the
+correct belief answer an EARLY location -- maximally divergent from the
+object's true final location -- which is exactly the trap Nemotron Nano
+fell into (see the confirmed finding two entries below: it answered with
+the *true final* location, reasoning "he was watching at each move," a
+false premise once witnessing has a hard stop).
+
+**Two generator-correctness fixes needed to make the cutoff airtight,**
+found by testing against real divergence rates rather than trusting the
+mechanism on paper: (1) `pick_entity` gained an `exclude` parameter, and
+the chain-actor pick for any post-cutoff chain event now excludes the
+query agent -- without this, the agent could still be picked as that
+event's *actor* (who is always an implicit witness of their own action),
+silently re-extending their witnessed window past the intended cutoff.
+(2) added a dedicated small Filler burst (up to 3 events) authored as the
+query agent, immediately after their witnessing stops, using the existing
+Filler mechanics unchanged -- so their disappearance from the causal
+chain's witness sets reads as "still around, just not looking" rather than
+"vanished," per the task's requirement. First draft (fix 2 without fix 1)
+only reached 72% divergence at witness_cutoff=0.7 over 200 seeds; with both
+fixes, 94% -- comfortably over the required 90%.
+
+**`measure()` gains realized dim `witness_gap`**
+(`cartographer/world/measure.py`): count of causal-chain Move events after
+the query agent's last witnessed chain event that they did NOT witness. 0
+for non-belief queries, 0 if the agent never witnessed any chain event
+(their belief came from a Tell instead -- a different mechanism, not a
+"gap"), and empirically small (<=1) at `witness_cutoff=0.0` since that's
+the pre-existing default-witnessing behavior. Verified monotone
+non-decreasing in `witness_cutoff` in aggregate across 60-seed populations
+at cutoffs 0.0/0.25/0.5/0.75/1.0 (per-seed it isn't perfectly monotone --
+actor-exclusion interacts with which chain positions get picked -- so the
+test compares population means, not single-seed values).
+
+**Belief-difficulty ceiling verified combined, not swept one dim at a
+time:** `chain_length=25, scramble=0.9, coref_pressure=8,
+distractor_events=40, filler_events=60, witness_cutoff=0.7` renders and
+`validate()`s clean across 10 seeds, with unique entity/location/object
+names (no substring-collision hazard triggered -- the existing name pools
+in `cartographer/render/naming.py` are sized 30+/34/15\*5 against this
+config's needs of ~11 entities / 27 locations / 2 objects, so no pool
+enlargement was needed; internal `world/generate.py` name pools are unused
+for surface rendering and don't matter here).
+
+No renderer changes were needed beyond what's described above: witnesses
+were already rendered per-event via the witness-fix machinery
+(`_render_witness_sentence` in `cartographer/render/templates.py`), so the
+cutoff's effect is entirely in *which* events end up in each event's
+`witnesses` set, not in how those sets get rendered. Re-verified the
+surface-completeness invariant (every belief the simulator assigns is
+backed by a rendered mention of the believing entity, tied to the correct
+event) explicitly under cutoff in `tests/test_witness_cutoff.py`, reusing
+the same last-setter-wins reconstruction idiom as
+`tests/test_render.py::test_surface_completeness_witnesses_are_rendered`.
+
+Tests: `tests/test_witness_cutoff.py`, 7 new (cutoff worlds validate clean
+across 30 seeds x 5 cutoff levels; >=90% belief/true-final-location
+divergence at witness_cutoff=0.7 over 200 seeds; witness_gap small at
+cutoff=0.0; witness_gap monotone-in-aggregate across cutoff levels;
+witness_gap is 0 for non-belief queries; surface-completeness holds under
+cutoff; combined-ceiling config renders+validates clean). Full suite:
+141/141 in this package's territory passing (up from the prior 132-test
+baseline; net +9: 7 in the new file, 2 pre-existing tests unaffected).
+
+---
+
+## 2026-09-17 — PLANNED (superseded by the two entries above) — harden task generator to find Ultra's breaking points
 
 Follow-up to the Nano belief-tracking finding below and the scheduler
 sensitivity fix that shipped alongside it (weak-signal refinement path in
@@ -31,7 +158,12 @@ viewer pages). Plan for the next model tier (Ultra):
 3. Re-run the state + belief campaigns against Ultra with the hardened
    generator once (1) and (2) land.
 
-Status: open -- not started, this is the plan only.
+Status: open -- superseded, see the "witness_cutoff" entry above for what
+actually shipped. Item 1's `_belief_scheduler_config` dim-range widening
+and item 3's Ultra re-run are still genuinely open -- not touched by this
+session, since they live in `cartographer/schedule/`/`cartographer/exec/`
+(another agent's territory this session) and require live model calls
+respectively.
 
 ---
 
