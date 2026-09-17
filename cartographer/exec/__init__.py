@@ -1,6 +1,6 @@
 """Phase 3: execution client for calling live model providers, plus the pilot runner."""
 
-from .client import GROQ, NEBIUS, ChatResult, Client, Provider
+from .client import GROQ, NEBIUS, ChatResult, Client, Provider, list_models
 from .keys import load_keys
 from .pilot import PILOT_MODELS, build_pilot_tasks, run_pilot
 from .pricing import PRICES, cost_usd
@@ -11,6 +11,7 @@ __all__ = [
     "NEBIUS",
     "ChatResult",
     "Client",
+    "list_models",
     "load_keys",
     "PRICES",
     "cost_usd",

@@ -22,10 +22,35 @@ class Provider:
     name: str
     base_url: str
     chat_path: str = "/chat/completions"
+    models_path: str = "/models"
+    # Default max concurrent in-flight calls a campaign should aim for
+    # against this provider, used when the caller doesn't specify one.
+    # Groq's free tier is rate-limited to ~30 RPM, so more than 2 workers
+    # just means more threads sleeping in 429 backoff; Nebius's default
+    # limits (~60 RPM, auto-scaling TPM) comfortably absorb 6.
+    suggested_parallelism: int = 6
 
 
-GROQ = Provider("groq", "https://api.groq.com/openai/v1", "/chat/completions")
+GROQ = Provider(
+    "groq", "https://api.groq.com/openai/v1", "/chat/completions", suggested_parallelism=2
+)
 NEBIUS = Provider("nebius", "https://api.studio.nebius.com/v1", "/chat/completions")
+
+# Model-id substrings that mark an entry in a provider's /models listing as
+# not chat-capable (audio, embeddings, safety classifiers, etc.).
+_NON_CHAT_ID_MARKERS = (
+    "whisper",
+    "embed",
+    "tts",
+    "guard",
+    "moderation",
+    "rerank",
+    "transcrib",
+    "audio",
+    "flux",  # image generation
+    "stable-diffusion",
+    "sdxl",
+)
 
 
 @dataclass(frozen=True)
@@ -91,6 +116,55 @@ def _post(
         return _TIMEOUT_STATUS, b"", {}
 
 
+def _get(
+    url: str, headers: dict[str, str], timeout: float = 30
+) -> tuple[int, bytes, dict[str, str]]:
+    """Issue an HTTP GET. Same contract and monkeypatch-isolation rationale
+    as `_post`: returns (status, body_bytes, response_headers), with
+    (_TIMEOUT_STATUS, b"", {}) on a socket timeout.
+    """
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read(), dict(resp.headers.items())
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read(), dict(exc.headers.items()) if exc.headers else {}
+    except (socket.timeout, TimeoutError, urllib.error.URLError) as exc:
+        if isinstance(exc, urllib.error.URLError) and not isinstance(
+            exc.reason, (socket.timeout, TimeoutError)
+        ):
+            raise
+        return _TIMEOUT_STATUS, b"", {}
+
+
+def list_models(provider: Provider, api_key: str) -> list[str]:
+    """Fetch the provider's /models listing and return chat-capable model
+    ids, sorted. Raises RuntimeError (never leaking the key) on HTTP or
+    parse failure -- callers like the /launch page surface the message.
+    """
+    url = provider.base_url + provider.models_path
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": "model-cartographer/0.1",
+    }
+    status, raw, _ = _get(url, headers)
+    if status == _TIMEOUT_STATUS:
+        raise RuntimeError(f"{provider.name}: /models request timed out")
+    if status < 200 or status >= 300:
+        raise RuntimeError(f"{provider.name}: /models returned HTTP {status}")
+    try:
+        payload = json.loads(raw)
+        ids = [str(entry["id"]) for entry in payload["data"]]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"{provider.name}: could not parse /models response: {exc!r}")
+    chat_ids = [
+        mid
+        for mid in ids
+        if not any(marker in mid.lower() for marker in _NON_CHAT_ID_MARKERS)
+    ]
+    return sorted(set(chat_ids))
+
+
 def _parse_retry_after(headers: dict[str, str]) -> float | None:
     """Parse a Retry-After header value (seconds, case-insensitive key)."""
     for key, value in headers.items():
@@ -117,6 +191,10 @@ class Client:
 
     def __repr__(self) -> str:
         return f"Client(provider={self._provider.name!r}, api_key=<redacted>)"
+
+    @property
+    def provider(self) -> Provider:
+        return self._provider
 
     def _build_request(self, model: str, prompt: str, max_tokens: float, temperature: float) -> tuple[str, dict[str, str], bytes]:
         url = self._provider.base_url + self._provider.chat_path

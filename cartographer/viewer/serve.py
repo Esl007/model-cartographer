@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import html
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from ..store.schema import ExperimentRecord
 from ..store.store import ResultsStore
+from . import launch as launch_mod
 from .atlas import atlas_html
 
 _DEFAULT_DB_PATH = "results/pilot.sqlite"
@@ -120,7 +121,8 @@ def index_html(store: ResultsStore) -> str:
     body = (
         "<h1>Model Cartographer -- results viewer</h1>"
         '<p><a href="/live">Live campaign monitor</a> &middot; '
-        '<a href="/atlas">Cross-model atlas</a></p>'
+        '<a href="/atlas">Cross-model atlas</a> &middot; '
+        '<a href="/launch">Launch a campaign</a></p>'
         f"{table}"
     )
     return _page("Model Cartographer results", body)
@@ -147,11 +149,34 @@ def _config_summary(realized_dims: dict) -> str:
     return ", ".join(parts)
 
 
+# A run whose newest record is older than this is considered finished:
+# /live renders a "RUN COMPLETE" state (full green bar, no ETA) instead of
+# a frozen partial progress bar with a bogus ETA.
+_COMPLETE_AFTER_S = 180.0
+
+
+def _now_utc() -> datetime:
+    """Split out so tests can monkeypatch 'now'."""
+    return datetime.now(timezone.utc)
+
+
+def _age_seconds(newest: datetime) -> float:
+    if newest.tzinfo is None:
+        # created_at strings without an offset are treated as UTC (that's
+        # how ExperimentRecord stamps them).
+        newest = newest.replace(tzinfo=timezone.utc)
+    return (_now_utc() - newest).total_seconds()
+
+
 def live_html(store: ResultsStore) -> str:
     """Live monitor for the most-recently-created campaign run (by max
     `created_at` across all records) -- progress bar, tallies, and the last
     15 records newest-first. Pure function over the store; auto-refreshes
     via a `<meta http-equiv="refresh">` tag so no JS is needed.
+
+    If the newest record is older than `_COMPLETE_AFTER_S` (3 minutes), the
+    run is rendered as complete: full-width green bar, "RUN COMPLETE --
+    finished at N calls", no ETA, tallies kept.
     """
     cur = store._conn.execute(
         "SELECT run_id FROM experiments ORDER BY created_at DESC, record_id DESC LIMIT 1"
@@ -182,8 +207,21 @@ def live_html(store: ResultsStore) -> str:
         elapsed_s = 0.0
     rate_per_min = (total / (elapsed_s / 60.0)) if elapsed_s > 0 else 0.0
 
+    complete = bool(timestamps) and _age_seconds(max(timestamps)) > _COMPLETE_AFTER_S
+
     budget = _budget_for_run(run_id)
-    if budget is not None and budget > 0:
+    if complete:
+        pct_str = ""
+        if budget is not None and budget > 0:
+            pct_str = f" ({min(total / budget * 100.0, 100.0):.1f}% of {budget} budget)"
+        bar_html = (
+            '<div style="border:1px solid #157a15;background:#eee;width:100%;height:1.5rem;'
+            'border-radius:4px;overflow:hidden;">'
+            '<div style="background:#157a15;height:100%;width:100%;"></div></div>'
+            f'<p class="meta"><strong>RUN COMPLETE</strong> &mdash; finished at '
+            f"{total} calls{pct_str}</p>"
+        )
+    elif budget is not None and budget > 0:
         pct = min(total / budget * 100.0, 100.0)
         remaining = max(budget - total, 0)
         eta_min = (remaining / rate_per_min) if rate_per_min > 0 else None
@@ -233,7 +271,7 @@ def live_html(store: ResultsStore) -> str:
     <h2>Last 15 records (newest first)</h2>
     {recent_table}
     """
-    return _page(f"Live: {run_id}", body, refresh=True)
+    return _page(f"Live: {run_id}", body, refresh=not complete)
 
 
 def run_html(store: ResultsStore, run_id: str) -> str:
@@ -348,6 +386,7 @@ def record_html(store: ResultsStore, record_id: str) -> str:
 
 class _ViewerHandler(BaseHTTPRequestHandler):
     store: ResultsStore  # set on the class before serving
+    launch_deps: launch_mod.LaunchDeps  # set on the class before serving
 
     def _send_html(self, body: str, status: int = 200) -> None:
         payload = body.encode("utf-8")
@@ -368,6 +407,11 @@ class _ViewerHandler(BaseHTTPRequestHandler):
             self._send_html(live_html(self.store))
             return
 
+        if path == "/launch":
+            body = launch_mod.handle_launch_get(self.launch_deps)
+            self._send_html(_page("Launch a campaign", body))
+            return
+
         if path == "/atlas":
             self._send_html(atlas_html(self.store))
             return
@@ -386,13 +430,50 @@ class _ViewerHandler(BaseHTTPRequestHandler):
 
         self._send_html(_page("Not found", "<h1>404</h1><p>Not found.</p>"), status=404)
 
+    def do_POST(self) -> None:  # noqa: N802 -- required BaseHTTPRequestHandler name
+        path = urlsplit(self.path).path
+        if path != "/launch":
+            self._send_html(_page("Not found", "<h1>404</h1><p>Not found.</p>"), status=404)
+            return
+
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(length) if length else b""
+        form = {
+            k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()
+        }
+
+        step = form.get("step", "")
+        if step == "models":
+            body = launch_mod.handle_models_step(form, self.launch_deps)
+            self._send_html(_page("Launch a campaign", body))
+            return
+        if step == "start":
+            started, payload = launch_mod.handle_start(form, self.launch_deps)
+            if started:
+                self.send_response(303)
+                self.send_header("Location", "/live")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self._send_html(_page("Launch a campaign", payload))
+            return
+
+        self._send_html(
+            _page("Launch a campaign", launch_mod.error_html("unknown form step")),
+            status=400,
+        )
+
     def log_message(self, fmt: str, *args) -> None:  # quieter default logging
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
 
 def serve(db_path: str = _DEFAULT_DB_PATH, port: int = _DEFAULT_PORT) -> None:
     store = ResultsStore(db_path)
-    handler_cls = type("BoundViewerHandler", (_ViewerHandler,), {"store": store})
+    handler_cls = type(
+        "BoundViewerHandler",
+        (_ViewerHandler,),
+        {"store": store, "launch_deps": launch_mod.LaunchDeps(db_path=str(db_path))},
+    )
     httpd = HTTPServer(("127.0.0.1", port), handler_cls)
     print(f"Serving results viewer for {db_path!r} at http://127.0.0.1:{port}/ (Ctrl+C to stop)")
     try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 
 from .schema import ExperimentRecord, Mutation, RenderMode, Verdict
@@ -150,7 +151,14 @@ class ResultsStore:
     """
 
     def __init__(self, path: str | Path) -> None:
-        self._conn = sqlite3.connect(str(path))
+        # check_same_thread=False + an internal write lock make appends safe
+        # from worker threads: the parallel campaign scheduler (see
+        # `cartographer/schedule/scheduler.py`, SchedulerConfig.parallelism)
+        # calls PipelineEvaluator -- and therefore `append` -- from a
+        # ThreadPoolExecutor. All writes are serialized under `_write_lock`;
+        # sqlite itself then only ever sees one writer on this connection.
+        self._conn = sqlite3.connect(str(path), check_same_thread=False)
+        self._write_lock = threading.Lock()
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(_SCHEMA)
         self._migrate()
@@ -171,11 +179,11 @@ class ResultsStore:
         self._conn.commit()
 
     def append(self, record: ExperimentRecord) -> None:
-        with self._conn:
+        with self._write_lock, self._conn:
             self._conn.execute(_INSERT_SQL, _record_to_row(record))
 
     def append_many(self, records: list[ExperimentRecord]) -> None:
-        with self._conn:
+        with self._write_lock, self._conn:
             self._conn.executemany(_INSERT_SQL, (_record_to_row(r) for r in records))
 
     def by_run(self, run_id: str) -> list[ExperimentRecord]:

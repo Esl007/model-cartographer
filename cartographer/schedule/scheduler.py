@@ -22,6 +22,8 @@ therefore trivially testable against the synthetic zoo.
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -61,6 +63,16 @@ class SchedulerConfig:
     budget: int = 400
     decompose_share: float = 0.3
     seed_base: int = 0
+    # Max concurrent evaluator calls within a wave of independent trials
+    # (explore levels x k_trials, refine k_trials per bisection point,
+    # weak-signal re-probes). 1 = fully sequential. Parallelism changes only
+    # the wall-clock interleaving of evaluator calls, never WHICH trials run
+    # or their seeds: budget is charged and seed blocks are assigned on the
+    # coordinating thread, in the same deterministic order as a sequential
+    # run, before any trial is submitted to the pool. Results are keyed by
+    # (config, seed) and gathered back in submission order, so estimates are
+    # identical at any parallelism level.
+    parallelism: int = 6
 
 
 @dataclass
@@ -93,23 +105,70 @@ class _BudgetExhausted(Exception):
 
 
 class _SharedBudget:
-    """Tracks remaining trial budget and a monotonic seed counter."""
+    """Tracks remaining trial budget and a monotonic seed counter.
+
+    Thread-safe: `charge`/`take_seed_block` hold an internal lock, since the
+    decompose stage's wrapped evaluator charges per-call and could in
+    principle be invoked off the coordinating thread. In practice all wave
+    charging happens on the coordinating thread *before* trials are
+    submitted to the pool (see `_run_trials`), so the budget can never
+    overshoot: a wave whose next probe would exceed the remaining budget
+    raises `_BudgetExhausted` before submitting it (this is strictly tighter
+    than the "may overshoot by up to max_workers trials" allowance the
+    parallel design permits).
+    """
 
     def __init__(self, budget_total: int, already_spent: int, seed_base: int) -> None:
         self.remaining = budget_total - already_spent
         self.spent = already_spent
         self._next_seed = seed_base + already_spent
+        self._lock = threading.Lock()
 
     def take_seed_block(self, k: int) -> int:
-        start = self._next_seed
-        self._next_seed += k
-        return start
+        with self._lock:
+            start = self._next_seed
+            self._next_seed += k
+            return start
 
     def charge(self, k: int) -> None:
-        if k > self.remaining:
-            raise _BudgetExhausted()
-        self.remaining -= k
-        self.spent += k
+        with self._lock:
+            if k > self.remaining:
+                raise _BudgetExhausted()
+            self.remaining -= k
+            self.spent += k
+
+
+def _run_trials(
+    evaluator: TaskEvaluator,
+    jobs: list[tuple[dict[str, float], int]],
+    executor: ThreadPoolExecutor | None,
+    on_record: OnRecord | None,
+) -> list[bool]:
+    """Run a wave of already-budgeted (config, seed) trials, optionally in
+    parallel, returning outcomes in job order.
+
+    Parallelism affects completion order only: outcomes are gathered back in
+    submission order, and `on_record` is invoked sequentially on the calling
+    thread in job order after all trials finish, so callers see the exact
+    same record stream a sequential run would produce.
+    """
+    if executor is None:
+        results = [evaluator(cfg, seed) for cfg, seed in jobs]
+    else:
+        futures = [executor.submit(evaluator, cfg, seed) for cfg, seed in jobs]
+        results = [f.result() for f in futures]
+    if on_record is not None:
+        for (cfg, seed), ok in zip(jobs, results):
+            on_record(dict(cfg), ok, seed)
+    return results
+
+
+def _sorted_points(pts: list[tuple[float, bool]]) -> list[tuple[float, bool]]:
+    """Canonical point ordering for fitting. `boundary_ci`'s bootstrap
+    resamples by index, so point ORDER affects the CI draw; sorting before
+    every fit makes estimates independent of accumulation order (and hence
+    of parallel completion order)."""
+    return sorted(pts)
 
 
 def _round_dim(value: float, spec: DimSpec) -> float:
@@ -125,12 +184,17 @@ def _probe_point(
     budget: _SharedBudget,
     on_record: OnRecord | None,
     tally_sink: list[tuple[float, int, int]] | None = None,
+    executor: ThreadPoolExecutor | None = None,
 ) -> bool:
     """Run k_trials at `base_config` with `dim` set to `x`; majority vote.
 
     Every trial is charged against the shared budget individually and, if
     provided, reported via `on_record(config, passed, trial_seed)` -- this
     is the hook a caller uses to persist each trial as an ExperimentRecord.
+
+    The k trials are independent, so with an `executor` they run
+    concurrently (budget charged and seeds assigned up front, results
+    gathered in seed order -- see `_run_trials`).
 
     If `tally_sink` is provided, appends `(x, trial_passes, k_trials)` to it
     -- the raw per-trial tally, distinct from the majority-vote bool this
@@ -141,14 +205,9 @@ def _probe_point(
     seed_start = budget.take_seed_block(k_trials)
     config = dict(base_config)
     config[dim] = x
-    passes = 0
-    for i in range(k_trials):
-        seed = seed_start + i
-        ok = evaluator(config, seed)
-        if on_record is not None:
-            on_record(dict(config), ok, seed)
-        if ok:
-            passes += 1
+    jobs = [(dict(config), seed_start + i) for i in range(k_trials)]
+    results = _run_trials(evaluator, jobs, executor, on_record)
+    passes = sum(results)
     if tally_sink is not None:
         tally_sink.append((x, passes, k_trials))
     return passes * 2 > k_trials
@@ -161,8 +220,18 @@ def _explore_dim(
     state: CampaignState,
     budget: _SharedBudget,
     on_record: OnRecord | None,
+    executor: ThreadPoolExecutor | None = None,
 ) -> None:
-    """Wave 1: probe `explore_points` evenly spaced levels of `spec`."""
+    """Wave 1: probe `explore_points` evenly spaced levels of `spec`.
+
+    All levels of the sweep are independent, so the whole wave (levels x
+    k_trials trials) is submitted to the executor at once. Budget is
+    charged and seed blocks assigned level-by-level on this thread first
+    (identical order to a sequential run); if the budget runs out mid-wave,
+    the already-charged levels still execute and their points are recorded
+    before `_BudgetExhausted` propagates -- exactly matching the sequential
+    behavior of failing on the first unaffordable level.
+    """
     n = config.explore_points
     if n == 1:
         levels = [(spec.lo + spec.hi) / 2.0]
@@ -174,20 +243,38 @@ def _explore_dim(
     pts = state.points.setdefault(spec.name, [])
     tallies = state.trial_tallies.setdefault(spec.name, [])
     already = {x for x, _ in pts}
+
+    # Phase A (coordinating thread): charge budget + assign seed blocks in
+    # deterministic level order.
+    wave: list[tuple[float, list[tuple[dict[str, float], int]]]] = []
+    exhausted: _BudgetExhausted | None = None
     for x in levels:
         if x in already:
             continue
-        passed = _probe_point(
-            evaluator,
-            config.baseline,
-            spec.name,
-            x,
-            config.k_trials,
-            budget,
-            on_record,
-            tally_sink=tallies,
-        )
-        pts.append((x, passed))
+        try:
+            budget.charge(config.k_trials)
+        except _BudgetExhausted as exc:
+            exhausted = exc
+            break
+        seed_start = budget.take_seed_block(config.k_trials)
+        cfg = dict(config.baseline)
+        cfg[spec.name] = x
+        wave.append((x, [(dict(cfg), seed_start + i) for i in range(config.k_trials)]))
+
+    # Phase B: run every charged trial (concurrently if an executor is
+    # given), then fold results back per level in level order.
+    flat_jobs = [job for _, jobs in wave for job in jobs]
+    flat_results = _run_trials(evaluator, flat_jobs, executor, on_record)
+    idx = 0
+    for x, jobs in wave:
+        k = len(jobs)
+        passes = sum(flat_results[idx : idx + k])
+        idx += k
+        tallies.append((x, passes, k))
+        pts.append((x, passes * 2 > k))
+
+    if exhausted is not None:
+        raise exhausted
 
     if all(p for _, p in pts):
         state.no_boundary_dims.add(spec.name)
@@ -213,6 +300,7 @@ def _weak_signal_refine_dim(
     state: CampaignState,
     budget: _SharedBudget,
     on_record: OnRecord | None,
+    executor: ThreadPoolExecutor | None = None,
 ) -> None:
     """Weak-signal refinement pass (lab-log Nano finding).
 
@@ -263,20 +351,21 @@ def _weak_signal_refine_dim(
             budget,
             on_record,
             tally_sink=tallies,
+            executor=executor,
         )
         # Replace the old single-vote entry for this x with the freshly
         # re-probed (higher-trial-count) majority outcome.
         pts[:] = [(px, pp) for px, pp in pts if px != x]
         pts.append((x, passed))
 
-    fit = fit_logistic(pts)
+    fit = fit_logistic(_sorted_points(pts))
     xs = [x for x, _ in pts]
     lo, hi = (min(xs), max(xs)) if xs else (spec.lo, spec.hi)
     if fit is not None and lo <= fit.midpoint <= hi and any(p for _, p in pts) and any(
         not p for _, p in pts
     ):
         state.no_boundary_dims.discard(spec.name)
-        _refine_dim(evaluator, config, spec, state, budget, on_record)
+        _refine_dim(evaluator, config, spec, state, budget, on_record, executor)
     else:
         rate = _dim_aggregate_pass_rate(tallies)
         state.notes.append(
@@ -291,6 +380,7 @@ def _refine_dim(
     state: CampaignState,
     budget: _SharedBudget,
     on_record: OnRecord | None,
+    executor: ThreadPoolExecutor | None = None,
 ) -> None:
     """Waves 2+: bisect between the last-passing and first-failing explore
     levels found for `spec`, until the boundary CI is narrow enough or
@@ -309,7 +399,9 @@ def _refine_dim(
         left, right = min(passing_x), max(failing_x)
 
     for _ in range(config.refine_rounds):
-        mid, ci_lo, ci_hi = boundary_ci(pts, seed=config.seed_base + hash(spec.name) % 10_000)
+        mid, ci_lo, ci_hi = boundary_ci(
+            _sorted_points(pts), seed=config.seed_base + hash(spec.name) % 10_000
+        )
         if (ci_hi - ci_lo) <= config.ci_width_stop:
             break
         probe_x = _round_dim((left + right) / 2.0, spec)
@@ -319,7 +411,14 @@ def _refine_dim(
                 break
             probe_x = (left + right) / 2.0
         passed = _probe_point(
-            evaluator, config.baseline, spec.name, probe_x, config.k_trials, budget, on_record
+            evaluator,
+            config.baseline,
+            spec.name,
+            probe_x,
+            config.k_trials,
+            budget,
+            on_record,
+            executor=executor,
         )
         pts.append((probe_x, passed))
         if passed:
@@ -329,7 +428,9 @@ def _refine_dim(
         if right <= left:
             break
 
-    mid, ci_lo, ci_hi = boundary_ci(pts, seed=config.seed_base + hash(spec.name) % 10_000)
+    mid, ci_lo, ci_hi = boundary_ci(
+        _sorted_points(pts), seed=config.seed_base + hash(spec.name) % 10_000
+    )
     state.boundaries[spec.name] = (mid, ci_lo, ci_hi)
 
 
@@ -438,6 +539,11 @@ def run_campaign(
     budget = _SharedBudget(config.budget, state.budget_spent, config.seed_base)
     state.waves_run += 1
 
+    executor = (
+        ThreadPoolExecutor(max_workers=config.parallelism)
+        if config.parallelism > 1
+        else None
+    )
     try:
         # WAVE 1: EXPLORE.
         for spec in config.dims:
@@ -448,7 +554,7 @@ def run_campaign(
                 progress(f"[explore] {spec.name}: already explored, skipping")
                 continue
             progress(f"[explore] {spec.name}")
-            _explore_dim(evaluator, config, spec, state, budget, on_record)
+            _explore_dim(evaluator, config, spec, state, budget, on_record, executor)
 
         # Record aggregate per-dim pass rate (lab-log: the atlas needs this
         # regardless of whether a boundary was found).
@@ -473,7 +579,9 @@ def run_campaign(
             fail_count = sum(k - p for _, p, k in tallies)
             if total_probes > 0 and fail_count >= math.ceil(0.1 * total_probes):
                 progress(f"[weak-signal-refine] {spec.name}")
-                _weak_signal_refine_dim(evaluator, config, spec, state, budget, on_record)
+                _weak_signal_refine_dim(
+                    evaluator, config, spec, state, budget, on_record, executor
+                )
                 state.dim_pass_rates[spec.name] = _dim_aggregate_pass_rate(
                     state.trial_tallies.get(spec.name, [])
                 )
@@ -487,7 +595,7 @@ def run_campaign(
             if not has_flip:
                 continue
             progress(f"[refine] {spec.name}")
-            _refine_dim(evaluator, config, spec, state, budget, on_record)
+            _refine_dim(evaluator, config, spec, state, budget, on_record, executor)
 
         # DECOMPOSE STAGE.
         found_boundary_dims = list(state.boundaries.keys())
@@ -504,14 +612,10 @@ def run_campaign(
             if probe_k > 0:
                 budget.charge(probe_k)
                 seed_start = budget.take_seed_block(probe_k)
-                passes = 0
-                for i in range(probe_k):
-                    seed = seed_start + i
-                    ok = evaluator(all_ceiling_config, seed)
-                    if on_record is not None:
-                        on_record(dict(all_ceiling_config), ok, seed)
-                    if ok:
-                        passes += 1
+                jobs = [
+                    (dict(all_ceiling_config), seed_start + i) for i in range(probe_k)
+                ]
+                passes = sum(_run_trials(evaluator, jobs, executor, on_record))
                 all_ceiling_fails = passes * 2 <= probe_k
                 if all_ceiling_fails:
                     suspected_dims = sorted(
@@ -547,6 +651,9 @@ def run_campaign(
 
     except _BudgetExhausted:
         state.notes.append(f"budget_exhausted: hard stop at {budget.spent}/{config.budget}")
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
 
     state.budget_spent = budget.spent
     return state

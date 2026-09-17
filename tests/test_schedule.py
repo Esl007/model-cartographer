@@ -333,3 +333,126 @@ def test_soft_boundary_too_diffuse_for_old_flip_detection_is_found() -> None:
         # If the diffuse signal still didn't resolve to a clean crossing,
         # it must at least have been flagged rather than silently dropped.
         assert any(n.startswith("weak_signal_unresolved:temporal") for n in state.notes)
+
+
+# ---------------------------------------------------------------------------
+# Parallel wave execution (SchedulerConfig.parallelism)
+# ---------------------------------------------------------------------------
+
+
+def _latency_evaluator(name: str, delay_s: float = 0.002):
+    """Zoo evaluator with artificial per-call latency, to force genuine
+    thread interleaving under the parallel executor."""
+    import time as _time
+
+    model = ZOO[name]
+
+    def evaluate(dims: dict[str, float], seed: int) -> bool:
+        _time.sleep(delay_s)
+        return model.evaluate(dims, seed)
+
+    return evaluate
+
+
+def _clean_threshold_config(parallelism: int) -> SchedulerConfig:
+    return SchedulerConfig(
+        dims=[DimSpec("temporal", 0.0, 20.0, is_int=True)],
+        baseline={"temporal": 0.0},
+        ceiling={"temporal": 20.0},
+        budget=300,
+        seed_base=42,
+        parallelism=parallelism,
+    )
+
+
+def test_parallel_campaign_identical_to_sequential() -> None:
+    """parallelism=6 must produce IDENTICAL boundaries, points, notes, and
+    on_record stream to parallelism=1 -- parallelism changes completion
+    order only; seeds and probe selection are fixed on the coordinating
+    thread."""
+    runs = {}
+    for par in (1, 6):
+        fired: list[tuple[tuple, bool, int]] = []
+
+        def on_record(cfg: dict, passed: bool, seed: int) -> None:
+            fired.append((tuple(sorted(cfg.items())), passed, seed))
+
+        state = run_campaign(
+            _latency_evaluator("clean_threshold"),
+            _clean_threshold_config(par),
+            on_record=on_record,
+            progress=_quiet,
+        )
+        runs[par] = (state, fired)
+
+    seq_state, seq_fired = runs[1]
+    par_state, par_fired = runs[6]
+
+    assert par_state.boundaries == seq_state.boundaries
+    assert par_state.points == seq_state.points
+    assert par_state.no_boundary_dims == seq_state.no_boundary_dims
+    assert par_state.trial_tallies == seq_state.trial_tallies
+    assert par_state.budget_spent == seq_state.budget_spent
+    assert par_state.notes == seq_state.notes
+    assert par_fired == seq_fired  # same trials, same seeds, same order
+
+    mid, _, _ = par_state.boundaries["temporal"]
+    assert abs(mid - 6.0) <= 1.0
+
+
+def test_parallel_budget_respected() -> None:
+    """Budget under concurrency: charging happens on the coordinating
+    thread before submission, so spend never exceeds the budget (strictly
+    within the +max_workers allowance)."""
+    config = SchedulerConfig(
+        dims=[
+            DimSpec("temporal", 0.0, 10.0),
+            DimSpec("coreference", 0.0, 10.0),
+            DimSpec("distractors", 0.0, 60.0),
+        ],
+        baseline={"temporal": 0.0, "coreference": 0.0, "distractors": 0.0},
+        ceiling={"temporal": 10.0, "coreference": 10.0, "distractors": 60.0},
+        budget=50,
+        seed_base=1,
+        parallelism=6,
+    )
+    calls = []
+
+    def on_record(cfg, passed, seed):
+        calls.append(seed)
+
+    state = run_campaign(
+        _latency_evaluator("three_way_interaction"),
+        config,
+        on_record=on_record,
+        progress=_quiet,
+    )
+    assert state.budget_spent <= config.budget + 6
+    assert len(calls) == state.budget_spent
+
+
+def test_parallel_store_appends_not_corrupted(tmp_path) -> None:
+    """Concurrent evaluator calls append to one sqlite ResultsStore via
+    InstrumentedSyntheticRunner: record count must exactly equal
+    budget_spent (no lost or duplicated writes)."""
+    import time as _time
+
+    from cartographer.store import InstrumentedSyntheticRunner
+    from cartographer.store.store import ResultsStore
+
+    store = ResultsStore(tmp_path / "parallel.sqlite")
+    runner = InstrumentedSyntheticRunner(
+        store=store, model=ZOO["clean_threshold"], run_id="parallel-test"
+    )
+
+    def evaluate(dims: dict[str, float], seed: int) -> bool:
+        _time.sleep(0.002)
+        return runner.evaluate(dims, seed)
+
+    state = run_campaign(evaluate, _clean_threshold_config(6), progress=_quiet)
+
+    n = store._conn.execute(
+        "SELECT COUNT(*) AS n FROM experiments WHERE run_id='parallel-test'"
+    ).fetchone()["n"]
+    assert n == state.budget_spent
+    store.close()

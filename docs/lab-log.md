@@ -7,6 +7,70 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-17 — DECISION (decided) — parallel wave execution, /live completion state, and a browser /launch page
+
+Three infrastructure changes shipped together (scheduler/exec/viewer
+territory, disjoint from the concurrent generator/confirm work):
+
+**1. Parallel wave execution** (`cartographer/schedule/scheduler.py`).
+Every evaluator call used to be sequential; campaigns now run waves of
+independent trials (explore levels x k_trials, k_trials per bisection
+point, weak-signal re-probes) through a
+`ThreadPoolExecutor(max_workers=SchedulerConfig.parallelism)` (new field,
+default 6). Determinism is preserved exactly: budget is charged and seed
+blocks assigned on the coordinating thread in the same order as a
+sequential run BEFORE any trial is submitted, results are gathered in
+submission order, and `on_record` fires sequentially in that order — so
+parallelism changes wall-clock interleaving only, never which probes run,
+their seeds, or the record stream. Because charging is up-front, the
+budget can never overshoot (tighter than the +max_workers allowance the
+design permitted). Points are additionally sorted before every
+`fit_logistic`/`boundary_ci` call, since the bootstrap resamples by index
+and would otherwise be sensitive to accumulation order. Bisection stays
+sequential per-step (inherently), but its k_trials per point parallelize.
+Verified by `test_parallel_campaign_identical_to_sequential`:
+parallelism=1 vs 6 on clean_threshold with artificial latency produce
+byte-identical boundaries, points, tallies, notes, and on_record streams.
+
+**2. Thread safety for persistence.** Chosen fix (of the two candidates):
+`ResultsStore` itself is now thread-safe — `check_same_thread=False` plus
+an internal write lock serializing `append`/`append_many` — because
+appends genuinely happen from executor worker threads, so a lock in
+`PipelineEvaluator` alone would still trip sqlite's same-thread check.
+`PipelineEvaluator` additionally guards its own mutable state (spend/call/
+error counters, cap check) with a lock; chat -> verify runs fully parallel.
+The cost cap becomes soft under concurrency: up to parallelism-1 in-flight
+calls can each start just under the cap (documented in the class
+docstring). Rate limits: new `Provider.suggested_parallelism` (GROQ=2 for
+the 30 RPM free tier, NEBIUS=6) is the default when `run_state_campaign`/
+`run_belief_campaign` callers don't pass `parallelism` explicitly.
+
+**3. /live completed-run state** (`cartographer/viewer/serve.py`). A
+finished run used to look stuck — bar frozen at partial %, bogus ETA. If
+the newest record is older than 3 minutes, /live now renders "RUN
+COMPLETE — finished at N calls" with a full-width green bar, no ETA,
+tallies kept, and no auto-refresh.
+
+**4. /launch page** (`cartographer/viewer/launch.py`, new; wired into
+serve.py with a first `do_POST`). Browser flow to start campaigns without
+the CLI: provider + optional API key -> server calls the provider's
+/models endpoint (new stdlib `list_models` in exec/client.py, filtered to
+chat-capable ids) -> model dropdown + campaign type + budget/cost-cap
+prefilled from the evaluator presets -> Launch spawns the campaign in a
+daemon thread with an auto-generated `camp-{type}-{model-short}-{NNN}`
+run_id and redirects to /live. Keys live only in process memory: the
+step-2 form carries an opaque one-shot token into an in-memory dict, never
+the key; tests assert a sentinel key never appears in any returned HTML.
+One campaign at a time via a locked module-level slot; while busy /launch
+shows "campaign in progress" linking to /live. Server still binds
+127.0.0.1 only — local tool, not a deployment.
+
+Suite: 167 passing at the time of writing (net +28 from this work: 3
+scheduler-parallel, 3 list_models, 5 /live-state, 10 launch, plus reworked
+live fixtures using now-relative timestamps). Zero network in tests.
+
+---
+
 ## 2026-09-17 — PHASE (shipped) — Phase 7 confirmation module (decompose's missing check)
 
 Added `cartographer/confirm/` (new package): decompose finds candidate

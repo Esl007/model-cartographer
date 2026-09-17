@@ -17,6 +17,7 @@ query kinds explored so far.
 from __future__ import annotations
 
 import hashlib
+import threading
 from dataclasses import dataclass, replace
 from typing import Callable
 
@@ -94,6 +95,17 @@ class PipelineEvaluator:
     subsequent call short-circuits to False with an ERROR record carrying
     `cost_capped=1` in `verifier_detail` -- no API call is made, so the
     scheduler's shared budget drains at zero additional cost once capped.
+
+    Thread safety: the parallel scheduler (SchedulerConfig.parallelism > 1)
+    invokes this evaluator concurrently from a ThreadPoolExecutor. The
+    chat -> verify pipeline runs fully in parallel; only the shared mutable
+    state -- cost/call/error counters, the cap check, and `store.append` --
+    is serialized under `self._lock` (and `ResultsStore.append` additionally
+    holds its own write lock over a `check_same_thread=False` connection).
+    Because spend is only known after a call returns, up to `parallelism`
+    in-flight calls may each start just under the cap, so the cap can be
+    overshot by at most `parallelism - 1` calls' cost -- acceptable for a
+    soft dollar cap on cheap trials.
     """
 
     def __init__(
@@ -120,15 +132,17 @@ class PipelineEvaluator:
         self.call_count = 0
         self.error_count = 0
         self.capped = False
+        self._lock = threading.Lock()
 
     def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
         params = _apply_config(self.base, config)
         seed = _task_seed(config, trial_seed)
 
-        if self.spent_usd >= self.cost_cap_usd:
-            self.capped = True
-            self._record_capped(params, config, seed, trial_seed)
-            return False
+        with self._lock:
+            if self.spent_usd >= self.cost_cap_usd:
+                self.capped = True
+                self._record_capped(params, config, seed, trial_seed)
+                return False
 
         world = generate(params, seed)
         name_map = build_name_map(world, seed)
@@ -138,16 +152,19 @@ class PipelineEvaluator:
         verifier_detail = f"kind={self.query_kind};campaign=1"
 
         result = self.client.chat(model=self.model, prompt=rendered.prompt, max_tokens=self.max_tokens)
-        self.call_count += 1
         cost = cost_usd(self.model, result.tokens_in, result.tokens_out)
-        self.spent_usd += cost
+        with self._lock:
+            self.call_count += 1
+            self.spent_usd += cost
 
         if result.error is not None:
             # Retry once on error before giving up.
             retry = self.client.chat(model=self.model, prompt=rendered.prompt, max_tokens=self.max_tokens)
-            self.call_count += 1
-            cost += cost_usd(self.model, retry.tokens_in, retry.tokens_out)
-            self.spent_usd += cost_usd(self.model, retry.tokens_in, retry.tokens_out)
+            retry_cost = cost_usd(self.model, retry.tokens_in, retry.tokens_out)
+            cost += retry_cost
+            with self._lock:
+                self.call_count += 1
+                self.spent_usd += retry_cost
             result = retry
 
         if result.error is not None:
@@ -158,9 +175,6 @@ class PipelineEvaluator:
             if result.finish_reason == "length":
                 verdict = Verdict.ERROR
                 verifier_detail += ";cap_hit=1"
-
-        if verdict == Verdict.ERROR:
-            self.error_count += 1
 
         record = ExperimentRecord(
             run_id=self.run_id,
@@ -188,10 +202,12 @@ class PipelineEvaluator:
             reasoning_text=result.reasoning,
             finish_reason=result.finish_reason,
         )
-        self.store.append(record)
-
-        if self.spent_usd >= self.cost_cap_usd:
-            self.capped = True
+        with self._lock:
+            if verdict == Verdict.ERROR:
+                self.error_count += 1
+            self.store.append(record)
+            if self.spent_usd >= self.cost_cap_usd:
+                self.capped = True
 
         return verdict == Verdict.PASS
 
@@ -204,7 +220,7 @@ class PipelineEvaluator:
     ) -> None:
         """Record a zero-cost, zero-call trial once the cost cap has been
         hit -- no API call is made, so the scheduler's shared budget drains
-        without incurring further spend.
+        without incurring further spend. Caller must hold `self._lock`.
         """
         self.error_count += 1
         record = ExperimentRecord(
@@ -236,7 +252,7 @@ class PipelineEvaluator:
         self.store.append(record)
 
 
-def _state_scheduler_config(budget: int) -> SchedulerConfig:
+def _state_scheduler_config(budget: int, parallelism: int = 6) -> SchedulerConfig:
     return SchedulerConfig(
         dims=[DimSpec("chain_length", 2, 30, True)],
         baseline={"chain_length": 2},
@@ -244,10 +260,11 @@ def _state_scheduler_config(budget: int) -> SchedulerConfig:
         k_trials=5,
         ci_width_stop=2.0,
         budget=budget,
+        parallelism=parallelism,
     )
 
 
-def _belief_scheduler_config(budget: int) -> SchedulerConfig:
+def _belief_scheduler_config(budget: int, parallelism: int = 6) -> SchedulerConfig:
     dims = [
         DimSpec("chain_length", 2, 10, True),
         DimSpec("scramble", 0.0, 1.0, False),
@@ -264,7 +281,13 @@ def _belief_scheduler_config(budget: int) -> SchedulerConfig:
         ci_width_stop=2.0,
         decompose_share=0.35,
         budget=budget,
+        parallelism=parallelism,
     )
+
+
+def _default_parallelism(client: Client) -> int:
+    provider = getattr(client, "provider", None)
+    return getattr(provider, "suggested_parallelism", 6)
 
 
 def run_state_campaign(
@@ -274,8 +297,13 @@ def run_state_campaign(
     model: str,
     budget: int = 160,
     cost_cap: float = 0.5,
+    parallelism: int | None = None,
 ) -> CampaignState:
-    """Run the "state" query-kind campaign: sweep chain_length from 2 to 30."""
+    """Run the "state" query-kind campaign: sweep chain_length from 2 to 30.
+
+    `parallelism=None` defaults to the client provider's
+    `suggested_parallelism` (Groq 2, Nebius 6 -- rate-limit-aware).
+    """
     evaluator = PipelineEvaluator(
         client=client,
         model=model,
@@ -284,7 +312,9 @@ def run_state_campaign(
         query_kind="state",
         cost_cap_usd=cost_cap,
     )
-    config = _state_scheduler_config(budget)
+    if parallelism is None:
+        parallelism = _default_parallelism(client)
+    config = _state_scheduler_config(budget, parallelism)
 
     def on_record(cfg: dict, passed: bool, seed: int) -> None:
         pass  # PipelineEvaluator already persists every trial itself.
@@ -303,8 +333,13 @@ def run_belief_campaign(
     model: str,
     budget: int = 700,
     cost_cap: float = 1.0,
+    parallelism: int | None = None,
 ) -> CampaignState:
-    """Run the "belief" query-kind campaign across four dims at once."""
+    """Run the "belief" query-kind campaign across four dims at once.
+
+    `parallelism=None` defaults to the client provider's
+    `suggested_parallelism` (Groq 2, Nebius 6 -- rate-limit-aware).
+    """
     evaluator = PipelineEvaluator(
         client=client,
         model=model,
@@ -313,7 +348,9 @@ def run_belief_campaign(
         query_kind="belief",
         cost_cap_usd=cost_cap,
     )
-    config = _belief_scheduler_config(budget)
+    if parallelism is None:
+        parallelism = _default_parallelism(client)
+    config = _belief_scheduler_config(budget, parallelism)
 
     def on_record(cfg: dict, passed: bool, seed: int) -> None:
         pass  # PipelineEvaluator already persists every trial itself.

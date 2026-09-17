@@ -459,3 +459,60 @@ def test_open_legacy_schema_db_migrates_and_appends(tmp_path):
     assert by_id[new_record.record_id].reasoning_text == "some reasoning"
     assert by_id[new_record.record_id].finish_reason == "stop"
     store.close()
+
+
+# ---------------------------------------------------------------------------
+# list_models + provider parallelism defaults
+# ---------------------------------------------------------------------------
+
+
+def test_provider_suggested_parallelism_defaults():
+    from cartographer.exec.client import GROQ, NEBIUS
+
+    assert GROQ.suggested_parallelism == 2  # free tier ~30 RPM
+    assert NEBIUS.suggested_parallelism == 6
+
+
+def test_list_models_filters_and_sorts(monkeypatch):
+    import json as _json
+
+    from cartographer.exec.client import NEBIUS, list_models
+
+    payload = {
+        "data": [
+            {"id": "zeta-chat-1"},
+            {"id": "acme/alpha-chat"},
+            {"id": "whisper-large-v3"},
+            {"id": "text-embedding-3"},
+            {"id": "llama-guard-4"},
+            {"id": "acme/alpha-chat"},  # duplicate
+        ]
+    }
+    seen = {}
+
+    def fake_get(url, headers, timeout=30):
+        seen["url"] = url
+        seen["auth"] = headers.get("Authorization")
+        return 200, _json.dumps(payload).encode(), {}
+
+    monkeypatch.setattr(client_mod, "_get", fake_get)
+    models = list_models(NEBIUS, "sk-test")
+
+    assert models == ["acme/alpha-chat", "zeta-chat-1"]
+    assert seen["url"].endswith("/models")
+    assert seen["auth"] == "Bearer sk-test"
+
+
+def test_list_models_http_error_raises_without_key(monkeypatch):
+    from cartographer.exec.client import GROQ, list_models
+
+    def fake_get(url, headers, timeout=30):
+        return 401, b'{"error": "bad key"}', {}
+
+    monkeypatch.setattr(client_mod, "_get", fake_get)
+    try:
+        list_models(GROQ, "gsk_SECRET_SENTINEL")
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "401" in str(exc)
+        assert "gsk_SECRET_SENTINEL" not in str(exc)

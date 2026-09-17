@@ -157,14 +157,22 @@ def test_record_html_unknown_record_id(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _seed_live_store(tmp_path, run_id="camp-belief-test-001"):
+def _live_times(age_s: float) -> list[str]:
+    """Three timestamps 30s apart whose NEWEST is `age_s` seconds old."""
+    from datetime import datetime, timedelta, timezone
+
+    newest = datetime.now(timezone.utc) - timedelta(seconds=age_s)
+    return [
+        (newest - timedelta(seconds=60)).isoformat(),
+        (newest - timedelta(seconds=30)).isoformat(),
+        newest.isoformat(),
+    ]
+
+
+def _seed_live_store(tmp_path, run_id="camp-belief-test-001", newest_age_s=10.0):
     store = ResultsStore(tmp_path / "live_test.sqlite")
     records = []
-    times = [
-        "2026-09-17T10:00:00+00:00",
-        "2026-09-17T10:00:30+00:00",
-        "2026-09-17T10:01:00+00:00",
-    ]
+    times = _live_times(newest_age_s)
     verdicts = [Verdict.PASS, Verdict.FAIL, Verdict.PASS]
     for i, (t, v) in enumerate(zip(times, verdicts)):
         records.append(
@@ -206,9 +214,9 @@ def test_live_html_newest_first_ordering(tmp_path):
     page = live_html(store)
 
     # newest record's timestamp should appear before the oldest's.
-    newest_idx = page.index("2026-09-17T10:01:00")
-    oldest_idx = page.index("2026-09-17T10:00:00")
-    assert newest_idx < oldest_idx
+    newest_ts = records[-1].created_at
+    oldest_ts = records[0].created_at
+    assert page.index(newest_ts) < page.index(oldest_ts)
 
 
 def test_live_html_unknown_prefix_no_crash(tmp_path):
@@ -223,6 +231,36 @@ def test_live_html_no_records_graceful(tmp_path):
     store = ResultsStore(tmp_path / "empty_live.sqlite")
     page = live_html(store)
     assert "No records found" in page
+
+
+def test_live_html_recent_records_render_live_state_with_eta(tmp_path):
+    store, _ = _seed_live_store(tmp_path, newest_age_s=10.0)
+    page = live_html(store)
+
+    assert "RUN COMPLETE" not in page
+    assert "ETA:" in page
+    assert 'http-equiv="refresh"' in page
+
+
+def test_live_html_stale_records_render_complete_state(tmp_path):
+    # newest record is 10 minutes old -> the run is finished, not stuck.
+    store, _ = _seed_live_store(tmp_path, newest_age_s=600.0)
+    page = live_html(store)
+
+    assert "RUN COMPLETE" in page
+    assert "finished at 3 calls" in page
+    assert "ETA:" not in page
+    # full-width green bar, tallies kept, no auto-refresh.
+    assert "width:100%" in page and "#157a15" in page
+    assert "PASS: 2" in page and "FAIL: 1" in page
+    assert 'http-equiv="refresh"' not in page
+
+
+def test_live_html_stale_unknown_budget_still_complete(tmp_path):
+    store, _ = _seed_live_store(tmp_path, run_id="mystery-run-002", newest_age_s=600.0)
+    page = live_html(store)
+    assert "RUN COMPLETE" in page
+    assert "finished at 3 calls" in page
 
 
 # ---------------------------------------------------------------------------
