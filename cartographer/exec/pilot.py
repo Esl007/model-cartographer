@@ -128,6 +128,16 @@ def run_pilot(
             if result.finish_reason == "length":
                 verdict = Verdict.ERROR
                 verifier_detail += ";cap_hit=1"
+            elif (
+                result.error is None
+                and not result.text
+                and result.finish_reason == "stop"
+            ):
+                # The model produced no output but the API considers the
+                # turn cleanly finished ("stop"), not an infra failure.
+                # Tag it distinctly so analysis can separate "model chose
+                # to say nothing" from rate limits/timeouts/cap hits.
+                verifier_detail += ";empty_answer=1"
 
             cost = cost_usd(model, result.tokens_in, result.tokens_out)
 

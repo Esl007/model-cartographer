@@ -60,7 +60,7 @@ def _canned_ok_body(text="the front office", tokens_in=42, tokens_out=7):
 
 def test_client_chat_success(monkeypatch):
     def fake_post(url, headers, body):
-        return 200, _canned_ok_body()
+        return 200, _canned_ok_body(), {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
     c = Client(GROQ, "gsk_fake")
@@ -76,7 +76,7 @@ def test_client_chat_success(monkeypatch):
 
 def test_client_chat_http_401_sets_error_no_raise(monkeypatch):
     def fake_post(url, headers, body):
-        return 401, b'{"error": "unauthorized"}'
+        return 401, b'{"error": "unauthorized"}', {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
     c = Client(GROQ, "gsk_fake")
@@ -92,12 +92,11 @@ def test_client_chat_retries_on_429_then_succeeds(monkeypatch):
     def fake_post(url, headers, body):
         calls.append(1)
         if len(calls) == 1:
-            return 429, b"rate limited"
-        return 200, _canned_ok_body(text="retried ok")
+            return 429, b"rate limited", {}
+        return 200, _canned_ok_body(text="retried ok"), {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
-    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)
-    c = Client(GROQ, "gsk_fake")
+    c = Client(GROQ, "gsk_fake", sleep=lambda s: None)
     result = c.chat(model="openai/gpt-oss-20b", prompt="hello")
 
     assert len(calls) == 2
@@ -105,9 +104,97 @@ def test_client_chat_retries_on_429_then_succeeds(monkeypatch):
     assert result.text == "retried ok"
 
 
+def test_client_chat_429_honors_retry_after_header(monkeypatch):
+    calls = []
+    delays = []
+
+    def fake_post(url, headers, body):
+        calls.append(1)
+        if len(calls) == 1:
+            return 429, b"rate limited", {"Retry-After": "2"}
+        return 200, _canned_ok_body(text="retried ok"), {}
+
+    monkeypatch.setattr(client_mod, "_post", fake_post)
+    c = Client(GROQ, "gsk_fake", sleep=lambda s: delays.append(s))
+    result = c.chat(model="openai/gpt-oss-20b", prompt="hello")
+
+    assert len(calls) == 2
+    assert delays == [2.0]
+    assert result.error is None
+    assert result.text == "retried ok"
+
+
+def test_client_chat_429_exhausts_retries_and_errors(monkeypatch):
+    calls = []
+
+    def fake_post(url, headers, body):
+        calls.append(1)
+        return 429, b"rate limited", {}
+
+    monkeypatch.setattr(client_mod, "_post", fake_post)
+    c = Client(
+        GROQ,
+        "gsk_fake",
+        retry_policy=client_mod.RetryPolicy(max_retries=4, base_delay=0.01),
+        sleep=lambda s: None,
+    )
+    result = c.chat(model="openai/gpt-oss-20b", prompt="hello")
+
+    assert len(calls) == 5  # 1 initial + 4 retries
+    assert result.error is not None
+    assert result.text == ""
+
+
+def test_client_chat_timeout_retries_once_then_succeeds(monkeypatch):
+    calls = []
+
+    def fake_post(url, headers, body):
+        calls.append(1)
+        if len(calls) == 1:
+            return client_mod._TIMEOUT_STATUS, b"", {}
+        return 200, _canned_ok_body(text="recovered"), {}
+
+    monkeypatch.setattr(client_mod, "_post", fake_post)
+    c = Client(GROQ, "gsk_fake", sleep=lambda s: None)
+    result = c.chat(model="openai/gpt-oss-20b", prompt="hello")
+
+    assert len(calls) == 2
+    assert result.error is None
+    assert result.text == "recovered"
+
+
+def test_client_chat_length_finish_reason_empty_text_auto_retries(monkeypatch):
+    request_bodies = []
+
+    def fake_post(url, headers, body):
+        request_bodies.append(json.loads(body))
+        if len(request_bodies) == 1:
+            body_dict = {
+                "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 60},
+            }
+        else:
+            body_dict = {
+                "choices": [{"message": {"content": "the front office"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 8},
+            }
+        return 200, json.dumps(body_dict).encode("utf-8"), {}
+
+    monkeypatch.setattr(client_mod, "_post", fake_post)
+    c = Client(GROQ, "gsk_fake", sleep=lambda s: None)
+    result = c.chat(model="openai/gpt-oss-20b", prompt="hello", max_tokens=60, max_tokens_retry=4000)
+
+    assert len(request_bodies) == 2
+    assert request_bodies[0]["max_tokens"] == 60
+    assert request_bodies[1]["max_tokens"] == 4000
+    assert result.text == "the front office"
+    assert result.finish_reason == "stop"
+    assert result.error is None
+
+
 def test_client_chat_malformed_json_sets_error(monkeypatch):
     def fake_post(url, headers, body):
-        return 200, b"not json at all {{{"
+        return 200, b"not json at all {{{", {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
     c = Client(GROQ, "gsk_fake")
@@ -149,7 +236,7 @@ def test_run_pilot_dry_run(tmp_path, monkeypatch):
         idx = call_counter["n"] % len(responses)
         call_counter["n"] += 1
         text = responses[idx]
-        return 200, _canned_ok_body(text=text)
+        return 200, _canned_ok_body(text=text), {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
     client = Client(GROQ, "gsk_fake")
@@ -198,7 +285,7 @@ def test_client_chat_parses_reasoning_and_finish_reason(monkeypatch):
             ],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5},
         }
-        return 200, json.dumps(body_dict).encode("utf-8")
+        return 200, json.dumps(body_dict).encode("utf-8"), {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
     c = Client(GROQ, "gsk_fake")
@@ -210,7 +297,7 @@ def test_client_chat_parses_reasoning_and_finish_reason(monkeypatch):
 
 def test_client_chat_no_reasoning_field_is_none(monkeypatch):
     def fake_post(url, headers, body):
-        return 200, _canned_ok_body()
+        return 200, _canned_ok_body(), {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
     c = Client(GROQ, "gsk_fake")
@@ -234,7 +321,7 @@ def test_reasoning_and_finish_reason_round_trip_through_pilot(tmp_path, monkeypa
             ],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5},
         }
-        return 200, json.dumps(body_dict).encode("utf-8")
+        return 200, json.dumps(body_dict).encode("utf-8"), {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
     client = Client(GROQ, "gsk_fake")
@@ -258,7 +345,7 @@ def test_finish_reason_length_forces_error_with_cap_hit(tmp_path, monkeypatch):
             ],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5},
         }
-        return 200, json.dumps(body_dict).encode("utf-8")
+        return 200, json.dumps(body_dict).encode("utf-8"), {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
     client = Client(GROQ, "gsk_fake")
@@ -271,6 +358,29 @@ def test_finish_reason_length_forces_error_with_cap_hit(tmp_path, monkeypatch):
     for r in records:
         assert r.verdict == Verdict.ERROR
         assert "cap_hit=1" in r.verifier_detail
+    store.close()
+
+
+def test_empty_stop_answer_flows_through_pilot_as_empty_answer_marker(tmp_path, monkeypatch):
+    def fake_post(url, headers, body):
+        body_dict = {
+            "choices": [{"message": {"content": ""}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 0},
+        }
+        return 200, json.dumps(body_dict).encode("utf-8"), {}
+
+    monkeypatch.setattr(client_mod, "_post", fake_post)
+    client = Client(GROQ, "gsk_fake", sleep=lambda s: None)
+
+    store = ResultsStore(tmp_path / "empty_answer_test.sqlite")
+    run_pilot(client, store, run_id="empty-answer-run", n_per_cell=1, progress=lambda msg: None)
+
+    records = store.by_run("empty-answer-run")
+    assert len(records) > 0
+    for r in records:
+        assert r.verdict == Verdict.ERROR
+        assert "empty_answer=1" in r.verifier_detail
+        assert "cap_hit=1" not in r.verifier_detail
     store.close()
 
 
