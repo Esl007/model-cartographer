@@ -65,6 +65,7 @@ class Client:
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
+            "User-Agent": "model-cartographer/0.1",
         }
         body = json.dumps(
             {

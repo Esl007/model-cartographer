@@ -92,7 +92,7 @@ def run_pilot(
         per_cell_counts.setdefault(cell_key, {"PASS": 0, "FAIL": 0, "ERROR": 0, "REJECTED_BY_FIDELITY_GATE": 0})
 
         for model in models:
-            result = client.chat(model=model, prompt=rendered.prompt)
+            result = client.chat(model=model, prompt=rendered.prompt, max_tokens=1500)
 
             if result.error is not None:
                 verdict = Verdict.ERROR
@@ -170,7 +170,7 @@ def main() -> None:
     os.makedirs("results", exist_ok=True)
     store = ResultsStore("results/pilot.sqlite")
 
-    summary = run_pilot(client, store, run_id="pilot-groq-001")
+    summary = run_pilot(client, store, run_id="pilot-groq-003")
 
     print(f"run_id: {summary['run_id']}")
     print(f"tasks: {summary['n_tasks']}  models: {summary['n_models']}  records: {summary['n_records']}")
