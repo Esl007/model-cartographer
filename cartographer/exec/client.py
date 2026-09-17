@@ -13,7 +13,7 @@ import socket
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclasses_replace
 from typing import Callable
 
 
@@ -62,6 +62,13 @@ class ChatResult:
     error: str | None = None
     finish_reason: str | None = None
     reasoning: str | None = None
+    # True when `Client.chat`'s auto-retry-on-length path actually fired
+    # (first attempt came back empty + length-capped, so a second call was
+    # made at `max_tokens_retry`). Lets callers distinguish a cap-hit that
+    # already got the bigger retry budget and still failed (persistent)
+    # from one that never got the retry at all (e.g. some text came back on
+    # the first attempt, so no retry was attempted).
+    retried: bool = False
 
 
 @dataclass(frozen=True)
@@ -274,7 +281,7 @@ class Client:
             # Preserve whichever call actually produced something; if the
             # retry is still length-capped, its finish_reason is returned
             # as-is so callers can classify the cap-hit distinctly.
-            return retried
+            return dataclasses_replace(retried, retried=True)
 
         return result
 

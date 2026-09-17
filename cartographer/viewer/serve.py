@@ -1,7 +1,10 @@
 """Local read-only HTML viewer over a `ResultsStore` sqlite db.
 
-stdlib-only `http.server` app. Binds to 127.0.0.1 only. No write endpoints
-of any kind -- every route only reads from the store.
+stdlib-only `http.server` app. Binds to 127.0.0.1 only. Every GET route
+only reads from the store; the only mutating routes are `/launch` (spawns
+a campaign thread) and `/stop` (sets that thread's cooperative-cancel
+event -- see `cartographer.viewer.launch`), neither of which writes to
+the results store directly.
 
 Usage:
     python3 -m cartographer.viewer.serve [db_path] [port]
@@ -425,6 +428,22 @@ def _format_eta(remaining: int, rate_per_min: float | None, sample_n: int) -> st
     return f"at most ~{eta_min:.1f} min at current rate"
 
 
+def _stop_button_html(is_active: bool, stopping: bool) -> str:
+    """Renders a "Stop campaign" form-POST button when a campaign is
+    actively registered, or a "stopping..." notice once its cancel_event
+    has been set but the thread hasn't exited yet. Renders nothing when no
+    campaign is active -- there's nothing to stop.
+    """
+    if not is_active:
+        return ""
+    if stopping:
+        return '<p class="meta"><strong>stopping&hellip;</strong> waiting for the current trial to finish.</p>'
+    return (
+        '<form method="post" action="/stop" style="display:inline">'
+        '<button type="submit">Stop campaign</button></form>'
+    )
+
+
 def live_html(store: ResultsStore) -> str:
     """Live monitor. Prefers the ACTIVE registered campaign run_id (from
     `launch_mod.current_run()`) even if it has zero records yet -- a
@@ -435,6 +454,7 @@ def live_html(store: ResultsStore) -> str:
     """
     active = launch_mod.current_run()
     run_id: str | None = active["run_id"] if active else None
+    stopping = launch_mod.is_stopping() if active else False
 
     if run_id is None:
         cur = store._conn.execute(
@@ -454,6 +474,7 @@ def live_html(store: ResultsStore) -> str:
         <h1>Live: {safe_run_id}</h1>
         <p class="meta">starting&hellip; 0 records</p>
         <div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>
+        {_stop_button_html(active is not None, stopping)}
         """
         return _shell(f"Live: {run_id}", "live", body, refresh=True)
 
@@ -531,10 +552,12 @@ def live_html(store: ResultsStore) -> str:
         "<tbody>" + "".join(rows_html) + "</tbody></table>"
     )
 
+    is_active_run = active is not None and run_id == active["run_id"]
     body = f"""
     <h1>Live: {safe_run_id}</h1>
     <p><a href="/run/{safe_run_id}">full run detail &rarr;</a></p>
     {bar_html}
+    {_stop_button_html(is_active_run, stopping)}
     <h2>Tallies</h2>
     {stat_grid}
     <h2>Last 15 records (newest first)</h2>
@@ -701,6 +724,15 @@ class _ViewerHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 -- required BaseHTTPRequestHandler name
         path = urlsplit(self.path).path
+
+        if path == "/stop":
+            launch_mod.request_stop()
+            self.send_response(303)
+            self.send_header("Location", "/live")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
         if path != "/launch":
             self._send_html(_shell("Not found", "", "<h1>404</h1><p>Not found.</p>"), status=404)
             return

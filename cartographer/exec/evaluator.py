@@ -37,6 +37,33 @@ _INT_KEYS = {"chain_length", "coref_pressure", "distractor_events", "filler_even
 _FLOAT_KEYS = {"scramble", "witness_cutoff"}
 _KNOWN_KEYS = _INT_KEYS | _FLOAT_KEYS
 
+# Default token budgets, and the heavier budgets used for "ultra"-class
+# reasoning models (id contains "ultra", case-insensitive) whose reasoning
+# traces can exhaust even the standard auto-retry cap on escalated-difficulty
+# tasks -- e.g. nvidia/Nemotron-3-Ultra-550b-a55b burning through 4000 tokens
+# of reasoning before ever emitting an answer. These are heuristic defaults;
+# an explicit `max_tokens` (and derived retry budget) passed to
+# PipelineEvaluator or a campaign wrapper always wins.
+_DEFAULT_MAX_TOKENS = 1500
+_DEFAULT_MAX_TOKENS_RETRY = 4000
+_ULTRA_MAX_TOKENS = 8000
+_ULTRA_MAX_TOKENS_RETRY = 16000
+
+
+def _is_ultra_model(model: str) -> bool:
+    return "ultra" in model.lower()
+
+
+def default_token_budget(model: str) -> tuple[int, int]:
+    """(max_tokens, max_tokens_retry) heuristic defaults for `model`.
+
+    Models whose id contains "ultra" get an 8000/16000 budget; everything
+    else keeps the pre-existing 1500/4000 defaults.
+    """
+    if _is_ultra_model(model):
+        return _ULTRA_MAX_TOKENS, _ULTRA_MAX_TOKENS_RETRY
+    return _DEFAULT_MAX_TOKENS, _DEFAULT_MAX_TOKENS_RETRY
+
 
 class CostCapExceeded(RuntimeError):
     """Raised (only informationally -- see PipelineEvaluator) when a
@@ -118,7 +145,9 @@ class PipelineEvaluator:
         query_kind: str,
         cost_cap_usd: float,
         base: DimParams | None = None,
-        max_tokens: int = 1500,
+        max_tokens: int | None = None,
+        max_tokens_retry: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         self.client = client
         self.model = model
@@ -127,12 +156,33 @@ class PipelineEvaluator:
         self.query_kind = query_kind
         self.cost_cap_usd = cost_cap_usd
         self.base = base if base is not None else _default_base(query_kind)
-        self.max_tokens = max_tokens
+
+        default_max_tokens, default_max_tokens_retry = default_token_budget(model)
+        if max_tokens is not None:
+            self.max_tokens = max_tokens
+            # An explicit max_tokens override with no matching retry
+            # override doesn't inherit the model-heuristic retry budget
+            # (that pairing no longer makes sense once max_tokens itself
+            # has been overridden) -- fall back to double the override,
+            # still capped/floored so retry_on_length has room to fire.
+            self.max_tokens_retry = (
+                max_tokens_retry if max_tokens_retry is not None else max_tokens * 2
+            )
+        else:
+            self.max_tokens = default_max_tokens
+            self.max_tokens_retry = (
+                max_tokens_retry if max_tokens_retry is not None else default_max_tokens_retry
+            )
+        if self.max_tokens_retry <= self.max_tokens:
+            self.max_tokens_retry = self.max_tokens * 2
+
+        self.cancel_event = cancel_event
 
         self.spent_usd = 0.0
         self.call_count = 0
         self.error_count = 0
         self.capped = False
+        self.cancelled = False
         self._lock = threading.Lock()
 
     def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
@@ -142,7 +192,11 @@ class PipelineEvaluator:
         with self._lock:
             if self.spent_usd >= self.cost_cap_usd:
                 self.capped = True
-                self._record_capped(params, config, seed, trial_seed)
+                self._record_capped(params, config, seed, trial_seed, reason="cost_capped")
+                return False
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                self.cancelled = True
+                self._record_capped(params, config, seed, trial_seed, reason="cancelled")
                 return False
 
         world = generate(params, seed)
@@ -152,7 +206,12 @@ class PipelineEvaluator:
 
         verifier_detail = f"kind={self.query_kind};campaign=1"
 
-        result = self.client.chat(model=self.model, prompt=rendered.prompt, max_tokens=self.max_tokens)
+        result = self.client.chat(
+            model=self.model,
+            prompt=rendered.prompt,
+            max_tokens=self.max_tokens,
+            max_tokens_retry=self.max_tokens_retry,
+        )
         cost = cost_usd(self.model, result.tokens_in, result.tokens_out)
         with self._lock:
             self.call_count += 1
@@ -160,7 +219,12 @@ class PipelineEvaluator:
 
         if result.error is not None:
             # Retry once on error before giving up.
-            retry = self.client.chat(model=self.model, prompt=rendered.prompt, max_tokens=self.max_tokens)
+            retry = self.client.chat(
+                model=self.model,
+                prompt=rendered.prompt,
+                max_tokens=self.max_tokens,
+                max_tokens_retry=self.max_tokens_retry,
+            )
             retry_cost = cost_usd(self.model, retry.tokens_in, retry.tokens_out)
             cost += retry_cost
             with self._lock:
@@ -176,6 +240,15 @@ class PipelineEvaluator:
             if result.finish_reason == "length":
                 verdict = Verdict.ERROR
                 verifier_detail += ";cap_hit=1"
+                # `result.retried` is only True when Client.chat's
+                # auto-retry-on-length path actually fired (first attempt
+                # came back empty + length-capped) and the retried call is
+                # what we're looking at here. If that retried call is
+                # STILL length-capped, the bigger `max_tokens_retry` budget
+                # was exhausted too -- a persistent cap, not a transient
+                # one-off -- so mark it distinctly for analysis.
+                if result.retried:
+                    verifier_detail += ";retry_exhausted=1"
 
         record = ExperimentRecord(
             run_id=self.run_id,
@@ -219,10 +292,15 @@ class PipelineEvaluator:
         config: dict[str, float],
         seed: int,
         trial_seed: int,
+        reason: str = "cost_capped",
     ) -> None:
-        """Record a zero-cost, zero-call trial once the cost cap has been
-        hit -- no API call is made, so the scheduler's shared budget drains
-        without incurring further spend. Caller must hold `self._lock`.
+        """Record a zero-cost, zero-call trial once the cost cap (or a
+        cooperative cancellation) has been hit -- no API call is made, so
+        the scheduler's shared budget drains without incurring further
+        spend. `reason` is either "cost_capped" or "cancelled", written
+        verbatim into `verifier_detail` as `<reason>=1` so the two
+        short-circuit paths stay distinguishable in analysis. Caller must
+        hold `self._lock`.
         """
         self.error_count += 1
         record = ExperimentRecord(
@@ -244,7 +322,7 @@ class PipelineEvaluator:
             prompt_text=None,
             response_text=None,
             verdict=Verdict.ERROR,
-            verifier_detail=f"kind={self.query_kind};campaign=1;cost_capped=1",
+            verifier_detail=f"kind={self.query_kind};campaign=1;{reason}=1",
             tokens_in=0,
             tokens_out=0,
             cost_usd=0.0,
@@ -323,11 +401,17 @@ def run_state_campaign(
     budget: int = 160,
     cost_cap: float = 0.5,
     parallelism: int | None = None,
+    max_tokens: int | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> CampaignState:
     """Run the "state" query-kind campaign: sweep chain_length from 2 to 30.
 
     `parallelism=None` defaults to the client provider's
     `suggested_parallelism` (Groq 2, Nebius 6 -- rate-limit-aware).
+    `max_tokens=None` defaults to the model-heuristic budget in
+    `default_token_budget` (bigger for "ultra"-class reasoners).
+    `cancel_event`, when provided, lets a caller (e.g. /launch's stop
+    button) cooperatively cancel an in-flight campaign between trials.
     """
     evaluator = PipelineEvaluator(
         client=client,
@@ -336,6 +420,8 @@ def run_state_campaign(
         run_id=run_id,
         query_kind="state",
         cost_cap_usd=cost_cap,
+        max_tokens=max_tokens,
+        cancel_event=cancel_event,
     )
     if parallelism is None:
         parallelism = _default_parallelism(client)
@@ -359,6 +445,8 @@ def run_order_campaign(
     budget: int = 400,
     cost_cap: float = 0.5,
     parallelism: int | None = None,
+    max_tokens: int | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> CampaignState:
     """Run the "order" query-kind campaign across four dims at once
     (chain_length, scramble, distractor_events, filler_events -- the dims
@@ -367,6 +455,10 @@ def run_order_campaign(
 
     `parallelism=None` defaults to the client provider's
     `suggested_parallelism` (Groq 2, Nebius 6 -- rate-limit-aware).
+    `max_tokens=None` defaults to the model-heuristic budget in
+    `default_token_budget` (bigger for "ultra"-class reasoners).
+    `cancel_event`, when provided, lets a caller (e.g. /launch's stop
+    button) cooperatively cancel an in-flight campaign between trials.
     """
     evaluator = PipelineEvaluator(
         client=client,
@@ -375,6 +467,8 @@ def run_order_campaign(
         run_id=run_id,
         query_kind="order",
         cost_cap_usd=cost_cap,
+        max_tokens=max_tokens,
+        cancel_event=cancel_event,
     )
     if parallelism is None:
         parallelism = _default_parallelism(client)
@@ -424,6 +518,8 @@ def run_breaking_point_campaign(
     query_kind: str = "belief",
     budget: int = 350,
     cost_cap: float = 0.75,
+    max_tokens: int | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> BreakingPoint:
     """Escalation mode: walk the default all-dims ray from easy baseline to
     the generator's hard ceilings and find where the model actually breaks
@@ -431,6 +527,11 @@ def run_breaking_point_campaign(
     is persisted through the same `PipelineEvaluator` the other campaigns
     use; escalation probing is inherently sequential (each stage depends on
     the last), so no parallelism knob.
+
+    `max_tokens=None` defaults to the model-heuristic budget in
+    `default_token_budget` (bigger for "ultra"-class reasoners).
+    `cancel_event`, when provided, lets a caller (e.g. /launch's stop
+    button) cooperatively cancel an in-flight campaign between trials.
     """
     evaluator = PipelineEvaluator(
         client=client,
@@ -439,6 +540,8 @@ def run_breaking_point_campaign(
         run_id=run_id,
         query_kind=query_kind,
         cost_cap_usd=cost_cap,
+        max_tokens=max_tokens,
+        cancel_event=cancel_event,
     )
     bp = find_breaking_point(evaluator, default_belief_ray(), budget=budget)
     bp_note = f"spent=${evaluator.spent_usd:.4f}"
@@ -456,11 +559,17 @@ def run_belief_campaign(
     budget: int = 700,
     cost_cap: float = 1.0,
     parallelism: int | None = None,
+    max_tokens: int | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> CampaignState:
     """Run the "belief" query-kind campaign across four dims at once.
 
     `parallelism=None` defaults to the client provider's
     `suggested_parallelism` (Groq 2, Nebius 6 -- rate-limit-aware).
+    `max_tokens=None` defaults to the model-heuristic budget in
+    `default_token_budget` (bigger for "ultra"-class reasoners).
+    `cancel_event`, when provided, lets a caller (e.g. /launch's stop
+    button) cooperatively cancel an in-flight campaign between trials.
     """
     evaluator = PipelineEvaluator(
         client=client,
@@ -469,6 +578,8 @@ def run_belief_campaign(
         run_id=run_id,
         query_kind="belief",
         cost_cap_usd=cost_cap,
+        max_tokens=max_tokens,
+        cancel_event=cancel_event,
     )
     if parallelism is None:
         parallelism = _default_parallelism(client)

@@ -7,6 +7,74 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-17 — FIX (fixed) — ultra-model token budgets, and a stop button for /launch
+
+Trigger: a breaking-point campaign against `nvidia/Nemotron-3-Ultra-550b-a55b`
+ERRORed out entirely -- every trial cap-hit even after the client's
+existing 4000-token auto-retry, because Ultra's reasoning trace alone can
+burn through that budget before it ever emits an answer. Separately,
+there was no way to stop a runaway campaign from the UI short of killing
+the process.
+
+**Token budgets (`cartographer/exec/evaluator.py`, `cartographer/exec/client.py`).**
+Added `default_token_budget(model)`: any model id containing `"ultra"`
+(case-insensitive) gets `max_tokens=8000` / `max_tokens_retry=16000`;
+everything else keeps the prior 1500/4000 defaults. `PipelineEvaluator`
+now accepts optional `max_tokens` / `max_tokens_retry` overrides -- an
+explicit `max_tokens` with no matching retry override derives one as
+`2 * max_tokens` rather than inheriting the model heuristic's retry value,
+since that pairing stops making sense once `max_tokens` itself has been
+overridden. All four `run_*_campaign` wrappers now take and thread through
+`max_tokens`. `/launch`'s step-2 form gained an "Advanced: max tokens"
+field (blank = auto); `_campaign_thread` only passes `max_tokens` /
+`cancel_event` to a runner that actually declares those parameters
+(via `inspect.signature`), so fake runners in tests with the old 5-arg
+signature keep working untouched.
+
+To tell a **persistent** cap-hit (exhausted even the bigger retry budget)
+from a **transient** one, `ChatResult` gained a `retried: bool` field, set
+by `Client.chat` only when its own auto-retry-on-length path actually
+fired. `PipelineEvaluator` now appends `;retry_exhausted=1` to
+`verifier_detail` alongside `cap_hit=1` exactly when `result.retried` is
+True -- i.e. the length-capped result we're looking at is itself the
+retried call.
+
+**Stop button (`cartographer/viewer/launch.py`, `cartographer/viewer/serve.py`).**
+Campaign threads can't be killed mid-API-call, so cancellation is
+cooperative: `handle_start` now creates a `threading.Event` alongside the
+campaign thread and stores it in the (module-private) `_CURRENT_RUN` slot.
+`PipelineEvaluator` takes an optional `cancel_event` ctor arg and checks it
+right where it already checks the cost cap -- if set, it short-circuits
+exactly like a cost-cap hit (`verifier_detail` gets `;cancelled=1`, no API
+call, `False` returned), so the scheduler drains at the next trial
+boundary and the thread exits on its own. `launch.current_run()` never
+leaks the event to external callers (popped before returning); new
+`request_stop()` / `is_stopping()` are the only ways in from outside the
+module. `/live` renders a "Stop campaign" button (form POST to `/stop`)
+whenever a campaign is actively registered, swapping to a "stopping…"
+notice once the event is set; `/stop` just calls `request_stop()` and
+redirects back to `/live`.
+
+Judgment calls: (1) the `"ultra"` substring match is deliberately
+case-insensitive and unanchored -- broad enough to catch provider-prefixed
+ids like `nvidia/Nemotron-3-Ultra-550b-a55b` without a per-provider
+allowlist; (2) `max_tokens_retry`'s "no override -> 2x the override"
+fallback was chosen over "no override -> inherit the model heuristic's
+retry value" because the latter silently gives an explicitly-small
+override (e.g. `max_tokens=500` on an Ultra model) a 16000-token retry
+ceiling, which doesn't track the caller's evident intent; (3) `/stop`
+doesn't distinguish "nothing was running" from "something was running and
+got stopped" in its HTTP response (always 303 -> `/live`) since either
+way `/live` is the right place to look, and a silent no-op is harmless.
+Did not run any live campaigns as part of this work -- all new tests are
+mocked, zero network.
+
+Files: `cartographer/exec/evaluator.py`, `cartographer/exec/client.py`,
+`cartographer/viewer/launch.py`, `cartographer/viewer/serve.py`,
+`tests/test_evaluator.py`, `tests/test_launch.py`, `tests/test_viewer.py`.
+
+---
+
 ## 2026-09-17 — FINDING (confirmed) — order campaigns: Super clean, Nano near-clean
 
 First live runs of `run_order_campaign` (chronology recovery from

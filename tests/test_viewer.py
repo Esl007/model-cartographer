@@ -6,6 +6,8 @@ plain functions over a `ResultsStore`, tested directly.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from cartographer.store.schema import ExperimentRecord, RenderMode, Verdict
@@ -466,3 +468,92 @@ def test_live_html_small_sample_shows_estimating(tmp_path):
     store, _ = _seed_live_store(tmp_path, run_id="camp-belief-small-001", newest_age_s=5.0)
     page = live_html(store)
     assert "estimating" in page
+
+
+# ---------------------------------------------------------------------------
+# TASK 2 -- stop button: only renders when a campaign is actively
+# registered, and flips to a "stopping..." state once its cancel_event is
+# set.
+# ---------------------------------------------------------------------------
+
+_STOP_TEST_RUN_ID = "camp-state-active-001"
+
+
+def test_live_html_no_stop_button_when_no_active_run(tmp_path):
+    store, _ = _seed_live_store(tmp_path, run_id="camp-belief-idle-001", newest_age_s=10.0)
+    assert launch_mod.current_run() is None
+    page = live_html(store)
+    assert "Stop campaign" not in page
+    assert "stopping" not in page.lower()
+
+
+def test_live_html_shows_stop_button_when_active(tmp_path):
+    store, _ = _seed_live_store(tmp_path, run_id=_STOP_TEST_RUN_ID, newest_age_s=1.0)
+    cancel_event = threading.Event()
+    launch_mod._CURRENT_RUN = {
+        "run_id": _STOP_TEST_RUN_ID, "thread": None, "cancel_event": cancel_event,
+    }
+    try:
+        page = live_html(store)
+    finally:
+        launch_mod._reset_for_tests()
+
+    assert "Stop campaign" in page
+    assert 'action="/stop"' in page
+
+
+def test_live_html_shows_stopping_state_once_cancel_event_set(tmp_path):
+    store, _ = _seed_live_store(tmp_path, run_id=_STOP_TEST_RUN_ID, newest_age_s=1.0)
+    cancel_event = threading.Event()
+    cancel_event.set()
+    launch_mod._CURRENT_RUN = {
+        "run_id": _STOP_TEST_RUN_ID, "thread": None, "cancel_event": cancel_event,
+    }
+    try:
+        page = live_html(store)
+    finally:
+        launch_mod._reset_for_tests()
+
+    assert "stopping" in page.lower()
+    assert "Stop campaign" not in page
+
+
+def test_live_html_zero_records_active_run_shows_stop_button(tmp_path):
+    cancel_event = threading.Event()
+    launch_mod._CURRENT_RUN = {
+        "run_id": "camp-state-fresh-003", "thread": None, "cancel_event": cancel_event,
+    }
+    store = ResultsStore(tmp_path / "empty.sqlite")
+    try:
+        page = live_html(store)
+    finally:
+        launch_mod._reset_for_tests()
+
+    assert "starting" in page.lower()
+    assert "Stop campaign" in page
+
+
+def test_request_stop_sets_event_and_returns_true():
+    cancel_event = threading.Event()
+    launch_mod._CURRENT_RUN = {"run_id": "camp-x-001", "thread": None, "cancel_event": cancel_event}
+    try:
+        assert launch_mod.request_stop() is True
+        assert cancel_event.is_set()
+        assert launch_mod.is_stopping() is True
+    finally:
+        launch_mod._reset_for_tests()
+
+
+def test_request_stop_no_active_run_returns_false():
+    assert launch_mod.current_run() is None
+    assert launch_mod.request_stop() is False
+
+
+def test_current_run_never_leaks_cancel_event():
+    cancel_event = threading.Event()
+    launch_mod._CURRENT_RUN = {"run_id": "camp-x-002", "thread": None, "cancel_event": cancel_event}
+    try:
+        run = launch_mod.current_run()
+        assert "cancel_event" not in run
+    finally:
+        launch_mod._reset_for_tests()

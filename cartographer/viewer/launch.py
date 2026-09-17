@@ -34,6 +34,7 @@ never transits a network interface.
 from __future__ import annotations
 
 import html
+import inspect
 import re
 import secrets
 import threading
@@ -94,7 +95,40 @@ _CURRENT_RUN: dict | None = None
 
 def current_run() -> dict | None:
     with _lock:
-        return dict(_CURRENT_RUN) if _CURRENT_RUN is not None else None
+        if _CURRENT_RUN is None:
+            return None
+        out = dict(_CURRENT_RUN)
+        out.pop("cancel_event", None)  # not for callers outside this module
+        return out
+
+
+def request_stop() -> bool:
+    """Signal the active campaign (if any) to cooperatively cancel.
+
+    Returns True if a run was active and its cancel_event was set, False if
+    there's no active run to stop. Setting the event doesn't kill the
+    thread immediately -- `PipelineEvaluator` checks it before each API
+    call, so the scheduler drains at the next trial boundary and the
+    thread exits on its own.
+    """
+    with _lock:
+        if _CURRENT_RUN is None:
+            return False
+        event = _CURRENT_RUN.get("cancel_event")
+        if event is None:
+            return False
+        event.set()
+        return True
+
+
+def is_stopping() -> bool:
+    """True if the active run's cancel_event has been set but the thread
+    hasn't exited yet (used by /live to render a "stopping..." state)."""
+    with _lock:
+        if _CURRENT_RUN is None:
+            return False
+        event = _CURRENT_RUN.get("cancel_event")
+        return event.is_set() if event is not None else False
 
 
 def _reset_for_tests() -> None:
@@ -175,6 +209,9 @@ def models_step_html(provider_name: str, token: str, models: list[str]) -> str:
          <span class="meta">presets &mdash; {preset_note}</span></p>
       <p><label>Budget (trials): <input name="budget" value="{int(default['budget'])}"></label></p>
       <p><label>Cost cap (USD): <input name="cost_cap" value="{default['cost_cap']}"></label></p>
+      <p><label>Advanced: max tokens <input name="max_tokens" value=""></label><br>
+         <span class="meta">blank = auto (model-aware default; "ultra"-class reasoning
+         models get a bigger budget automatically)</span></p>
       <p><button type="submit">Launch</button></p>
     </form>
     """
@@ -276,22 +313,25 @@ def handle_start(
     try:
         budget = int(float(form.get("budget", preset["budget"])))
         cost_cap = float(form.get("cost_cap", preset["cost_cap"]))
+        max_tokens_raw = form.get("max_tokens", "").strip()
+        max_tokens = int(float(max_tokens_raw)) if max_tokens_raw else None
     except ValueError:
-        return False, error_html("budget and cost cap must be numeric")
+        return False, error_html("budget, cost cap, and max tokens must be numeric")
 
     run_id = next_run_id(deps.db_path, campaign_type, model)
     provider = _PROVIDERS[provider_name]
+    cancel_event = threading.Event()
 
     with _lock:
         if _CURRENT_RUN is not None:
             return False, busy_html(_CURRENT_RUN["run_id"])
         thread = threading.Thread(
             target=_campaign_thread,
-            args=(deps, provider, key, model, runner, run_id, budget, cost_cap),
+            args=(deps, provider, key, model, runner, run_id, budget, cost_cap, max_tokens, cancel_event),
             name=f"campaign-{run_id}",
             daemon=True,
         )
-        _CURRENT_RUN = {"run_id": run_id, "thread": thread}
+        _CURRENT_RUN = {"run_id": run_id, "thread": thread, "cancel_event": cancel_event}
     thread.start()
     return True, run_id
 
@@ -305,20 +345,33 @@ def _campaign_thread(
     run_id: str,
     budget: int,
     cost_cap: float,
+    max_tokens: int | None,
+    cancel_event: threading.Event,
 ) -> None:
     global _CURRENT_RUN
     try:
         store = ResultsStore(deps.db_path)
         try:
             campaign_client = deps.client_factory(provider, key)
-            runner(
-                campaign_client,
-                store,
+            kwargs = dict(
                 run_id=run_id,
                 model=model,
                 budget=budget,
                 cost_cap=cost_cap,
             )
+            # Runners in tests may be simple fakes that don't accept these
+            # newer kwargs -- only pass them through when the runner
+            # actually declares the parameter, so old/fake runners keep
+            # working unchanged.
+            try:
+                params = inspect.signature(runner).parameters
+            except (TypeError, ValueError):
+                params = {}
+            if "max_tokens" in params:
+                kwargs["max_tokens"] = max_tokens
+            if "cancel_event" in params:
+                kwargs["cancel_event"] = cancel_event
+            runner(campaign_client, store, **kwargs)
         finally:
             store.close()
     except Exception as exc:  # never let a campaign crash kill silently

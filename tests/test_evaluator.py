@@ -7,10 +7,17 @@ All chat calls go through a scripted fake client (a plain object exposing
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from cartographer.exec.client import ChatResult
-from cartographer.exec.evaluator import PipelineEvaluator, _apply_config, _task_seed
+from cartographer.exec.evaluator import (
+    PipelineEvaluator,
+    _apply_config,
+    _task_seed,
+    default_token_budget,
+)
 from cartographer.render import build_name_map, render
 from cartographer.store.schema import Verdict
 from cartographer.store.store import ResultsStore
@@ -30,8 +37,10 @@ class ScriptedClient:
         self.default_text = default_text
         self.calls = []
 
-    def chat(self, model, prompt, max_tokens=1500, **kwargs):
+    def chat(self, model, prompt, max_tokens=1500, max_tokens_retry=4000, **kwargs):
         self.calls.append((model, prompt, max_tokens))
+        self.max_tokens_retries = getattr(self, "max_tokens_retries", [])
+        self.max_tokens_retries.append(max_tokens_retry)
         if self.script:
             item = self.script.pop(0)
             if isinstance(item, Exception):
@@ -290,4 +299,198 @@ def test_full_suite_call_count_and_verdict_tracking(tmp_path):
     ev(config, trial_seed=1)
     assert ev.call_count == 1
     assert ev.error_count == 0
+    store.close()
+
+
+# --- model-aware token budgets ----------------------------------------------
+
+
+def test_default_token_budget_ultra_gets_bigger_budget():
+    assert default_token_budget("nvidia/Nemotron-3-Ultra-550b-a55b") == (8000, 16000)
+    assert default_token_budget("NVIDIA/SOME-ULTRA-MODEL") == (8000, 16000)
+
+
+def test_default_token_budget_non_ultra_keeps_defaults():
+    assert default_token_budget("openai/gpt-oss-20b") == (1500, 4000)
+    assert default_token_budget("nvidia/Nemotron-3-Nano-9b") == (1500, 4000)
+
+
+def test_ultra_model_id_gets_bigger_budgets_in_practice(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+    ev = PipelineEvaluator(
+        client, "nvidia/Nemotron-3-Ultra-550b-a55b", store, "run1", "state", cost_cap_usd=10.0,
+    )
+    assert ev.max_tokens == 8000
+    assert ev.max_tokens_retry == 16000
+
+    ev({"chain_length": 2}, trial_seed=1)
+    assert client.calls[0][2] == 8000  # max_tokens actually sent
+    assert client.max_tokens_retries[0] == 16000
+    store.close()
+
+
+def test_non_ultra_model_keeps_default_budgets(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+    ev = PipelineEvaluator(client, "openai/gpt-oss-20b", store, "run1", "state", cost_cap_usd=10.0)
+    assert ev.max_tokens == 1500
+    assert ev.max_tokens_retry == 4000
+    store.close()
+
+
+def test_explicit_max_tokens_override_flows_through(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+    ev = PipelineEvaluator(
+        client, "nvidia/Nemotron-3-Ultra-550b-a55b", store, "run1", "state", cost_cap_usd=10.0,
+        max_tokens=3000,
+    )
+    # Override wins over the ultra heuristic; retry budget derives from it
+    # (double, since no explicit max_tokens_retry override was given).
+    assert ev.max_tokens == 3000
+    assert ev.max_tokens_retry == 6000
+
+    ev({"chain_length": 2}, trial_seed=1)
+    assert client.calls[0][2] == 3000
+    store.close()
+
+
+def test_explicit_max_tokens_and_retry_override_both_flow_through(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+    ev = PipelineEvaluator(
+        client, "m", store, "run1", "state", cost_cap_usd=10.0,
+        max_tokens=2000, max_tokens_retry=5000,
+    )
+    assert ev.max_tokens == 2000
+    assert ev.max_tokens_retry == 5000
+    store.close()
+
+
+def test_persistent_cap_hit_marks_retry_exhausted(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    # `retried=True` simulates Client.chat's own retry path having already
+    # fired and still coming back length-capped -- a persistent cap.
+    client = ScriptedClient(
+        script=[ChatResult(
+            text="", tokens_in=10, tokens_out=4000, latency_ms=1.0,
+            finish_reason="length", retried=True,
+        )]
+    )
+    ev = PipelineEvaluator(client, "m", store, "run1", "state", cost_cap_usd=10.0)
+    ok = ev({"chain_length": 2}, trial_seed=1)
+    assert ok is False
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(tmp_path / "db.sqlite3"))
+    detail = conn.execute(
+        "SELECT verifier_detail FROM experiments WHERE run_id = ?", ("run1",)
+    ).fetchone()[0]
+    conn.close()
+    store.close()
+
+    assert "cap_hit=1" in detail
+    assert "retry_exhausted=1" in detail
+
+
+def test_transient_cap_hit_without_retry_has_no_exhausted_marker(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    # retried=False (default): the length-cap happened but Client.chat's
+    # retry path never fired (e.g. some text already came back), so this
+    # is a one-off, not a persistent exhaustion.
+    client = ScriptedClient(
+        script=[ChatResult(
+            text="partial", tokens_in=10, tokens_out=1500, latency_ms=1.0,
+            finish_reason="length",
+        )]
+    )
+    ev = PipelineEvaluator(client, "m", store, "run1", "state", cost_cap_usd=10.0)
+    ev({"chain_length": 2}, trial_seed=1)
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(tmp_path / "db.sqlite3"))
+    detail = conn.execute(
+        "SELECT verifier_detail FROM experiments WHERE run_id = ?", ("run1",)
+    ).fetchone()[0]
+    conn.close()
+    store.close()
+
+    assert "cap_hit=1" in detail
+    assert "retry_exhausted=1" not in detail
+
+
+# --- cooperative cancellation ------------------------------------------------
+
+
+def test_cancel_event_set_before_call_short_circuits(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+    cancel_event = threading.Event()
+    cancel_event.set()
+    ev = PipelineEvaluator(
+        client, "m", store, "run1", "state", cost_cap_usd=10.0, cancel_event=cancel_event,
+    )
+
+    ok = ev({"chain_length": 2}, trial_seed=1)
+
+    assert ok is False
+    assert ev.cancelled is True
+    assert len(client.calls) == 0  # no API call at all
+    store.close()
+
+
+def test_cancel_event_mid_run_stops_further_calls(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+    cancel_event = threading.Event()
+    ev = PipelineEvaluator(
+        client, "m", store, "run1", "state", cost_cap_usd=10.0, cancel_event=cancel_event,
+    )
+
+    ev({"chain_length": 2}, trial_seed=1)
+    assert len(client.calls) == 1
+
+    cancel_event.set()
+    ok = ev({"chain_length": 2}, trial_seed=2)
+
+    assert ok is False
+    assert len(client.calls) == 1  # no new call after cancellation
+    store.close()
+
+
+def test_cancelled_record_has_marker_and_no_prompt(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+    cancel_event = threading.Event()
+    cancel_event.set()
+    ev = PipelineEvaluator(
+        client, "m", store, "run1", "state", cost_cap_usd=10.0, cancel_event=cancel_event,
+    )
+    ev({"chain_length": 2}, trial_seed=1)
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(tmp_path / "db.sqlite3"))
+    detail, cost, prompt_text = conn.execute(
+        "SELECT verifier_detail, cost_usd, prompt_text FROM experiments WHERE run_id = ?",
+        ("run1",),
+    ).fetchone()
+    conn.close()
+    store.close()
+
+    assert "cancelled=1" in detail
+    assert cost == 0.0
+    assert prompt_text is None
+
+
+def test_no_cancel_event_behaves_as_before(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+    ev = PipelineEvaluator(client, "m", store, "run1", "state", cost_cap_usd=10.0)
+    ev({"chain_length": 2}, trial_seed=1)
+    assert len(client.calls) == 1
+    assert ev.cancelled is False
     store.close()

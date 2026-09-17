@@ -7,6 +7,7 @@ on a sentinel key string never appearing in any returned HTML.
 
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -246,3 +247,170 @@ def test_stale_token_rejected(tmp_path):
     )
     assert not started
     assert "invalid or expired" in payload
+
+
+# ---------------------------------------------------------------------------
+# TASK 1 -- Advanced: max tokens field, blank = auto.
+# ---------------------------------------------------------------------------
+
+
+def test_models_step_form_has_max_tokens_field(tmp_path):
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, _deps(tmp_path))
+    assert 'name="max_tokens"' in page
+    assert "auto" in page.lower()
+
+
+def _fake_runner_captures_kwargs(client, store, run_id, model, budget, cost_cap, max_tokens=None, cancel_event=None):
+    """Fake runner that records exactly what it was called with, so tests
+    can assert the /launch form's max_tokens and the cancel_event flow
+    through the campaign thread unmodified."""
+    _fake_runner_captures_kwargs.calls.append(
+        {"max_tokens": max_tokens, "cancel_event": cancel_event}
+    )
+    for i in range(1):
+        store.append(
+            ExperimentRecord(
+                run_id=run_id,
+                model_name=model,
+                latent_params={"chain_length": 2.0},
+                realized_dims={"chain_length": 2.0},
+                render_mode=RenderMode.TEMPLATE,
+                task_seed=i,
+                trial_seed=i,
+                verdict=Verdict.PASS,
+                verifier_detail="kind=state;campaign=1",
+                tokens_in=1,
+                tokens_out=1,
+                cost_usd=0.0,
+                latency_ms=1.0,
+            )
+        )
+
+
+_fake_runner_captures_kwargs.calls = []
+
+
+def _wait_for_idle():
+    for _ in range(200):
+        if launch_mod.current_run() is None:
+            break
+        time.sleep(0.01)
+
+
+def test_explicit_max_tokens_flows_into_runner(tmp_path):
+    _fake_runner_captures_kwargs.calls.clear()
+    deps = _deps(
+        tmp_path,
+        client_factory=_FakeClient,
+        runners={"state": _fake_runner_captures_kwargs},
+    )
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, deps)
+    token = page.split('name="token" value="')[1].split('"')[0]
+    started, run_id = handle_start(
+        {
+            "token": token,
+            "model": "acme/Model-A",
+            "campaign_type": "state",
+            "budget": "160",
+            "cost_cap": "0.5",
+            "max_tokens": "9000",
+        },
+        deps,
+    )
+    assert started
+    _wait_for_idle()
+
+    assert len(_fake_runner_captures_kwargs.calls) == 1
+    assert _fake_runner_captures_kwargs.calls[0]["max_tokens"] == 9000
+    assert isinstance(_fake_runner_captures_kwargs.calls[0]["cancel_event"], threading.Event)
+
+
+def test_blank_max_tokens_means_auto(tmp_path):
+    _fake_runner_captures_kwargs.calls.clear()
+    deps = _deps(
+        tmp_path,
+        client_factory=_FakeClient,
+        runners={"state": _fake_runner_captures_kwargs},
+    )
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, deps)
+    token = page.split('name="token" value="')[1].split('"')[0]
+    started, run_id = handle_start(
+        {
+            "token": token,
+            "model": "acme/Model-A",
+            "campaign_type": "state",
+            "budget": "160",
+            "cost_cap": "0.5",
+            "max_tokens": "",
+        },
+        deps,
+    )
+    assert started
+    _wait_for_idle()
+
+    assert _fake_runner_captures_kwargs.calls[0]["max_tokens"] is None
+
+
+def test_non_numeric_max_tokens_errors(tmp_path):
+    deps = _deps(tmp_path, client_factory=_FakeClient, runners={"state": _fake_runner_writes_records})
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, deps)
+    token = page.split('name="token" value="')[1].split('"')[0]
+    started, payload = handle_start(
+        {
+            "token": token,
+            "model": "acme/Model-A",
+            "campaign_type": "state",
+            "budget": "160",
+            "cost_cap": "0.5",
+            "max_tokens": "banana",
+        },
+        deps,
+    )
+    assert not started
+    assert "numeric" in payload
+
+
+def test_old_style_runner_without_new_kwargs_still_works(tmp_path):
+    """A runner that only declares the pre-existing 5-arg signature (like
+    _fake_runner_writes_records, or a real campaign wrapper predating this
+    change) must keep working -- the launch thread should not pass kwargs
+    the runner doesn't declare."""
+    started, run_id, deps = _launch(tmp_path)
+    assert started
+    _wait_for_idle()
+    store = ResultsStore(deps.db_path)
+    assert len(store.by_run(run_id)) == 3
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK 2 -- stop / cooperative cancellation registration.
+# ---------------------------------------------------------------------------
+
+
+def test_handle_start_registers_a_cancel_event(tmp_path):
+    release = []
+
+    def slow_runner(client, store, run_id, model, budget, cost_cap, max_tokens=None, cancel_event=None):
+        while not release:
+            time.sleep(0.005)
+
+    deps = _deps(
+        tmp_path,
+        client_factory=_FakeClient,
+        runners={"state": slow_runner},
+    )
+    started, run_id, _ = _launch(tmp_path, deps=deps, runner=slow_runner)
+    assert started
+    try:
+        assert launch_mod.is_stopping() is False
+        assert launch_mod.request_stop() is True
+        assert launch_mod.is_stopping() is True
+    finally:
+        release.append(True)
+        _wait_for_idle()
+
+
+def test_request_stop_with_no_active_campaign_is_a_noop(tmp_path):
+    assert launch_mod.current_run() is None
+    assert launch_mod.request_stop() is False
