@@ -52,13 +52,23 @@ def add_distractors(world: World, n: int, similarity: str, seed: int) -> World:
         objects.append(decoy)
         non_subject = [decoy.id]
 
+    # Each distractor object's existing location, from its most recent Move
+    # in the world so far (if any), so appended Moves chain continuously.
+    cur_loc: dict[str, str] = {}
+    for e in world.events:
+        if isinstance(e, Move):
+            cur_loc[e.obj] = e.dst
+
     start_time = max((e.time for e in world.events), default=-1) + 1
     new_events = []
     for i in range(n):
         idx = _stable_int("mutate_distractor_obj", similarity, str(seed), str(i), modulus=len(non_subject))
         obj_id = non_subject[idx]
-        src_idx = _stable_int("mutate_distractor_src", similarity, str(seed), str(i), modulus=len(location_ids))
-        src = location_ids[src_idx]
+        if obj_id in cur_loc:
+            src = cur_loc[obj_id]
+        else:
+            src_idx = _stable_int("mutate_distractor_src", similarity, str(seed), obj_id, modulus=len(location_ids))
+            src = location_ids[src_idx]
         remaining = [l for l in location_ids if l != src] or location_ids
         dst_idx = _stable_int("mutate_distractor_dst", similarity, str(seed), str(i), modulus=len(remaining))
         dst = remaining[dst_idx]
@@ -74,6 +84,7 @@ def add_distractors(world: World, n: int, similarity: str, seed: int) -> World:
                 witnesses=frozenset({actor}),
             )
         )
+        cur_loc[obj_id] = dst
     new_world = _append_events(world, new_events, seed, "add_distractors", objects=objects)
     assert not validate(new_world)
     return new_world

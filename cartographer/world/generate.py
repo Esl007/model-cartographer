@@ -153,27 +153,35 @@ def generate(params: DimParams, seed: int) -> World:
             )
             events.append(tell)
 
-    def similarity_tier_objects_and_locs(tier: str, idx: int) -> tuple[str, str, str]:
+    def similarity_tier_obj(tier: str, idx: int) -> str:
         if tier == "same_entities":
-            obj_id = subject.id
+            return subject.id
         elif tier == "same_category" and n_objects > 1:
             same_cat = [o for o in objects if o.category == subject.category and o.id != subject.id]
-            obj_id = same_cat[0].id if same_cat else objects[-1].id
+            return same_cat[0].id if same_cat else objects[-1].id
         elif tier == "near_duplicate" and n_objects > 1:
-            obj_id = objects[-1].id
+            return objects[-1].id
         elif tier == "unrelated" and n_objects > 1:
-            obj_id = objects[-1].id
+            return objects[-1].id
         else:
-            obj_id = objects[-1].id if n_objects > 1 else subject.id
-        src = pick_location("distractor_src", str(idx), tier)
-        dst = pick_location("distractor_dst", str(idx), tier, exclude={src})
-        return obj_id, src, dst
+            return objects[-1].id if n_objects > 1 else subject.id
 
+    # Track each distractor object's current location so its Move chain is
+    # continuous (each Move.src == that object's location after its prior
+    # Move), independent of the causal-chain subject's own location.
+    distractor_cur_loc: dict[str, str] = {}
     for i in range(params.distractor_events):
-        obj_id, src, dst = similarity_tier_objects_and_locs(params.distractor_similarity, i)
+        obj_id = similarity_tier_obj(params.distractor_similarity, i)
         actor = pick_entity("distractor_actor", str(i))
         if params.distractor_similarity == "same_entities":
             actor = pick_entity("chain_actor", str(i % max(params.chain_length, 1)))
+        if obj_id == subject.id:
+            src = cur_loc
+        elif obj_id in distractor_cur_loc:
+            src = distractor_cur_loc[obj_id]
+        else:
+            src = pick_location("distractor_start", obj_id, params.distractor_similarity)
+        dst = pick_location("distractor_dst", str(i), params.distractor_similarity, exclude={src})
         events.append(
             Move(
                 obj=obj_id,
@@ -184,6 +192,10 @@ def generate(params: DimParams, seed: int) -> World:
                 witnesses=frozenset({actor}),
             )
         )
+        if obj_id == subject.id:
+            cur_loc = dst
+        else:
+            distractor_cur_loc[obj_id] = dst
 
     for i in range(params.filler_events):
         actor = pick_entity("filler_actor", str(i))
