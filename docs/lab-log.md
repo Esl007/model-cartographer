@@ -7,6 +7,22 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-17 — FINDING (confirmed) — order campaigns: Super clean, Nano near-clean
+
+First live runs of `run_order_campaign` (chronology recovery from
+scrambled narration), Nebius, post-redesign parallel executor.
+`camp-order-super-001`: 105 calls, $0.0284, 0 errors — 100% pass on all
+four dims (chain, scramble, distractors, filler). `camp-order-nano-001`:
+105 calls, $0.0172, 3 errors — ~96% on chain/distractors/filler, 100% on
+scramble; failures diffuse, no boundary triggered. Neither model's
+chronology tracking breaks in-range even at full scramble; the earlier
+Groq-pilot order degradation (1.0→0.67→0.33) does not replicate on
+Nemotron tiers. Order joins state as a saturated query kind; belief
+remains the discriminating one. Escalation mode is the tool for pushing
+order further if ever needed.
+
+---
+
 ## 2026-09-17 — FIX (fixed) — /live active-run bug, ETA overhaul, and a shared shell/design system
 
 User feedback verbatim: "The UI is kind of shitty. Not just the design
