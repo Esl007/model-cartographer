@@ -7,6 +7,92 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-17 — FIX (fixed) — /live active-run bug, ETA overhaul, and a shared shell/design system
+
+User feedback verbatim: "The UI is kind of shitty. Not just the design
+but the navigations are a mess and the new launch isn't showing right
+away. The ETA is wildly wrong." Two functional bugs fixed first, then a
+navigation + visual overhaul. Territory: `cartographer/viewer/*` only.
+
+**1. `/live` didn't show a just-launched run.** `live_html` picked the
+run with the newest `created_at` record; a freshly launched campaign has
+zero records for its first seconds-to-minutes (world gen + first API call
+latency), so the page kept showing the previous run. Fix: `live_html` now
+calls `launch_mod.current_run()` first and, if a campaign is actively
+registered, renders it even with 0 records ("starting… 0 records", empty
+progress bar, no tallies) — only falling back to the newest-record run
+when nothing is actively registered. Also: a run still actively
+registered is never shown as "complete" even if its newest record happens
+to look stale (e.g. mid-stall), since the launcher's bookkeeping is the
+source of truth for liveness, not record recency alone. New tests:
+`test_live_html_prefers_active_run_with_zero_records`,
+`test_live_html_falls_back_to_newest_record_when_no_active_run`.
+
+**2. ETA was wildly wrong.** Old ETA = `remaining / rate` where `rate`
+averaged over the *entire* run (first record to last) — a long stall or a
+recent fast burst poisoned it badly, and it kept projecting large
+"remaining" numbers for runs that legitimately finish early (budget is a
+ceiling: explore can find nothing and end the campaign well under
+budget). Fix (`_recent_rate_per_min` + `_format_eta` in
+`cartographer/viewer/serve.py`): rate is computed over a RECENT window —
+records from the last 3 minutes (by record timestamp, not wall clock) —
+widened to the last 25 records only when that time-window sample is too
+thin to be meaningful. Fewer than 10 usable recent records anywhere ->
+"estimating…" instead of a number. A completed run never shows an ETA at
+all. Displayed ETA is capped at "at most &gt; 2h at current rate" rather
+than printing an absurd total, and both the progress bar and ETA are now
+phrased as an upper bound — "n / budget max" and "at most ~X min at
+current rate" — rather than a promise, since budget is a ceiling. New
+tests: `test_recent_rate_uses_recent_window_not_whole_run_average`,
+`test_format_eta_estimating_on_small_sample`,
+`test_format_eta_normal_case`, `test_format_eta_caps_huge_projection`,
+`test_live_html_completed_run_never_shows_eta`,
+`test_live_html_small_sample_shows_estimating`.
+
+**3. Navigation + design overhaul.** Every page (`/`, `/live`, `/atlas`,
+`/launch`, `/run/*`, `/record/*`) now renders through one `_shell(title,
+active_nav, body)` in `serve.py`: a header with the product name (links
+to `/`) and a nav bar (Runs · Live · Atlas · Launch) that highlights the
+current page, replacing the old ad-hoc `"← runs | full run detail"`
+inline links. Single inline `<style>` block: dark instrument-panel theme
+(`#111418` bg, `#E8EAED` text, one teal accent `#2DD4BF` for links/active
+nav/progress fill), verdict pills (`PASS #34D399`, `FAIL #F87171`, `ERROR
+#FBBF24`) instead of colored text, monospace for run_ids/configs/numbers,
+system sans for prose, thin rounded progress bar with a distinct green
+"complete" fill, and stat-box cards for /live's tallies instead of a
+bullet list. `/` replaced its bare run-id list with a table (run_id,
+model, records, pass-rate pill, cost, relative "started" time, live/
+complete status), newest-first. `/atlas`'s SVG charts got a matching dark
+background/gridline/text palette (accent-family series colors) with
+chart-generation logic untouched. No JS added beyond the pre-existing
+5s meta-refresh on `/live`. Existing test assertions that checked exact
+old-theme HTML (hex colors, old table shape) were updated to check the
+same underlying semantics (tallies, ordering, escaping) against the new
+markup; `test_key_never_in_any_returned_html`-style guarantees are
+unaffected since key handling in `launch.py` wasn't touched beyond
+stripping its now-redundant inline `<nav>` fragments (the shell supplies
+navigation).
+
+Full suite: 175 passed (`tests/test_viewer.py` 35, full repo 175). Smoke
+tested all routes (`/`, `/live`, `/atlas`, `/launch`, `/run/<id>`,
+`/record/<id>`) against a copy of `results/campaign.sqlite` on
+127.0.0.1 — all 200, no 500s.
+
+Judgment calls: (a) the recent-rate window prefers the time-based slice
+whenever it already has >= the min sample size, and only widens to a
+record-count window when the time slice is thin — reading the task's
+"whichever is larger sample" as being in service of "reflect the recent
+phase," not literally always-larger, since always-larger degenerates to
+the whole-run average again once a run has few total records. (b) a
+registered active run with 0 records shows no tallies/stat-grid (nothing
+to tally yet) rather than a zeroed-out grid, to avoid implying data that
+doesn't exist. (c) index page's pass-rate pill always renders in the PASS
+color regardless of actual rate — pills are used for at-a-glance verdict
+identity elsewhere; a rate-dependent color for this one column felt out
+of scope for the two-bug-fix mandate and was left as a candidate follow-up.
+
+---
+
 ## 2026-09-17 — DECISION (decided) — parallel wave execution, /live completion state, and a browser /launch page
 
 Three infrastructure changes shipped together (scheduler/exec/viewer

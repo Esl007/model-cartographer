@@ -6,10 +6,27 @@ plain functions over a `ResultsStore`, tested directly.
 
 from __future__ import annotations
 
+import pytest
+
 from cartographer.store.schema import ExperimentRecord, RenderMode, Verdict
 from cartographer.store.store import ResultsStore
+from cartographer.viewer import launch as launch_mod
 from cartographer.viewer.atlas import atlas_html
-from cartographer.viewer.serve import index_html, live_html, record_html, run_html
+from cartographer.viewer.serve import (
+    _format_eta,
+    _recent_rate_per_min,
+    index_html,
+    live_html,
+    record_html,
+    run_html,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clean_launch_state_for_viewer_tests():
+    launch_mod._reset_for_tests()
+    yield
+    launch_mod._reset_for_tests()
 
 
 def _seed_store(tmp_path):
@@ -80,9 +97,10 @@ def test_index_html_shows_verdict_tallies(tmp_path):
 
     assert "run-a" in page
     assert '<a href="/run/run-a">run-a</a>' in page
-    # 3 total records, 1 pass, 1 fail, 1 error
+    # 3 total records, 1 pass, 1 fail, 1 error (fail+error combined into
+    # the redesigned table's single "pass rate" pill: 1/3 = 33%)
     assert ">3<" in page
-    assert ">1<" in page  # appears for each of pass/fail/error counts
+    assert "33%" in page
 
 
 def test_run_html_lists_records_with_links(tmp_path):
@@ -250,9 +268,10 @@ def test_live_html_stale_records_render_complete_state(tmp_path):
     assert "RUN COMPLETE" in page
     assert "finished at 3 calls" in page
     assert "ETA:" not in page
-    # full-width green bar, tallies kept, no auto-refresh.
-    assert "width:100%" in page and "#157a15" in page
-    assert "PASS: 2" in page and "FAIL: 1" in page
+    # full-width green complete-state bar, tallies kept, no auto-refresh.
+    assert "width:100%" in page and "progress-fill complete" in page
+    assert '<div class="stat-num">2</div><div class="stat-label">Pass</div>' in page
+    assert '<div class="stat-num">1</div><div class="stat-label">Fail</div>' in page
     assert 'http-equiv="refresh"' not in page
 
 
@@ -332,3 +351,118 @@ def test_atlas_html_empty_db_graceful(tmp_path):
     store = ResultsStore(tmp_path / "empty_atlas.sqlite")
     page = atlas_html(store)
     assert "No campaign data" in page
+
+
+# ---------------------------------------------------------------------------
+# TASK 1a -- /live must prefer the actively registered run_id, even with
+# zero records, over the newest-record run from an older campaign.
+# ---------------------------------------------------------------------------
+
+
+def test_live_html_prefers_active_run_with_zero_records(tmp_path):
+    # An OLDER campaign has records in the store...
+    store, _ = _seed_live_store(tmp_path, run_id="camp-belief-old-001", newest_age_s=10.0)
+    # ...but a NEW campaign was just registered as the active run and has
+    # not written any records yet (world gen / first API call latency).
+    launch_mod._CURRENT_RUN = {"run_id": "camp-state-new-002", "thread": None}
+    try:
+        page = live_html(store)
+    finally:
+        launch_mod._reset_for_tests()
+
+    assert "camp-state-new-002" in page
+    assert "camp-belief-old-001" not in page
+    assert "starting" in page.lower()
+    assert "0 records" in page
+
+
+def test_live_html_falls_back_to_newest_record_when_no_active_run(tmp_path):
+    store, _ = _seed_live_store(tmp_path, run_id="camp-belief-test-001", newest_age_s=10.0)
+    assert launch_mod.current_run() is None
+    page = live_html(store)
+    assert "camp-belief-test-001" in page
+
+
+# ---------------------------------------------------------------------------
+# TASK 1b -- ETA must be computed over a recent window, show "estimating..."
+# on small samples, and never appear for a completed run.
+# ---------------------------------------------------------------------------
+
+
+def _make_records_at(times: list[str]) -> list[ExperimentRecord]:
+    out = []
+    for i, t in enumerate(times):
+        out.append(
+            ExperimentRecord(
+                run_id="camp-belief-eta-001",
+                model_name="model-x",
+                latent_params={},
+                realized_dims={"chain_length": float(i)},
+                render_mode=RenderMode.TEMPLATE,
+                task_seed=i,
+                trial_seed=i,
+                verdict=Verdict.PASS,
+                verifier_detail="kind=belief;campaign=1",
+                tokens_in=1,
+                tokens_out=1,
+                cost_usd=0.0,
+                latency_ms=1.0,
+                finish_reason="stop",
+                created_at=t,
+            )
+        )
+    return out
+
+
+def test_recent_rate_uses_recent_window_not_whole_run_average(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    # A long stall (10 min) followed by a fast recent burst (1s apart).
+    # The whole-run average would be poisoned by the stall; the recent
+    # window should reflect the fast burst instead.
+    base = datetime.now(timezone.utc) - timedelta(minutes=15)
+    times = [(base + timedelta(seconds=i)).isoformat() for i in range(3)]  # fast start
+    stall_start = base + timedelta(seconds=3)
+    stall_end = stall_start + timedelta(minutes=10)
+    times.append(stall_end.isoformat())
+    # Fast recent burst: 20 records, 2s apart, right after the stall.
+    for i in range(1, 21):
+        times.append((stall_end + timedelta(seconds=2 * i)).isoformat())
+
+    records = _make_records_at(times)
+    rate, n = _recent_rate_per_min(records)
+    assert rate is not None
+    # Fast burst is 2s/record => 30/min, not the ~1.4/min whole-run average.
+    assert rate > 15.0
+    assert n >= 10
+
+
+def test_format_eta_estimating_on_small_sample():
+    assert _format_eta(remaining=50, rate_per_min=5.0, sample_n=3) == "estimating..."
+
+
+def test_format_eta_normal_case():
+    eta = _format_eta(remaining=50, rate_per_min=10.0, sample_n=25)
+    assert "at most" in eta
+    assert "5.0 min" in eta
+
+
+def test_format_eta_caps_huge_projection():
+    eta = _format_eta(remaining=10000, rate_per_min=1.0, sample_n=25)
+    assert "&gt; 2h" in eta
+
+
+def test_live_html_completed_run_never_shows_eta(tmp_path):
+    store, _ = _seed_live_store(tmp_path, run_id="camp-belief-done-001", newest_age_s=600.0)
+    page = live_html(store)
+    assert "RUN COMPLETE" in page
+    assert "ETA:" not in page
+
+
+def test_live_html_small_sample_shows_estimating(tmp_path):
+    # Only 3 records -- well under the min-sample threshold for a real
+    # rate, so the ETA line should read "estimating..." rather than a
+    # number.
+    store, _ = _seed_live_store(tmp_path, run_id="camp-belief-small-001", newest_age_s=5.0)
+    page = live_html(store)
+    assert "estimating" in page

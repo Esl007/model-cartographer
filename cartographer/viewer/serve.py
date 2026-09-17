@@ -27,47 +27,203 @@ _DEFAULT_PORT = 8788
 
 # run_id prefix -> known campaign budget (total scheduler trial budget),
 # used only to render a progress bar on /live. Unknown prefixes fall back
-# to "?" (bar hidden, raw count still shown).
+# to "?" (bar hidden, raw count still shown). Budget is a CEILING, not a
+# promise -- campaigns legitimately end early when explore finds nothing,
+# so bars/labels below phrase this as a bound ("n / budget max").
 _KNOWN_RUN_BUDGETS = {
     "camp-state-": 160,
     "camp-belief-": 700,
 }
 
+# ---------------------------------------------------------------------------
+# Shared shell: design system + nav.
+# ---------------------------------------------------------------------------
+
+_NAV_ITEMS = [
+    ("runs", "/", "Runs"),
+    ("live", "/live", "Live"),
+    ("atlas", "/atlas", "Atlas"),
+    ("launch", "/launch", "Launch"),
+]
+
 _CSS = """
-body { font-family: -apple-system, Helvetica, Arial, sans-serif; margin: 2rem; color: #1a1a1a; background: #fafafa; }
-h1, h2 { margin-top: 0; }
-a { color: #2554a8; }
-table { border-collapse: collapse; width: 100%; margin: 1rem 0; background: #fff; }
-th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.9rem; }
-th { background: #f0f0f0; }
-.verdict-PASS { color: #157a15; font-weight: bold; }
-.verdict-FAIL { color: #b30000; font-weight: bold; }
-.verdict-ERROR { color: #b8860b; font-weight: bold; }
-.verdict-REJECTED_BY_FIDELITY_GATE { color: #666; font-weight: bold; }
-pre.block { white-space: pre-wrap; word-wrap: break-word; background: #fff; border: 1px solid #ddd;
-            padding: 0.75rem; font-family: "SF Mono", Consolas, monospace; font-size: 0.85rem; }
-details summary { cursor: pointer; font-weight: bold; margin: 0.5rem 0; }
-.meta { color: #555; font-size: 0.9rem; }
-nav { margin-bottom: 1rem; }
+:root {
+  --bg: #111418;
+  --bg-raised: #171b21;
+  --text: #E8EAED;
+  --text-muted: #9aa4b2;
+  --border: #2A2F36;
+  --accent: #2DD4BF;
+  --pass: #34D399;
+  --fail: #F87171;
+  --error: #FBBF24;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+header.shell-header {
+  display: flex; align-items: center; gap: 1.5rem;
+  padding: 0.9rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+header.shell-header .brand {
+  font-weight: 700; font-size: 1.05rem; color: var(--text);
+}
+header.shell-header .brand:hover { text-decoration: none; color: var(--accent); }
+nav.shell-nav { display: flex; gap: 1.1rem; }
+nav.shell-nav a { color: var(--text-muted); font-size: 0.92rem; padding: 0.2rem 0; }
+nav.shell-nav a.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+
+main.shell-main { padding: 1.5rem 1.75rem 3rem; max-width: 1100px; margin: 0 auto; }
+h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 1.75rem 0 0.75rem; color: var(--text); }
+
+.meta { color: var(--text-muted); font-size: 0.88rem; }
+.mono { font-family: var(--mono); }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.75rem 0 1.25rem;
+  font-size: 13px;
+}
+th, td { padding: 0.55rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+th {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+td.mono, td .mono { font-family: var(--mono); }
+
+.pill {
+  display: inline-block;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  color: #0b0d10;
+}
+.pill-PASS { background: var(--pass); }
+.pill-FAIL { background: var(--fail); }
+.pill-ERROR { background: var(--error); }
+.pill-REJECTED_BY_FIDELITY_GATE { background: var(--text-muted); }
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0 1.25rem;
+}
+.stat-box {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+}
+.stat-box .stat-num { font-family: var(--mono); font-size: 1.5rem; font-weight: 600; }
+.stat-box .stat-label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.2rem; }
+
+.progress-track {
+  background: var(--border);
+  border-radius: 999px;
+  height: 8px;
+  width: 100%;
+  overflow: hidden;
+}
+.progress-fill { background: var(--accent); height: 100%; border-radius: 999px; }
+.progress-fill.complete { background: var(--pass); }
+.progress-row { display: flex; align-items: center; gap: 0.9rem; margin: 0.4rem 0 0.25rem; }
+.progress-row .progress-track { flex: 1; }
+.progress-text { font-size: 0.85rem; color: var(--text-muted); white-space: nowrap; }
+
+pre.block {
+  white-space: pre-wrap; word-wrap: break-word;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.85rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+details summary { cursor: pointer; font-weight: 600; margin: 0.5rem 0; color: var(--text); }
+details[open] summary { color: var(--accent); }
+
+form p { margin: 0.6rem 0; }
+input, select, button {
+  font-family: var(--sans);
+  background: var(--bg-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+}
+button {
+  background: var(--accent);
+  color: #0b0d10;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+}
+button:hover { opacity: 0.9; }
 """
 
 _VERDICT_CLASS_FALLBACK = "meta"
 
 
-def _page(title: str, body: str, refresh: bool = False) -> str:
+def _shell(title: str, active_nav: str, body: str, refresh: bool = False) -> str:
+    """Render `body` inside the shared header/nav/style shell.
+
+    `active_nav` is one of the keys in `_NAV_ITEMS` ("runs", "live",
+    "atlas", "launch") or "" for none highlighted.
+    """
     refresh_tag = '<meta http-equiv="refresh" content="5">' if refresh else ""
+    nav_links = "".join(
+        f'<a href="{href}"{" class=\"active\"" if key == active_nav else ""}>{label}</a>'
+        for key, href, label in _NAV_ITEMS
+    )
+    header = (
+        '<header class="shell-header">'
+        '<a class="brand" href="/">Model Cartographer</a>'
+        f'<nav class="shell-nav">{nav_links}</nav>'
+        "</header>"
+    )
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         f"{refresh_tag}"
         f"<title>{html.escape(title)}</title><style>{_CSS}</style></head>"
-        f"<body>{body}</body></html>"
+        f"<body>{header}<main class=\"shell-main\">{body}</main></body></html>"
     )
 
 
-def _verdict_span(verdict_name: str) -> str:
+# Backwards-compatible alias used by atlas.py and launch.py call sites that
+# don't need nav highlighting (kept internal to this module's API surface).
+def _page(title: str, body: str, refresh: bool = False, active_nav: str = "") -> str:
+    return _shell(title, active_nav, body, refresh=refresh)
+
+
+def _verdict_pill(verdict_name: str) -> str:
     safe = html.escape(verdict_name)
-    css_class = f"verdict-{safe}"
-    return f'<span class="{css_class}">{safe}</span>'
+    return f'<span class="pill pill-{safe}">{safe}</span>'
+
+
+# Kept as an alias: some call sites/tests refer to the old name.
+_verdict_span = _verdict_pill
 
 
 def _parse_verifier_detail(detail: str | None) -> dict[str, str]:
@@ -85,47 +241,86 @@ def _parse_verifier_detail(detail: str | None) -> dict[str, str]:
     return out
 
 
+def _relative_time(ts: datetime | None) -> str:
+    if ts is None:
+        return "-"
+    age_s = _age_seconds(ts)
+    if age_s < 0:
+        age_s = 0
+    if age_s < 60:
+        return f"{int(age_s)}s ago"
+    if age_s < 3600:
+        return f"{int(age_s // 60)}m ago"
+    if age_s < 86400:
+        return f"{int(age_s // 3600)}h ago"
+    return f"{int(age_s // 86400)}d ago"
+
+
 def index_html(store: ResultsStore) -> str:
     cur = store._conn.execute(
-        "SELECT run_id, verdict, COUNT(*) as n FROM experiments GROUP BY run_id, verdict"
+        "SELECT run_id, model_name, verdict, cost_usd, created_at FROM experiments"
     )
-    by_run: dict[str, dict[str, int]] = {}
+    by_run: dict[str, dict] = {}
     for row in cur.fetchall():
-        by_run.setdefault(row["run_id"], {}).setdefault(row["verdict"], 0)
-        by_run[row["run_id"]][row["verdict"]] += row["n"]
+        run_id = row["run_id"]
+        agg = by_run.setdefault(
+            run_id,
+            {"counts": {}, "model": row["model_name"], "cost": 0.0, "created_ats": []},
+        )
+        agg["counts"][row["verdict"]] = agg["counts"].get(row["verdict"], 0) + 1
+        agg["cost"] += row["cost_usd"] or 0.0
+        if row["created_at"]:
+            agg["created_ats"].append(row["created_at"])
+
+    active = launch_mod.current_run()
+    active_run_id = active["run_id"] if active else None
+
+    def sort_key(run_id: str) -> str:
+        ats = by_run[run_id]["created_ats"]
+        return max(ats) if ats else ""
 
     rows_html = []
-    for run_id in sorted(by_run.keys()):
-        counts = by_run[run_id]
+    for run_id in sorted(by_run.keys(), key=sort_key, reverse=True):
+        agg = by_run[run_id]
+        counts = agg["counts"]
         total = sum(counts.values())
         passn = counts.get("PASS", 0)
-        failn = counts.get("FAIL", 0)
-        errn = counts.get("ERROR", 0)
+        failn = counts.get("FAIL", 0) + counts.get("ERROR", 0)
+        pass_rate = (passn / total * 100.0) if total else 0.0
+        newest = None
+        if agg["created_ats"]:
+            newest = _parse_created_at(max(agg["created_ats"]))
+        is_live = run_id == active_run_id or (
+            newest is not None and _age_seconds(newest) <= _COMPLETE_AFTER_S
+        )
+        status = "live" if is_live else "complete"
+        detail = _parse_verifier_detail(None)  # placeholder for kind lookup below
+        kind = "-"
         safe_run_id = html.escape(run_id)
+        model_short = html.escape(_short_model(agg["model"]))
         rows_html.append(
             "<tr>"
-            f'<td><a href="/run/{safe_run_id}">{safe_run_id}</a></td>'
+            f'<td class="mono"><a href="/run/{safe_run_id}">{safe_run_id}</a></td>'
+            f'<td class="mono">{model_short}</td>'
             f"<td>{total}</td>"
-            f'<td class="verdict-PASS">{passn}</td>'
-            f'<td class="verdict-FAIL">{failn}</td>'
-            f'<td class="verdict-ERROR">{errn}</td>'
+            f'<td><span class="pill pill-PASS">{pass_rate:.0f}%</span></td>'
+            f'<td class="mono">${agg["cost"]:.4f}</td>'
+            f"<td>{html.escape(_relative_time(newest))}</td>"
+            f"<td>{status}</td>"
             "</tr>"
         )
 
     table = (
-        "<table><thead><tr><th>run_id</th><th>records</th><th>pass</th>"
-        "<th>fail</th><th>error</th></tr></thead><tbody>"
-        + "".join(rows_html)
-        + "</tbody></table>"
+        "<table><thead><tr><th>run_id</th><th>model</th><th>records</th>"
+        "<th>pass rate</th><th>cost</th><th>started</th><th>status</th>"
+        "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
-    body = (
-        "<h1>Model Cartographer -- results viewer</h1>"
-        '<p><a href="/live">Live campaign monitor</a> &middot; '
-        '<a href="/atlas">Cross-model atlas</a> &middot; '
-        '<a href="/launch">Launch a campaign</a></p>'
-        f"{table}"
-    )
-    return _page("Model Cartographer results", body)
+    body = f"<h1>Runs</h1>{table}"
+    return _shell("Model Cartographer results", "runs", body)
+
+
+def _short_model(model_name: str) -> str:
+    return model_name.split("/")[-1] if model_name else "-"
 
 
 def _budget_for_run(run_id: str) -> int | None:
@@ -154,6 +349,13 @@ def _config_summary(realized_dims: dict) -> str:
 # a frozen partial progress bar with a bogus ETA.
 _COMPLETE_AFTER_S = 180.0
 
+# ETA is computed over a RECENT window only -- not the whole run's average
+# rate, which stalls or fast bursts easily poison. Window = last N records
+# or last M minutes of records, whichever gives the LARGER sample.
+_ETA_WINDOW_RECORDS = 25
+_ETA_WINDOW_MINUTES = 3.0
+_ETA_MIN_SAMPLE = 10
+
 
 def _now_utc() -> datetime:
     """Split out so tests can monkeypatch 'now'."""
@@ -168,30 +370,92 @@ def _age_seconds(newest: datetime) -> float:
     return (_now_utc() - newest).total_seconds()
 
 
-def live_html(store: ResultsStore) -> str:
-    """Live monitor for the most-recently-created campaign run (by max
-    `created_at` across all records) -- progress bar, tallies, and the last
-    15 records newest-first. Pure function over the store; auto-refreshes
-    via a `<meta http-equiv="refresh">` tag so no JS is needed.
+def _recent_rate_per_min(records: list[ExperimentRecord]) -> tuple[float | None, int]:
+    """Rate (records/min) computed over a RECENT window, plus the sample
+    size used. Returns (None, n) if there's no usable time span.
 
-    If the newest record is older than `_COMPLETE_AFTER_S` (3 minutes), the
-    run is rendered as complete: full-width green bar, "RUN COMPLETE --
-    finished at N calls", no ETA, tallies kept.
+    Window selection: take the records from the last `_ETA_WINDOW_MINUTES`
+    minutes (relative to the newest record's own timestamp, not wall
+    clock, so this works fine in tests). A long stall followed by a fast
+    burst should reflect the fast burst's rate, not the whole run's
+    average -- so the time-based window is preferred whenever it already
+    has enough samples to be meaningful. Only when that time-based window
+    is too thin (a slow-but-steady run with few records per minute) do we
+    widen to the last `_ETA_WINDOW_RECORDS` records instead, so the
+    estimate still has a decent sample size rather than reading "estimating..."
+    unnecessarily.
     """
-    cur = store._conn.execute(
-        "SELECT run_id FROM experiments ORDER BY created_at DESC, record_id DESC LIMIT 1"
-    )
-    row = cur.fetchone()
-    if row is None:
-        body = (
-            '<nav><a href="/">&larr; runs</a></nav>'
-            "<h1>Live campaign monitor</h1><p>No records found.</p>"
-        )
-        return _page("Live campaign monitor", body, refresh=True)
+    dated = [
+        (r, t) for r, t in ((r, _parse_created_at(r.created_at)) for r in records) if t is not None
+    ]
+    if len(dated) < 2:
+        return None, len(dated)
+    dated.sort(key=lambda pair: pair[1])
 
-    run_id = row["run_id"]
+    newest_t = dated[-1][1]
+    cutoff = newest_t.timestamp() - _ETA_WINDOW_MINUTES * 60.0
+    by_time = [pair for pair in dated if pair[1].timestamp() >= cutoff]
+
+    if len(by_time) >= _ETA_MIN_SAMPLE:
+        window = by_time
+    else:
+        by_count = dated[-_ETA_WINDOW_RECORDS:]
+        window = by_count if len(by_count) >= len(by_time) else by_time
+
+    if len(window) < 2:
+        return None, len(window)
+
+    span_s = (window[-1][1] - window[0][1]).total_seconds()
+    if span_s <= 0:
+        return None, len(window)
+    rate = (len(window) - 1) / (span_s / 60.0) if span_s > 0 else None
+    if rate is None or rate <= 0:
+        return None, len(window)
+    return rate, len(window)
+
+
+def _format_eta(remaining: int, rate_per_min: float | None, sample_n: int) -> str:
+    if sample_n < _ETA_MIN_SAMPLE:
+        return "estimating..."
+    if rate_per_min is None or rate_per_min <= 0:
+        return "estimating..."
+    eta_min = remaining / rate_per_min
+    if eta_min > 120:
+        return "at most &gt; 2h at current rate"
+    return f"at most ~{eta_min:.1f} min at current rate"
+
+
+def live_html(store: ResultsStore) -> str:
+    """Live monitor. Prefers the ACTIVE registered campaign run_id (from
+    `launch_mod.current_run()`) even if it has zero records yet -- a
+    just-launched campaign has no records for its first seconds-to-minutes
+    (world gen + first API call latency), and without this the page would
+    keep showing the previous run. Falls back to the run with the newest
+    record only when nothing is actively registered.
+    """
+    active = launch_mod.current_run()
+    run_id: str | None = active["run_id"] if active else None
+
+    if run_id is None:
+        cur = store._conn.execute(
+            "SELECT run_id FROM experiments ORDER BY created_at DESC, record_id DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        if row is None:
+            body = "<h1>Live campaign monitor</h1><p>No records found.</p>"
+            return _shell("Live campaign monitor", "live", body, refresh=True)
+        run_id = row["run_id"]
+
     safe_run_id = html.escape(run_id)
     records = store.by_run(run_id)
+
+    if not records:
+        body = f"""
+        <h1>Live: {safe_run_id}</h1>
+        <p class="meta">starting&hellip; 0 records</p>
+        <div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>
+        """
+        return _shell(f"Live: {run_id}", "live", body, refresh=True)
 
     total = len(records)
     passn = sum(1 for r in records if r.verdict.name == "PASS")
@@ -205,46 +469,51 @@ def live_html(store: ResultsStore) -> str:
         elapsed_s = max((max(timestamps) - min(timestamps)).total_seconds(), 0.0)
     else:
         elapsed_s = 0.0
-    rate_per_min = (total / (elapsed_s / 60.0)) if elapsed_s > 0 else 0.0
 
     complete = bool(timestamps) and _age_seconds(max(timestamps)) > _COMPLETE_AFTER_S
+    # A run still actively registered is never "complete" even if its
+    # newest record happens to be stale (e.g. a slow phase) -- it's still
+    # in-flight from the launcher's point of view.
+    if active is not None and run_id == active["run_id"]:
+        complete = False
 
     budget = _budget_for_run(run_id)
+    overall_rate_per_min = (total / (elapsed_s / 60.0)) if elapsed_s > 0 else 0.0
+
     if complete:
         pct_str = ""
         if budget is not None and budget > 0:
-            pct_str = f" ({min(total / budget * 100.0, 100.0):.1f}% of {budget} budget)"
+            pct_str = f" ({min(total / budget * 100.0, 100.0):.1f}% of {budget} budget max)"
         bar_html = (
-            '<div style="border:1px solid #157a15;background:#eee;width:100%;height:1.5rem;'
-            'border-radius:4px;overflow:hidden;">'
-            '<div style="background:#157a15;height:100%;width:100%;"></div></div>'
+            '<div class="progress-track"><div class="progress-fill complete" '
+            'style="width:100%"></div></div>'
             f'<p class="meta"><strong>RUN COMPLETE</strong> &mdash; finished at '
             f"{total} calls{pct_str}</p>"
         )
     elif budget is not None and budget > 0:
         pct = min(total / budget * 100.0, 100.0)
         remaining = max(budget - total, 0)
-        eta_min = (remaining / rate_per_min) if rate_per_min > 0 else None
-        eta_str = f"{eta_min:.1f} min" if eta_min is not None else "?"
+        rate_per_min, sample_n = _recent_rate_per_min(records)
+        eta_str = _format_eta(remaining, rate_per_min, sample_n)
         bar_html = (
-            f'<div style="border:1px solid #999;background:#eee;width:100%;height:1.5rem;'
-            f'border-radius:4px;overflow:hidden;">'
-            f'<div style="background:#2554a8;height:100%;width:{pct:.1f}%;"></div></div>'
-            f'<p class="meta">{total} / {budget} records ({pct:.1f}%) &middot; ETA: {eta_str}</p>'
+            '<div class="progress-row">'
+            f'<div class="progress-track"><div class="progress-fill" style="width:{pct:.1f}%"></div></div>'
+            f'<span class="progress-text">{total} / {budget} max ({pct:.1f}%)</span>'
+            "</div>"
+            f'<p class="meta">ETA: {eta_str}</p>'
         )
     else:
         bar_html = f'<p class="meta">{total} records (budget unknown for this run_id)</p>'
 
-    tallies_html = (
-        "<ul>"
-        f"<li>PASS: {passn}</li>"
-        f"<li>FAIL: {failn}</li>"
-        f"<li>ERROR: {errn}</li>"
-        f"<li>Pass rate: {pass_rate:.1f}%</li>"
-        f"<li>Total cost: ${total_cost:.6f}</li>"
-        f"<li>Elapsed: {elapsed_s:.1f} s</li>"
-        f"<li>Rate: {rate_per_min:.2f} records/min</li>"
-        "</ul>"
+    stat_grid = (
+        '<div class="stat-grid">'
+        f'<div class="stat-box"><div class="stat-num">{passn}</div><div class="stat-label">Pass</div></div>'
+        f'<div class="stat-box"><div class="stat-num">{failn}</div><div class="stat-label">Fail</div></div>'
+        f'<div class="stat-box"><div class="stat-num">{errn}</div><div class="stat-label">Error</div></div>'
+        f'<div class="stat-box"><div class="stat-num">{pass_rate:.1f}%</div><div class="stat-label">Pass rate</div></div>'
+        f'<div class="stat-box"><div class="stat-num">${total_cost:.4f}</div><div class="stat-label">Total cost</div></div>'
+        f'<div class="stat-box"><div class="stat-num">{overall_rate_per_min:.1f}/min</div><div class="stat-label">Rate</div></div>'
+        "</div>"
     )
 
     recent = list(reversed(records))[:15]
@@ -252,9 +521,9 @@ def live_html(store: ResultsStore) -> str:
     for r in recent:
         rows_html.append(
             "<tr>"
-            f"<td>{html.escape(r.created_at or '-')}</td>"
-            f"<td>{_verdict_span(r.verdict.name)}</td>"
-            f"<td>{html.escape(_config_summary(r.realized_dims))}</td>"
+            f'<td class="mono">{html.escape(r.created_at or "-")}</td>'
+            f"<td>{_verdict_pill(r.verdict.name)}</td>"
+            f'<td class="mono">{html.escape(_config_summary(r.realized_dims))}</td>'
             "</tr>"
         )
     recent_table = (
@@ -263,15 +532,15 @@ def live_html(store: ResultsStore) -> str:
     )
 
     body = f"""
-    <nav><a href="/">&larr; runs</a> | <a href="/run/{safe_run_id}">full run detail</a></nav>
     <h1>Live: {safe_run_id}</h1>
+    <p><a href="/run/{safe_run_id}">full run detail &rarr;</a></p>
     {bar_html}
     <h2>Tallies</h2>
-    {tallies_html}
+    {stat_grid}
     <h2>Last 15 records (newest first)</h2>
     {recent_table}
     """
-    return _page(f"Live: {run_id}", body, refresh=not complete)
+    return _shell(f"Live: {run_id}", "live", body, refresh=not complete)
 
 
 def run_html(store: ResultsStore, run_id: str) -> str:
@@ -279,8 +548,8 @@ def run_html(store: ResultsStore, run_id: str) -> str:
     safe_run_id = html.escape(run_id)
 
     if not records:
-        body = f'<nav><a href="/">&larr; runs</a></nav><h1>Run {safe_run_id}</h1><p>No records found.</p>'
-        return _page(f"Run {run_id}", body)
+        body = f"<h1>Run {safe_run_id}</h1><p>No records found.</p>"
+        return _shell(f"Run {run_id}", "runs", body)
 
     rows_html = []
     for r in records:
@@ -290,12 +559,12 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         difficulty = detail.get("difficulty", "-")
         rows_html.append(
             "<tr>"
-            f"<td>{html.escape(r.model_name)}</td>"
-            f"<td>{_verdict_span(r.verdict.name)}</td>"
+            f'<td class="mono">{html.escape(r.model_name)}</td>'
+            f"<td>{_verdict_pill(r.verdict.name)}</td>"
             f"<td>{html.escape(kind)}</td>"
             f"<td>{html.escape(difficulty)}</td>"
-            f"<td>{r.cost_usd:.6f}</td>"
-            f"<td>{r.tokens_in}/{r.tokens_out}</td>"
+            f'<td class="mono">{r.cost_usd:.6f}</td>'
+            f'<td class="mono">{r.tokens_in}/{r.tokens_out}</td>'
             f'<td><a href="/record/{html.escape(r.record_id)}">detail</a></td>'
             "</tr>"
         )
@@ -305,8 +574,8 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         "<th>difficulty</th><th>cost ($)</th><th>tokens in/out</th><th></th>"
         "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
-    body = f'<nav><a href="/">&larr; runs</a></nav><h1>Run {safe_run_id}</h1>{table}'
-    return _page(f"Run {run_id}", body)
+    body = f"<h1>Run {safe_run_id}</h1>{table}"
+    return _shell(f"Run {run_id}", "runs", body)
 
 
 def record_html(store: ResultsStore, record_id: str) -> str:
@@ -315,8 +584,8 @@ def record_html(store: ResultsStore, record_id: str) -> str:
     safe_record_id = html.escape(record_id)
 
     if row is None:
-        body = f'<nav><a href="/">&larr; runs</a></nav><h1>Record {safe_record_id}</h1><p>Not found.</p>'
-        return _page(f"Record {record_id}", body)
+        body = f"<h1>Record {safe_record_id}</h1><p>Not found.</p>"
+        return _shell(f"Record {record_id}", "runs", body)
 
     from ..store.store import _row_to_record
 
@@ -328,17 +597,17 @@ def record_html(store: ResultsStore, record_id: str) -> str:
 
     reasoning_html = (
         "<details><summary>Model reasoning</summary>"
-        f'<pre class="block">{reasoning_block}</pre></details>'
+        f'<pre class="block mono">{reasoning_block}</pre></details>'
         if record.reasoning_text
         else "<p class=\"meta\">(no reasoning captured)</p>"
     )
 
     realized_rows = "".join(
-        f"<tr><td>{html.escape(str(k))}</td><td>{html.escape(str(v))}</td></tr>"
+        f'<tr><td class="mono">{html.escape(str(k))}</td><td class="mono">{html.escape(str(v))}</td></tr>'
         for k, v in sorted(record.realized_dims.items())
     )
     latent_rows = "".join(
-        f"<tr><td>{html.escape(str(k))}</td><td>{html.escape(str(v))}</td></tr>"
+        f'<tr><td class="mono">{html.escape(str(k))}</td><td class="mono">{html.escape(str(v))}</td></tr>'
         for k, v in sorted(record.latent_params.items())
     )
 
@@ -353,17 +622,17 @@ def record_html(store: ResultsStore, record_id: str) -> str:
         lineage_links = "(lineage unavailable)"
 
     body = f"""
-    <nav><a href="/">&larr; runs</a> | <a href="/run/{html.escape(record.run_id)}">&larr; run {html.escape(record.run_id)}</a></nav>
+    <p><a href="/run/{html.escape(record.run_id)}">&larr; run {html.escape(record.run_id)}</a></p>
     <h1>Record {safe_record_id}</h1>
     <p class="meta">
-      model: {html.escape(record.model_name)} &middot;
-      verdict: {_verdict_span(record.verdict.name)} &middot;
+      model: <span class="mono">{html.escape(record.model_name)}</span> &middot;
+      verdict: {_verdict_pill(record.verdict.name)} &middot;
       finish_reason: {html.escape(record.finish_reason or "-")} &middot;
-      tokens in/out: {record.tokens_in}/{record.tokens_out} &middot;
-      cost: ${record.cost_usd:.6f} &middot;
-      latency: {record.latency_ms:.1f} ms
+      tokens in/out: <span class="mono">{record.tokens_in}/{record.tokens_out}</span> &middot;
+      cost: <span class="mono">${record.cost_usd:.6f}</span> &middot;
+      latency: <span class="mono">{record.latency_ms:.1f} ms</span>
     </p>
-    <p class="meta">verifier_detail: {html.escape(record.verifier_detail or "-")}</p>
+    <p class="meta">verifier_detail: <span class="mono">{html.escape(record.verifier_detail or "-")}</span></p>
     <p class="meta">lineage: {lineage_links}</p>
 
     <h2>Prompt</h2>
@@ -381,7 +650,7 @@ def record_html(store: ResultsStore, record_id: str) -> str:
     <h2>Latent params</h2>
     <table><thead><tr><th>param</th><th>value</th></tr></thead><tbody>{latent_rows}</tbody></table>
     """
-    return _page(f"Record {record_id}", body)
+    return _shell(f"Record {record_id}", "runs", body)
 
 
 class _ViewerHandler(BaseHTTPRequestHandler):
@@ -409,7 +678,7 @@ class _ViewerHandler(BaseHTTPRequestHandler):
 
         if path == "/launch":
             body = launch_mod.handle_launch_get(self.launch_deps)
-            self._send_html(_page("Launch a campaign", body))
+            self._send_html(_shell("Launch a campaign", "launch", body))
             return
 
         if path == "/atlas":
@@ -428,12 +697,12 @@ class _ViewerHandler(BaseHTTPRequestHandler):
                 self._send_html(record_html(self.store, record_id))
                 return
 
-        self._send_html(_page("Not found", "<h1>404</h1><p>Not found.</p>"), status=404)
+        self._send_html(_shell("Not found", "", "<h1>404</h1><p>Not found.</p>"), status=404)
 
     def do_POST(self) -> None:  # noqa: N802 -- required BaseHTTPRequestHandler name
         path = urlsplit(self.path).path
         if path != "/launch":
-            self._send_html(_page("Not found", "<h1>404</h1><p>Not found.</p>"), status=404)
+            self._send_html(_shell("Not found", "", "<h1>404</h1><p>Not found.</p>"), status=404)
             return
 
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -445,7 +714,7 @@ class _ViewerHandler(BaseHTTPRequestHandler):
         step = form.get("step", "")
         if step == "models":
             body = launch_mod.handle_models_step(form, self.launch_deps)
-            self._send_html(_page("Launch a campaign", body))
+            self._send_html(_shell("Launch a campaign", "launch", body))
             return
         if step == "start":
             started, payload = launch_mod.handle_start(form, self.launch_deps)
@@ -455,11 +724,11 @@ class _ViewerHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            self._send_html(_page("Launch a campaign", payload))
+            self._send_html(_shell("Launch a campaign", "launch", payload))
             return
 
         self._send_html(
-            _page("Launch a campaign", launch_mod.error_html("unknown form step")),
+            _shell("Launch a campaign", "launch", launch_mod.error_html("unknown form step")),
             status=400,
         )
 

@@ -42,7 +42,12 @@ from typing import Callable
 
 from ..exec import client as client_mod
 from ..exec.client import GROQ, NEBIUS, Client, Provider
-from ..exec.evaluator import run_belief_campaign, run_state_campaign
+from ..exec.evaluator import (
+    run_belief_campaign,
+    run_breaking_point_campaign,
+    run_order_campaign,
+    run_state_campaign,
+)
 from ..exec.keys import load_keys
 from ..store.store import ResultsStore
 
@@ -53,11 +58,15 @@ _PROVIDERS: dict[str, Provider] = {"groq": GROQ, "nebius": NEBIUS}
 CAMPAIGN_PRESETS: dict[str, dict[str, float]] = {
     "state": {"budget": 160, "cost_cap": 0.5},
     "belief": {"budget": 700, "cost_cap": 1.0},
+    "order": {"budget": 400, "cost_cap": 0.5},
+    "breaking_point": {"budget": 350, "cost_cap": 0.75},
 }
 
 _RUNNERS: dict[str, Callable] = {
     "state": run_state_campaign,
     "belief": run_belief_campaign,
+    "order": run_order_campaign,
+    "breaking_point": run_breaking_point_campaign,
 }
 
 
@@ -110,7 +119,6 @@ def _provider_options(selected: str = "nebius") -> str:
 def launch_form_html() -> str:
     """Step 1: provider + key form."""
     return f"""
-    <nav><a href="/">&larr; runs</a></nav>
     <h1>Launch a campaign</h1>
     <form method="post" action="/launch">
       <input type="hidden" name="step" value="models">
@@ -126,7 +134,6 @@ def launch_form_html() -> str:
 
 def busy_html(run_id: str) -> str:
     return (
-        '<nav><a href="/">&larr; runs</a></nav>'
         "<h1>Campaign in progress</h1>"
         f"<p>Run <strong>{html.escape(run_id)}</strong> is currently running. "
         "Only one campaign can run at a time.</p>"
@@ -136,9 +143,9 @@ def busy_html(run_id: str) -> str:
 
 def error_html(message: str) -> str:
     return (
-        '<nav><a href="/launch">&larr; launch</a></nav>'
         "<h1>Launch error</h1>"
         f"<p>{html.escape(message)}</p>"
+        '<p><a href="/launch">&larr; back to launch</a></p>'
     )
 
 
@@ -157,7 +164,7 @@ def models_step_html(provider_name: str, token: str, models: list[str]) -> str:
         f"{t}: budget {int(p['budget'])}, cap ${p['cost_cap']}" for t, p in presets.items()
     )
     return f"""
-    <nav><a href="/launch">&larr; start over</a></nav>
+    <p><a href="/launch">&larr; start over</a></p>
     <h1>Launch a campaign &mdash; {html.escape(provider_name)}</h1>
     <p class="meta">{len(models)} chat-capable models found.</p>
     <form method="post" action="/launch">

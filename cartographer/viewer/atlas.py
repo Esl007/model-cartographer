@@ -31,8 +31,12 @@ _CHART_H = 300
 _MARGIN = 48
 
 _LINE_COLORS = [
-    "#2554a8", "#b30000", "#157a15", "#b8860b", "#7a2ea8", "#008080", "#a83e2e",
+    "#2DD4BF", "#F87171", "#34D399", "#FBBF24", "#A78BFA", "#60A5FA", "#F472B6",
 ]
+_CHART_BG = "#171b21"
+_CHART_BORDER = "#2A2F36"
+_CHART_AXIS = "#9aa4b2"
+_CHART_TEXT = "#E8EAED"
 
 
 def _short_model_name(model_name: str) -> str:
@@ -128,18 +132,18 @@ def _svg_chart(
     parts = [
         f'<svg viewBox="0 0 {_CHART_W} {_CHART_H}" xmlns="http://www.w3.org/2000/svg" '
         f'width="{_CHART_W}" height="{_CHART_H}">',
-        f'<rect x="0" y="0" width="{_CHART_W}" height="{_CHART_H}" fill="#ffffff" '
-        'stroke="#ddd"/>',
+        f'<rect x="0" y="0" width="{_CHART_W}" height="{_CHART_H}" fill="{_CHART_BG}" '
+        f'stroke="{_CHART_BORDER}"/>',
         # axes
         f'<line x1="{_MARGIN}" y1="{_CHART_H - _MARGIN}" x2="{_CHART_W - _MARGIN}" '
-        f'y2="{_CHART_H - _MARGIN}" stroke="#333"/>',
+        f'y2="{_CHART_H - _MARGIN}" stroke="{_CHART_AXIS}"/>',
         f'<line x1="{_MARGIN}" y1="{_MARGIN}" x2="{_MARGIN}" '
-        f'y2="{_CHART_H - _MARGIN}" stroke="#333"/>',
-        f'<text x="{_MARGIN}" y="20" font-size="14" font-family="sans-serif">'
+        f'y2="{_CHART_H - _MARGIN}" stroke="{_CHART_AXIS}"/>',
+        f'<text x="{_MARGIN}" y="20" font-size="14" fill="{_CHART_TEXT}" font-family="sans-serif">'
         f'{html.escape(title)}</text>',
-        f'<text x="{_MARGIN - 10}" y="{_MARGIN - 5}" font-size="10" '
+        f'<text x="{_MARGIN - 10}" y="{_MARGIN - 5}" font-size="10" fill="{_CHART_AXIS}" '
         'text-anchor="start" font-family="sans-serif">1.0</text>',
-        f'<text x="{_MARGIN - 10}" y="{_CHART_H - _MARGIN + 5}" font-size="10" '
+        f'<text x="{_MARGIN - 10}" y="{_CHART_H - _MARGIN + 5}" font-size="10" fill="{_CHART_AXIS}" '
         'text-anchor="start" font-family="sans-serif">0.0</text>',
     ]
 
@@ -159,7 +163,7 @@ def _svg_chart(
         legend_x = _CHART_W - 150
         parts.append(
             f'<rect x="{legend_x}" y="{legend_y - 8}" width="10" height="10" fill="{color}"/>'
-            f'<text x="{legend_x + 14}" y="{legend_y}" font-size="11" '
+            f'<text x="{legend_x + 14}" y="{legend_y}" font-size="11" fill="{_CHART_TEXT}" '
             f'font-family="sans-serif">{html.escape(model)}</text>'
         )
         legend_y += 16
@@ -190,7 +194,7 @@ def atlas_html(store: ResultsStore) -> str:
     table. Returns a graceful "no campaign data" page if there are no
     `camp-*` records at all.
     """
-    from .serve import _page  # local import: avoid a circular import at module load
+    from .serve import _shell  # local import: avoid a circular import at module load
 
     cur = store._conn.execute("SELECT * FROM experiments")
     from ..store.store import _row_to_record
@@ -199,11 +203,8 @@ def atlas_html(store: ResultsStore) -> str:
     records = [r for r in all_records if r.run_id.startswith(_CAMPAIGN_RUN_PREFIX)]
 
     if not records:
-        body = (
-            '<nav><a href="/">&larr; runs</a></nav>'
-            "<h1>Cross-model atlas</h1><p>No campaign data.</p>"
-        )
-        return _page("Cross-model atlas", body)
+        body = "<h1>Cross-model atlas</h1><p>No campaign data.</p>"
+        return _shell("Cross-model atlas", "atlas", body)
 
     # Group by query_kind -> model -> records.
     by_kind_model: dict[str, dict[str, list]] = {}
@@ -287,10 +288,9 @@ def atlas_html(store: ResultsStore) -> str:
     )
 
     body = (
-        '<nav><a href="/">&larr; runs</a></nav>'
         "<h1>Cross-model atlas</h1>"
         + "".join(chart_sections)
         + "<h2>Summary</h2>"
         + summary_table
     )
-    return _page("Cross-model atlas", body)
+    return _shell("Cross-model atlas", "atlas", body)
