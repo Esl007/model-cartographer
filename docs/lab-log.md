@@ -7,6 +7,36 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-17 — FINDING (confirmed) — escalation mode finds Ultra's ceiling exceeds the generator's current limits
+
+`run_breaking_point_campaign` against `nvidia/Nemotron-3-Ultra-550b-a55b`
+(`camp-breaking_point-ultra-002`), belief query, full default ray (all
+6 dims from baseline to hard ceiling: chain 25, distractors 40,
+coref 8, filler 60, witness_cutoff 0.9 — all raised together at each
+step, not one at a time). Cost: $0.18, 56 calls.
+
+**Result: `found=False`, honestly reported.** Pass curve across the
+full ramp (t=0 → t=1.0, step 0.15): `[1.0, 0.86, 1.0, 1.0, 1.0, 0.86,
+1.0, 0.86]` — never dropped to or below the fail threshold (0.3), so
+the engine correctly declined to invent a boundary, bisect, decompose,
+or confirm anything. This is the intended honest-failure path, not a
+bug: the escalation ray ran its full length and the model simply held.
+
+**What this means:** our current 5-dimension generator, even at its
+absolute hardest achievable combined configuration, cannot break
+Nemotron Ultra on belief-tracking. Ultra's true capability floor on
+this task family sits above our instrument's current difficulty
+ceiling. This is a legitimate, well-powered negative result (56 calls
+spanning the entire ramp, not a single undersized probe) — not the
+same category of thing as the earlier single-trial noise mistake
+above. To find where Ultra actually breaks, the next lever is either
+extending existing dims further (chain past 25, cutoff past 0.9) or
+introducing one of the 5 parked dimensions (tool-planning is the
+strongest candidate) — the current family may simply be a capability
+this model has already mastered.
+
+---
+
 ## 2026-09-17 — FINDING (confirmed) — Ultra pronoun-actor-tracking bug, causally isolated; earlier "3-for-3 tiers" claim partially retracted
 
 Manually re-verified all 3 belief FAILs from `camp-belief-nemotron-3-ultra-550b-a55b-001` by regenerating each world from its stored seed/params and reading the true per-event actor/witness ground truth (not just the rendered prose). Then ran a live ablation directly against Ultra (`nvidia/Nemotron-3-Ultra-550b-a55b`, temp=0.0, same 8000/16000 token budget as the campaign): for each case, replaced ONLY the ambiguous pronoun with the true actor's name (everything else byte-identical) and resampled both the original and disambiguated prompt 3x each for a fair comparison.
