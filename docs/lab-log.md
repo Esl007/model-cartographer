@@ -7,6 +7,44 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-17 — FINDING (confirmed) — Nemotron Nano shows real belief-tracking failures; Super does not
+
+Ran the same state + belief campaigns on `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`
+(`camp-state-nemotron-nano-001`, `camp-belief-nemotron-nano-001`) post
+witness-fix. Cost: $0.02, 135 calls, 0 errors.
+
+**State: clean pass, 30/30**, same as Super — no boundary in range.
+
+**Belief: 98/105 (93%) pass — genuine failures, not artifacts.** Explore's
+coarse 5-point grid didn't concentrate failures sharply enough at any
+single probed level to trigger refine (`boundaries` came back empty
+despite 7 real fails) — a scheduler sensitivity gap, not a false
+negative on the model. Verified one failure by regenerating the exact
+world from its recorded seed/params and checking `simulate()`'s ground
+truth directly (not just re-reading the transcript, per the standing
+rule after the witness-bug incident): true answer was "the break room"
+(the queried entity's last witnessed event placed the object there);
+Nano answered "the loading dock," reasoning *"he was watching at each
+move"* — a false premise. The object actually moved twice more after the
+entity's last witnessed event, unwitnessed by them. **Failure mode:
+Nano over-generalizes continuity of observation past the last explicit
+witness cue, rather than tracking exactly when witnessing stopped.**
+
+A second failing transcript hinted at a possible distractor-object
+naming collision ("worn tablet" vs "worn box" appearing in the same
+story) — not chased down yet, flagged for later investigation, may be
+a naming-pool issue rather than a model error.
+
+**Why this matters:** confirms the tool can discriminate between tiers
+— Super's belief tracking is robust in this range, Nano's genuinely
+isn't, with a legible, well-defined error mode. This is the kind of
+result the whole project is built to surface. Follow-up: tighten
+explore's flip-detection sensitivity (or lower `pass_threshold`/raise
+`k_trials` for belief specifically) so a real ~7% failure rate triggers
+refine/decompose instead of being absorbed as "no boundary."
+
+---
+
 ## 2026-09-17 — FINDING (confirmed, post-fix) — belief campaign re-run on corrected renderer: no boundary found
 
 **Re-ran** `run_belief_campaign` against Nemotron Super (`camp-belief-nemotron-super-002`, fresh run_id, old contaminated `-001` data left untouched for comparison) after the witness-rendering fix (commit `5bd297f`). Cost: $0.03, 105 calls, 0 errors.
