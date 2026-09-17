@@ -93,6 +93,89 @@ of scope for the two-bug-fix mandate and was left as a candidate follow-up.
 
 ---
 
+## 2026-09-17 — PHASE (shipped) + FINDING (confirmed) — escalation mode, order/witness_cutoff campaign wiring, and the first verified Super belief failures
+
+**Campaign wiring (exec/schedule territory), three pieces:**
+
+**1. witness_cutoff joins the belief campaign** (`exec/evaluator.py`).
+`run_belief_campaign` now sweeps `DimSpec("witness_cutoff", 0.0, 0.9,
+False)` alongside the four original dims (baseline 0.0, ceiling 0.9 — the
+generator's validated hard ceiling). `PipelineEvaluator`'s config mapping
+accepts the key as a float (same path as scramble), and every record's
+`latent_params` now carries `witness_cutoff` explicitly (0.0 recorded for
+configs that don't set it, so old-vs-new records stay comparable).
+
+**2. Order campaign preset.** `run_order_campaign` (budget 400, cap $0.50,
+k_trials 5) sweeps chain_length 2–20, scramble 0–1, distractor_events 2–30,
+filler_events 2–40 — the dims that plausibly stress chronology recovery;
+witness/coref dims are belief-specific and stay at baseline. Registered in
+the viewer's `CAMPAIGN_PRESETS`/`_RUNNERS` (the one-dict exception to this
+session's viewer no-touch rule; merged additively against the concurrent
+viewer redesign, which had already touched launch.py — no conflicts).
+
+**3. Escalation mode** (`cartographer/schedule/escalate.py`, new — the
+centerpiece). Instead of one-dim-at-a-time sweeps, an `EscalationRay` walks
+a straight line through the FULL joint difficulty space: t=0 all dims easy,
+t=1 all dims at the generator's hard validated ceilings (chain 25, scramble
+1.0, coref 8, distractors 40, filler 60, witness_cutoff 0.9 — the
+combined-clean config from `tests/test_witness_cutoff.py`).
+`find_breaking_point` ramps t by 0.15 (k_trials=7 per probe), bisects the
+first pass→fail bracket to width ≤ 0.03, fits a logistic over every
+(t, outcome) trial for t* + bootstrap CI (reusing `schedule/estimate.py`),
+then hands `config_at(t_fail)` vs `config_at(0)` to decompose (≤ 40% of
+budget) and, when a non-unexplained hypothesis emerges, to
+`confirm_hypothesis` on fresh seeds (≥ 10_000 convention). If the model
+never breaks by t=1.0 the result is an honest `found=False` / "model
+exceeds generator limits". `run_breaking_point_campaign` (budget 350, cap
+$0.75) wires a PipelineEvaluator to the default 6-dim belief ray; also in
+`CAMPAIGN_PRESETS`. Synthetic-zoo tests: a weighted-sum LogisticRule
+(s = 0.6a + 0.4b, analytic crossing t* = 0.55) is recovered within 0.1;
+always-pass → honest not-found; degenerate baseline; budget hard-respected;
+an InteractionRule frontier yields a confirmed `pairwise_interaction`
+hypothesis with effect size > 0.2; two runs byte-identical.
+
+Suite: 192 passing (net +17: 9 escalate, 8 campaign-preset/wiring). Zero
+network in tests.
+
+**FINDING — the 5 Super belief failures in
+`camp-belief-nemotron-3-super-120b-a12b-001` are real (instrument checked
+first, per the standing rule).** For each FAIL: the world regenerated from
+stored latent_params/task_seed reproduces the stored prompt byte-identically,
+the stored answer_key matches `simulate()`'s ground truth, and `verify()`
+replays FAIL. These are the first Super-tier belief failures ever recorded.
+Two distinct modes:
+
+- **Continuity over-generalization (1/5, the clean case):** config
+  chain=4/scramble=0/coref=0/distr=2 — Victor witnesses moves through 8:02
+  (break room), does NOT witness the 8:03 move to the loading dock; Super's
+  own reasoning trace asserts "he watched … which ended at 8:03" — a false
+  premise — and answers the true final location. Exactly Nano's confirmed
+  failure mode, now observed (rarely) in Super, at a near-baseline config.
+- **Pronoun misresolution (4/5):** the model attaches a rendered
+  "she"/"he" to the wrong same-gender antecedent and thereby mis-tracks
+  what the query agent did/saw. In three of these the correct antecedent
+  is the query agent named in an immediately preceding *witness sentence*
+  ("At 8:03, Juno noticed this from across the room. At 8:04, she took…" —
+  she=Juno per the renderer's unique-most-recent rule and standard English
+  recency preference; Super read Nadia). The fourth (chain=2, scramble=1.0)
+  is scramble-order confusion: "he"=Finn (most recent male) read as Gideon.
+
+**Caveat worth carrying into any writeup:** pronoun resolution in all four
+cases is deterministic per the renderer's rule and linguistically standard,
+so these count as model failures — but witness-sentence insertion raises
+same-gender collision pressure exactly where belief attribution matters
+(the witness sentence puts the query agent's name adjacent to another
+same-gender actor's). Before headlining "Super fails theory-of-mind," an
+ablation with pronouns suppressed around witness sentences would cleanly
+separate coref failure from belief-tracking failure. Flagged, not done.
+
+**Task 5 status (order campaigns live on Super + Nano): NOT RUN.** The
+live-spend instruction reached this agent as relayed approval only; holding
+until the user confirms directly. Everything is wired — `run_order_campaign`
+against both models is a two-call script away.
+
+---
+
 ## 2026-09-17 — DECISION (decided) — parallel wave execution, /live completion state, and a browser /launch page
 
 Three infrastructure changes shipped together (scheduler/exec/viewer

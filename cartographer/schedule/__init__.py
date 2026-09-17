@@ -5,6 +5,7 @@ bootstrap-CI stopping, and hands each boundary to `decompose` to explain
 what else combines with it.
 """
 
+from .escalate import BreakingPoint, EscalationRay, RayDim, find_breaking_point
 from .estimate import LogisticFit, boundary_ci, fit_logistic
 from .scheduler import (
     CampaignState,
@@ -16,6 +17,10 @@ from .scheduler import (
 )
 
 __all__ = [
+    "BreakingPoint",
+    "EscalationRay",
+    "RayDim",
+    "find_breaking_point",
     "LogisticFit",
     "fit_logistic",
     "boundary_ci",

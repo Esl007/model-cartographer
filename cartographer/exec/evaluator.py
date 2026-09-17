@@ -22,6 +22,7 @@ from dataclasses import dataclass, replace
 from typing import Callable
 
 from ..render import build_name_map, render, verify
+from ..schedule.escalate import BreakingPoint, EscalationRay, RayDim, find_breaking_point
 from ..schedule.scheduler import CampaignState, DimSpec, SchedulerConfig, run_campaign
 from ..store.schema import ExperimentRecord, RenderMode, Verdict
 from ..store.store import ResultsStore
@@ -33,7 +34,7 @@ from .pricing import cost_usd
 # Config keys that map onto integer-valued DimParams fields.
 _INT_KEYS = {"chain_length", "coref_pressure", "distractor_events", "filler_events"}
 # Config keys that map onto float-valued DimParams fields.
-_FLOAT_KEYS = {"scramble"}
+_FLOAT_KEYS = {"scramble", "witness_cutoff"}
 _KNOWN_KEYS = _INT_KEYS | _FLOAT_KEYS
 
 
@@ -185,6 +186,7 @@ class PipelineEvaluator:
                 "coref_pressure": float(params.coref_pressure),
                 "distractor_events": float(params.distractor_events),
                 "filler_events": float(params.filler_events),
+                "witness_cutoff": float(params.witness_cutoff),
             },
             realized_dims=realized_dims,
             render_mode=RenderMode.TEMPLATE,
@@ -232,6 +234,7 @@ class PipelineEvaluator:
                 "coref_pressure": float(params.coref_pressure),
                 "distractor_events": float(params.distractor_events),
                 "filler_events": float(params.filler_events),
+                "witness_cutoff": float(params.witness_cutoff),
             },
             realized_dims={},
             render_mode=RenderMode.TEMPLATE,
@@ -270,6 +273,28 @@ def _belief_scheduler_config(budget: int, parallelism: int = 6) -> SchedulerConf
         DimSpec("scramble", 0.0, 1.0, False),
         DimSpec("coref_pressure", 0, 5, True),
         DimSpec("distractor_events", 2, 20, True),
+        DimSpec("witness_cutoff", 0.0, 0.9, False),
+    ]
+    baseline = {d.name: d.lo for d in dims}
+    ceiling = {d.name: d.hi for d in dims}
+    return SchedulerConfig(
+        dims=dims,
+        baseline=baseline,
+        ceiling=ceiling,
+        k_trials=5,
+        ci_width_stop=2.0,
+        decompose_share=0.35,
+        budget=budget,
+        parallelism=parallelism,
+    )
+
+
+def _order_scheduler_config(budget: int, parallelism: int = 6) -> SchedulerConfig:
+    dims = [
+        DimSpec("chain_length", 2, 20, True),
+        DimSpec("scramble", 0.0, 1.0, False),
+        DimSpec("distractor_events", 2, 30, True),
+        DimSpec("filler_events", 2, 40, True),
     ]
     baseline = {d.name: d.lo for d in dims}
     ceiling = {d.name: d.hi for d in dims}
@@ -324,6 +349,103 @@ def run_state_campaign(
         state.notes.append("cost_cap_hit")
     state.evaluator = evaluator  # type: ignore[attr-defined]
     return state
+
+
+def run_order_campaign(
+    client: Client,
+    store: ResultsStore,
+    run_id: str,
+    model: str,
+    budget: int = 400,
+    cost_cap: float = 0.5,
+    parallelism: int | None = None,
+) -> CampaignState:
+    """Run the "order" query-kind campaign across four dims at once
+    (chain_length, scramble, distractor_events, filler_events -- the dims
+    that plausibly stress chronology recovery; witness/coref dims are
+    belief-specific and stay at baseline).
+
+    `parallelism=None` defaults to the client provider's
+    `suggested_parallelism` (Groq 2, Nebius 6 -- rate-limit-aware).
+    """
+    evaluator = PipelineEvaluator(
+        client=client,
+        model=model,
+        store=store,
+        run_id=run_id,
+        query_kind="order",
+        cost_cap_usd=cost_cap,
+    )
+    if parallelism is None:
+        parallelism = _default_parallelism(client)
+    config = _order_scheduler_config(budget, parallelism)
+
+    def on_record(cfg: dict, passed: bool, seed: int) -> None:
+        pass  # PipelineEvaluator already persists every trial itself.
+
+    state = run_campaign(evaluator, config, on_record=on_record)
+    if evaluator.capped:
+        state.notes.append("cost_cap_hit")
+    state.evaluator = evaluator  # type: ignore[attr-defined]
+    return state
+
+
+# The generator's hard validated ceilings (verified combined-clean across
+# seeds in tests/test_witness_cutoff.py's combined-ceiling test).
+_GENERATOR_LIMITS: dict[str, tuple[float, float, bool]] = {
+    # name -> (base_value, limit_value, is_int)
+    "chain_length": (2, 25, True),
+    "scramble": (0.0, 1.0, False),
+    "coref_pressure": (0, 8, True),
+    "distractor_events": (2, 40, True),
+    "filler_events": (2, 60, True),
+    "witness_cutoff": (0.0, 0.9, False),
+}
+
+
+def default_belief_ray() -> EscalationRay:
+    """The default escalation ray for belief queries: t=0 is the easy
+    baseline on all six dims, t=1 is the generator's hard validated ceiling
+    on all six simultaneously.
+    """
+    return EscalationRay(
+        dims=tuple(
+            RayDim(name, base, limit, is_int)
+            for name, (base, limit, is_int) in _GENERATOR_LIMITS.items()
+        )
+    )
+
+
+def run_breaking_point_campaign(
+    client: Client,
+    store: ResultsStore,
+    run_id: str,
+    model: str,
+    query_kind: str = "belief",
+    budget: int = 350,
+    cost_cap: float = 0.75,
+) -> BreakingPoint:
+    """Escalation mode: walk the default all-dims ray from easy baseline to
+    the generator's hard ceilings and find where the model actually breaks
+    (see `cartographer.schedule.escalate.find_breaking_point`). Every trial
+    is persisted through the same `PipelineEvaluator` the other campaigns
+    use; escalation probing is inherently sequential (each stage depends on
+    the last), so no parallelism knob.
+    """
+    evaluator = PipelineEvaluator(
+        client=client,
+        model=model,
+        store=store,
+        run_id=run_id,
+        query_kind=query_kind,
+        cost_cap_usd=cost_cap,
+    )
+    bp = find_breaking_point(evaluator, default_belief_ray(), budget=budget)
+    bp_note = f"spent=${evaluator.spent_usd:.4f}"
+    if evaluator.capped:
+        bp_note += ";cost_cap_hit"
+    bp.note = f"{bp.note}; {bp_note}" if bp.note else bp_note
+    return bp
 
 
 def run_belief_campaign(
