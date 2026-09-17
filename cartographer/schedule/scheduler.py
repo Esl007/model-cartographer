@@ -28,7 +28,9 @@ from typing import Callable
 from cartographer.decompose import decompose
 from cartographer.decompose.hypothesis import FailureHypothesis
 
-from .estimate import boundary_ci
+import math
+
+from .estimate import boundary_ci, fit_logistic
 
 TaskEvaluator = Callable[[dict[str, float], int], bool]
 
@@ -76,6 +78,14 @@ class CampaignState:
     hypotheses: list[FailureHypothesis] = field(default_factory=list)
     waves_run: int = 0
     notes: list[str] = field(default_factory=list)
+    # dim_name -> aggregate pass rate across all explore (+ weak-signal) probes
+    # for that dim, regardless of whether a boundary was ultimately found.
+    dim_pass_rates: dict[str, float] = field(default_factory=dict)
+    # dim_name -> list of (x, trial_passes, trial_k) raw per-level trial
+    # tallies -- kept alongside `points`'s majority-vote bools so aggregate
+    # failure rates can see minority failures a level's own majority vote
+    # hides (see `_weak_signal_refine_dim`).
+    trial_tallies: dict[str, list[tuple[float, int, int]]] = field(default_factory=dict)
 
 
 class _BudgetExhausted(Exception):
@@ -114,12 +124,18 @@ def _probe_point(
     k_trials: int,
     budget: _SharedBudget,
     on_record: OnRecord | None,
+    tally_sink: list[tuple[float, int, int]] | None = None,
 ) -> bool:
     """Run k_trials at `base_config` with `dim` set to `x`; majority vote.
 
     Every trial is charged against the shared budget individually and, if
     provided, reported via `on_record(config, passed, trial_seed)` -- this
     is the hook a caller uses to persist each trial as an ExperimentRecord.
+
+    If `tally_sink` is provided, appends `(x, trial_passes, k_trials)` to it
+    -- the raw per-trial tally, distinct from the majority-vote bool this
+    function returns, so callers can see minority failures a majority vote
+    would hide (needed for weak-signal aggregate detection).
     """
     budget.charge(k_trials)
     seed_start = budget.take_seed_block(k_trials)
@@ -133,6 +149,8 @@ def _probe_point(
             on_record(dict(config), ok, seed)
         if ok:
             passes += 1
+    if tally_sink is not None:
+        tally_sink.append((x, passes, k_trials))
     return passes * 2 > k_trials
 
 
@@ -154,17 +172,116 @@ def _explore_dim(
     levels = sorted({_round_dim(x, spec) for x in levels})
 
     pts = state.points.setdefault(spec.name, [])
+    tallies = state.trial_tallies.setdefault(spec.name, [])
     already = {x for x, _ in pts}
     for x in levels:
         if x in already:
             continue
         passed = _probe_point(
-            evaluator, config.baseline, spec.name, x, config.k_trials, budget, on_record
+            evaluator,
+            config.baseline,
+            spec.name,
+            x,
+            config.k_trials,
+            budget,
+            on_record,
+            tally_sink=tallies,
         )
         pts.append((x, passed))
 
     if all(p for _, p in pts):
         state.no_boundary_dims.add(spec.name)
+
+
+def _dim_aggregate_pass_rate(tallies: list[tuple[float, int, int]]) -> float:
+    """Aggregate trial-level pass rate across all raw tallies gathered for a
+    dim so far. Unlike `points` (one majority-vote bool per level), `tallies`
+    holds every trial's outcome, so a minority of failures within a level
+    that still passed its own majority vote is visible here.
+    """
+    total_k = sum(k for _, _, k in tallies)
+    if total_k == 0:
+        return 1.0
+    total_passes = sum(p for _, p, _ in tallies)
+    return total_passes / total_k
+
+
+def _weak_signal_refine_dim(
+    evaluator: TaskEvaluator,
+    config: SchedulerConfig,
+    spec: DimSpec,
+    state: CampaignState,
+    budget: _SharedBudget,
+    on_record: OnRecord | None,
+) -> None:
+    """Weak-signal refinement pass (lab-log Nano finding).
+
+    Triggered when a dim's explore sweep found NO single-level flip (every
+    level's own majority vote passed) but the dim's AGGREGATE failure count
+    across all its explore probes is >= 10% -- i.e. real failures are
+    spread thinly across levels rather than concentrated at one. Re-probes
+    the two explore levels with the lowest observed pass rate at 3x
+    k_trials each, appends those extra trial outcomes as additional
+    (x, passed) points (majority vote over the combined trials at that x),
+    then refits a logistic curve over ALL accumulated points for the dim.
+    If a crossing is found within [lo, hi], hands off to the normal
+    bisection refine from there; otherwise records
+    'weak_signal_unresolved:<dim>' with the aggregate rate in state.notes.
+    """
+    pts = state.points.setdefault(spec.name, [])
+    tallies = state.trial_tallies.setdefault(spec.name, [])
+    if not pts:
+        return
+
+    # Pick the two probed levels with the lowest per-level trial pass rate
+    # (from the raw tallies, not the collapsed majority-vote bool) to
+    # re-probe more deeply -- these are the levels most likely to be
+    # concealing a minority of failures.
+    tally_by_x: dict[float, tuple[int, int]] = {}
+    for x, p, k in tallies:
+        cur_p, cur_k = tally_by_x.get(x, (0, 0))
+        tally_by_x[x] = (cur_p + p, cur_k + k)
+    ranked_xs = sorted(
+        (x for x, _ in pts),
+        key=lambda x: (tally_by_x.get(x, (0, 1))[0] / max(tally_by_x.get(x, (0, 1))[1], 1)),
+    )
+    retarget = ranked_xs[:2]
+
+    extra_k = config.k_trials * 3
+    for x in retarget:
+        if budget.remaining <= 0:
+            break
+        k = min(extra_k, budget.remaining)
+        if k <= 0:
+            break
+        passed = _probe_point(
+            evaluator,
+            config.baseline,
+            spec.name,
+            x,
+            k,
+            budget,
+            on_record,
+            tally_sink=tallies,
+        )
+        # Replace the old single-vote entry for this x with the freshly
+        # re-probed (higher-trial-count) majority outcome.
+        pts[:] = [(px, pp) for px, pp in pts if px != x]
+        pts.append((x, passed))
+
+    fit = fit_logistic(pts)
+    xs = [x for x, _ in pts]
+    lo, hi = (min(xs), max(xs)) if xs else (spec.lo, spec.hi)
+    if fit is not None and lo <= fit.midpoint <= hi and any(p for _, p in pts) and any(
+        not p for _, p in pts
+    ):
+        state.no_boundary_dims.discard(spec.name)
+        _refine_dim(evaluator, config, spec, state, budget, on_record)
+    else:
+        rate = _dim_aggregate_pass_rate(tallies)
+        state.notes.append(
+            f"weak_signal_unresolved:{spec.name}:aggregate_pass_rate={rate:.3f}"
+        )
 
 
 def _refine_dim(
@@ -332,6 +449,34 @@ def run_campaign(
                 continue
             progress(f"[explore] {spec.name}")
             _explore_dim(evaluator, config, spec, state, budget, on_record)
+
+        # Record aggregate per-dim pass rate (lab-log: the atlas needs this
+        # regardless of whether a boundary was found).
+        for spec in config.dims:
+            tallies = state.trial_tallies.get(spec.name, [])
+            state.dim_pass_rates[spec.name] = _dim_aggregate_pass_rate(tallies)
+
+        # WEAK-SIGNAL REFINEMENT: a dim with no single-level flip (marked
+        # no_boundary) but whose aggregate failure count across all its
+        # explore probes is >= 10% of total probes for that dim -- real
+        # failures spread thinly across levels rather than concentrated at
+        # one, so the normal flip-detection above is blind to it (lab-log
+        # Nano finding: 7/105 belief fails spread across explore levels,
+        # no single level's own majority vote flipped).
+        for spec in config.dims:
+            if budget.remaining <= 0:
+                break
+            if spec.name not in state.no_boundary_dims:
+                continue
+            tallies = state.trial_tallies.get(spec.name, [])
+            total_probes = sum(k for _, _, k in tallies)
+            fail_count = sum(k - p for _, p, k in tallies)
+            if total_probes > 0 and fail_count >= math.ceil(0.1 * total_probes):
+                progress(f"[weak-signal-refine] {spec.name}")
+                _weak_signal_refine_dim(evaluator, config, spec, state, budget, on_record)
+                state.dim_pass_rates[spec.name] = _dim_aggregate_pass_rate(
+                    state.trial_tallies.get(spec.name, [])
+                )
 
         # WAVES 2+: REFINE.
         for spec in config.dims:

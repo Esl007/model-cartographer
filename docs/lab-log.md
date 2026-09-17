@@ -7,6 +7,34 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-17 — PLANNED (open) — harden task generator to find Ultra's breaking points
+
+Follow-up to the Nano belief-tracking finding below and the scheduler
+sensitivity fix that shipped alongside it (weak-signal refinement path in
+`cartographer/schedule/scheduler.py`, plus the new live monitor and atlas
+viewer pages). Plan for the next model tier (Ultra):
+
+1. Raise belief difficulty ceilings past what `_belief_scheduler_config`
+   currently covers (`chain_length` 2-10, `scramble` 0-1, `coref_pressure`
+   0-5, `distractor_events` 2-20) -- chain past 10, and combine higher
+   scramble + coref + distractors simultaneously rather than sweeping one
+   dim at a time, since Super and Nano's state/belief boundaries were
+   already saturating the old ranges (see the two entries below).
+2. Add adversarial witness patterns to the generator/renderer that
+   systematically test continuity-of-observation -- the exact Nano failure
+   mode confirmed below: witness cues that place an entity at a scene and
+   then go quiet, so the model must track exactly when witnessing stopped
+   rather than over-generalizing that observation continues indefinitely
+   past the last explicit cue. Needs new witness-sentence templates (or a
+   generator flag) that deliberately end an entity's witnessed presence
+   mid-story while further unwitnessed moves happen afterward.
+3. Re-run the state + belief campaigns against Ultra with the hardened
+   generator once (1) and (2) land.
+
+Status: open -- not started, this is the plan only.
+
+---
+
 ## 2026-09-17 — FINDING (confirmed) — Nemotron Nano shows real belief-tracking failures; Super does not
 
 Ran the same state + belief campaigns on `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`

@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from cartographer.store.schema import ExperimentRecord, RenderMode, Verdict
 from cartographer.store.store import ResultsStore
-from cartographer.viewer.serve import index_html, record_html, run_html
+from cartographer.viewer.atlas import atlas_html
+from cartographer.viewer.serve import index_html, live_html, record_html, run_html
 
 
 def _seed_store(tmp_path):
@@ -149,3 +150,147 @@ def test_record_html_unknown_record_id(tmp_path):
     store, *_ = _seed_store(tmp_path)
     page = record_html(store, "not-a-real-id")
     assert "Not found" in page
+
+
+# ---------------------------------------------------------------------------
+# /live -- live campaign monitor
+# ---------------------------------------------------------------------------
+
+
+def _seed_live_store(tmp_path, run_id="camp-belief-test-001"):
+    store = ResultsStore(tmp_path / "live_test.sqlite")
+    records = []
+    times = [
+        "2026-09-17T10:00:00+00:00",
+        "2026-09-17T10:00:30+00:00",
+        "2026-09-17T10:01:00+00:00",
+    ]
+    verdicts = [Verdict.PASS, Verdict.FAIL, Verdict.PASS]
+    for i, (t, v) in enumerate(zip(times, verdicts)):
+        records.append(
+            ExperimentRecord(
+                run_id=run_id,
+                model_name="model-x",
+                latent_params={"chain_length": 4.0},
+                realized_dims={"chain_length": float(2 + i)},
+                render_mode=RenderMode.TEMPLATE,
+                task_seed=i,
+                trial_seed=i,
+                verdict=v,
+                verifier_detail="kind=belief;campaign=1",
+                tokens_in=10,
+                tokens_out=5,
+                cost_usd=0.001,
+                latency_ms=100.0,
+                finish_reason="stop",
+                created_at=t,
+            )
+        )
+    store.append_many(records)
+    return store, records
+
+
+def test_live_html_shows_progress_and_tallies(tmp_path):
+    store, records = _seed_live_store(tmp_path)
+    page = live_html(store)
+
+    assert "camp-belief-test-001" in page
+    # 3 records / 700 budget = 0.4% (rounds to 0.4)
+    assert "0.4%" in page
+    assert "PASS" in page
+    assert "FAIL" in page
+
+
+def test_live_html_newest_first_ordering(tmp_path):
+    store, records = _seed_live_store(tmp_path)
+    page = live_html(store)
+
+    # newest record's timestamp should appear before the oldest's.
+    newest_idx = page.index("2026-09-17T10:01:00")
+    oldest_idx = page.index("2026-09-17T10:00:00")
+    assert newest_idx < oldest_idx
+
+
+def test_live_html_unknown_prefix_no_crash(tmp_path):
+    store, _ = _seed_live_store(tmp_path, run_id="mystery-run-001")
+    page = live_html(store)
+
+    assert "mystery-run-001" in page
+    assert "3 records" in page
+
+
+def test_live_html_no_records_graceful(tmp_path):
+    store = ResultsStore(tmp_path / "empty_live.sqlite")
+    page = live_html(store)
+    assert "No records found" in page
+
+
+# ---------------------------------------------------------------------------
+# /atlas -- cross-model comparison
+# ---------------------------------------------------------------------------
+
+
+def _seed_atlas_store(tmp_path):
+    store = ResultsStore(tmp_path / "atlas_test.sqlite")
+    records = []
+    # Model A: passes at every chain_length level.
+    for i, cl in enumerate([2.0, 6.0, 10.0, 14.0, 18.0]):
+        records.append(
+            ExperimentRecord(
+                run_id="camp-belief-modelA-001",
+                model_name="nvidia/Model-A",
+                latent_params={"chain_length": cl},
+                realized_dims={"chain_length": cl, "scramble": 0.0},
+                render_mode=RenderMode.TEMPLATE,
+                task_seed=i,
+                trial_seed=i,
+                verdict=Verdict.PASS,
+                verifier_detail="kind=belief;campaign=1",
+                tokens_in=5,
+                tokens_out=5,
+                cost_usd=0.002,
+                latency_ms=50.0,
+                finish_reason="stop",
+            )
+        )
+    # Model B: passes at low chain_length, fails at high chain_length.
+    for i, cl in enumerate([2.0, 6.0, 10.0, 14.0, 18.0]):
+        verdict = Verdict.PASS if cl < 10.0 else Verdict.FAIL
+        records.append(
+            ExperimentRecord(
+                run_id="camp-belief-modelB-001",
+                model_name="nvidia/Model-B",
+                latent_params={"chain_length": cl},
+                realized_dims={"chain_length": cl, "scramble": 0.0},
+                render_mode=RenderMode.TEMPLATE,
+                task_seed=100 + i,
+                trial_seed=100 + i,
+                verdict=verdict,
+                verifier_detail="kind=belief;campaign=1",
+                tokens_in=5,
+                tokens_out=5,
+                cost_usd=0.003,
+                finish_reason="stop",
+                latency_ms=50.0,
+            )
+        )
+    store.append_many(records)
+    return store, records
+
+
+def test_atlas_html_shows_models_svg_and_summary(tmp_path):
+    store, records = _seed_atlas_store(tmp_path)
+    page = atlas_html(store)
+
+    assert "Model-A" in page
+    assert "Model-B" in page
+    assert "<svg" in page
+    # summary table rows: 100% pass rate for A, 40% for B (2/5 pass: cl<10)
+    assert "100.0%" in page
+    assert "40.0%" in page
+
+
+def test_atlas_html_empty_db_graceful(tmp_path):
+    store = ResultsStore(tmp_path / "empty_atlas.sqlite")
+    page = atlas_html(store)
+    assert "No campaign data" in page

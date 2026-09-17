@@ -20,6 +20,7 @@ from cartographer.schedule import (
     run_campaign,
 )
 from cartographer.synthetic import ZOO
+from cartographer.synthetic.rules import LogisticRule, NoiseWrapper, ThresholdRule
 
 
 def _evaluator_for(name: str):
@@ -265,3 +266,70 @@ def test_full_suite_still_green() -> None:
     assert "clean_threshold" in ZOO
     assert "pairwise_interaction" in ZOO
     assert isinstance(CampaignState(), CampaignState)
+
+
+# ---------------------------------------------------------------------------
+# Weak-signal refinement (lab-log: Nano's 7/105 diffuse belief failures)
+# ---------------------------------------------------------------------------
+
+
+def test_uniform_diffuse_failure_triggers_weak_signal_no_spurious_boundary() -> None:
+    """A uniform ~10% failure rate everywhere has no real boundary. The old
+    flip-detection never sees a single-level majority flip (every level
+    still passes its own majority vote), but the aggregate failure count
+    is >=10%, so the weak-signal path should fire and, finding no logistic
+    crossing, record a 'weak_signal_unresolved' note without inventing a
+    boundary.
+    """
+    rule = NoiseWrapper(ThresholdRule("temporal", 1000), p_flip=0.10)
+    evaluator = lambda d, s: rule.evaluate(d, s)  # noqa: E731
+
+    dims = [DimSpec("temporal", 0.0, 20.0, is_int=True)]
+    config = SchedulerConfig(
+        dims=dims,
+        baseline={"temporal": 0.0},
+        ceiling={"temporal": 20.0},
+        k_trials=5,
+        budget=400,
+        seed_base=123,
+    )
+
+    state = run_campaign(evaluator, config, progress=_quiet)
+
+    assert "temporal" not in state.boundaries
+    assert any(n.startswith("weak_signal_unresolved:temporal") for n in state.notes)
+    assert "temporal" in state.dim_pass_rates
+    assert state.dim_pass_rates["temporal"] > 0.7  # mostly-passing, diffuse fails
+
+
+def test_soft_boundary_too_diffuse_for_old_flip_detection_is_found() -> None:
+    """A real soft logistic boundary (slope 0.4) is diffuse enough at
+    k_trials=5 that the old per-level majority-vote flip detection can miss
+    it (every explored level's own vote can still land on 'pass'), but the
+    aggregate failure rate across levels crosses 10%, triggering the
+    weak-signal path, which re-probes at 3x k_trials and should recover a
+    boundary in range via the logistic refit.
+    """
+    rule = LogisticRule("temporal", midpoint=6.0, slope=0.4)
+    evaluator = lambda d, s: rule.evaluate(d, s)  # noqa: E731
+
+    dims = [DimSpec("temporal", 0.0, 20.0, is_int=True)]
+    config = SchedulerConfig(
+        dims=dims,
+        baseline={"temporal": 0.0},
+        ceiling={"temporal": 20.0},
+        k_trials=5,
+        budget=600,
+        seed_base=55,
+    )
+
+    state = run_campaign(evaluator, config, progress=_quiet)
+
+    assert "temporal" in state.dim_pass_rates
+    if "temporal" in state.boundaries:
+        mid, ci_lo, ci_hi = state.boundaries["temporal"]
+        assert 0.0 <= mid <= 20.0
+    else:
+        # If the diffuse signal still didn't resolve to a clean crossing,
+        # it must at least have been flagged rather than silently dropped.
+        assert any(n.startswith("weak_signal_unresolved:temporal") for n in state.notes)

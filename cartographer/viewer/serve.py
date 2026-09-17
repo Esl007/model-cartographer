@@ -13,14 +13,24 @@ from __future__ import annotations
 
 import html
 import sys
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlsplit
 
 from ..store.schema import ExperimentRecord
 from ..store.store import ResultsStore
+from .atlas import atlas_html
 
 _DEFAULT_DB_PATH = "results/pilot.sqlite"
 _DEFAULT_PORT = 8788
+
+# run_id prefix -> known campaign budget (total scheduler trial budget),
+# used only to render a progress bar on /live. Unknown prefixes fall back
+# to "?" (bar hidden, raw count still shown).
+_KNOWN_RUN_BUDGETS = {
+    "camp-state-": 160,
+    "camp-belief-": 700,
+}
 
 _CSS = """
 body { font-family: -apple-system, Helvetica, Arial, sans-serif; margin: 2rem; color: #1a1a1a; background: #fafafa; }
@@ -43,9 +53,11 @@ nav { margin-bottom: 1rem; }
 _VERDICT_CLASS_FALLBACK = "meta"
 
 
-def _page(title: str, body: str) -> str:
+def _page(title: str, body: str, refresh: bool = False) -> str:
+    refresh_tag = '<meta http-equiv="refresh" content="5">' if refresh else ""
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
+        f"{refresh_tag}"
         f"<title>{html.escape(title)}</title><style>{_CSS}</style></head>"
         f"<body>{body}</body></html>"
     )
@@ -105,8 +117,123 @@ def index_html(store: ResultsStore) -> str:
         + "".join(rows_html)
         + "</tbody></table>"
     )
-    body = f"<h1>Model Cartographer -- results viewer</h1>{table}"
+    body = (
+        "<h1>Model Cartographer -- results viewer</h1>"
+        '<p><a href="/live">Live campaign monitor</a> &middot; '
+        '<a href="/atlas">Cross-model atlas</a></p>'
+        f"{table}"
+    )
     return _page("Model Cartographer results", body)
+
+
+def _budget_for_run(run_id: str) -> int | None:
+    for prefix, budget in _KNOWN_RUN_BUDGETS.items():
+        if run_id.startswith(prefix):
+            return budget
+    return None
+
+
+def _parse_created_at(created_at: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(created_at)
+    except (TypeError, ValueError):
+        return None
+
+
+def _config_summary(realized_dims: dict) -> str:
+    if not realized_dims:
+        return "-"
+    parts = [f"{k}={v}" for k, v in sorted(realized_dims.items())]
+    return ", ".join(parts)
+
+
+def live_html(store: ResultsStore) -> str:
+    """Live monitor for the most-recently-created campaign run (by max
+    `created_at` across all records) -- progress bar, tallies, and the last
+    15 records newest-first. Pure function over the store; auto-refreshes
+    via a `<meta http-equiv="refresh">` tag so no JS is needed.
+    """
+    cur = store._conn.execute(
+        "SELECT run_id FROM experiments ORDER BY created_at DESC, record_id DESC LIMIT 1"
+    )
+    row = cur.fetchone()
+    if row is None:
+        body = (
+            '<nav><a href="/">&larr; runs</a></nav>'
+            "<h1>Live campaign monitor</h1><p>No records found.</p>"
+        )
+        return _page("Live campaign monitor", body, refresh=True)
+
+    run_id = row["run_id"]
+    safe_run_id = html.escape(run_id)
+    records = store.by_run(run_id)
+
+    total = len(records)
+    passn = sum(1 for r in records if r.verdict.name == "PASS")
+    failn = sum(1 for r in records if r.verdict.name == "FAIL")
+    errn = sum(1 for r in records if r.verdict.name == "ERROR")
+    pass_rate = (passn / total * 100.0) if total else 0.0
+    total_cost = sum(r.cost_usd for r in records)
+
+    timestamps = [t for t in (_parse_created_at(r.created_at) for r in records) if t is not None]
+    if len(timestamps) >= 2:
+        elapsed_s = max((max(timestamps) - min(timestamps)).total_seconds(), 0.0)
+    else:
+        elapsed_s = 0.0
+    rate_per_min = (total / (elapsed_s / 60.0)) if elapsed_s > 0 else 0.0
+
+    budget = _budget_for_run(run_id)
+    if budget is not None and budget > 0:
+        pct = min(total / budget * 100.0, 100.0)
+        remaining = max(budget - total, 0)
+        eta_min = (remaining / rate_per_min) if rate_per_min > 0 else None
+        eta_str = f"{eta_min:.1f} min" if eta_min is not None else "?"
+        bar_html = (
+            f'<div style="border:1px solid #999;background:#eee;width:100%;height:1.5rem;'
+            f'border-radius:4px;overflow:hidden;">'
+            f'<div style="background:#2554a8;height:100%;width:{pct:.1f}%;"></div></div>'
+            f'<p class="meta">{total} / {budget} records ({pct:.1f}%) &middot; ETA: {eta_str}</p>'
+        )
+    else:
+        bar_html = f'<p class="meta">{total} records (budget unknown for this run_id)</p>'
+
+    tallies_html = (
+        "<ul>"
+        f"<li>PASS: {passn}</li>"
+        f"<li>FAIL: {failn}</li>"
+        f"<li>ERROR: {errn}</li>"
+        f"<li>Pass rate: {pass_rate:.1f}%</li>"
+        f"<li>Total cost: ${total_cost:.6f}</li>"
+        f"<li>Elapsed: {elapsed_s:.1f} s</li>"
+        f"<li>Rate: {rate_per_min:.2f} records/min</li>"
+        "</ul>"
+    )
+
+    recent = list(reversed(records))[:15]
+    rows_html = []
+    for r in recent:
+        rows_html.append(
+            "<tr>"
+            f"<td>{html.escape(r.created_at or '-')}</td>"
+            f"<td>{_verdict_span(r.verdict.name)}</td>"
+            f"<td>{html.escape(_config_summary(r.realized_dims))}</td>"
+            "</tr>"
+        )
+    recent_table = (
+        "<table><thead><tr><th>time</th><th>verdict</th><th>config</th></tr></thead>"
+        "<tbody>" + "".join(rows_html) + "</tbody></table>"
+    )
+
+    body = f"""
+    <nav><a href="/">&larr; runs</a> | <a href="/run/{safe_run_id}">full run detail</a></nav>
+    <h1>Live: {safe_run_id}</h1>
+    {bar_html}
+    <h2>Tallies</h2>
+    {tallies_html}
+    <h2>Last 15 records (newest first)</h2>
+    {recent_table}
+    """
+    return _page(f"Live: {run_id}", body, refresh=True)
 
 
 def run_html(store: ResultsStore, run_id: str) -> str:
@@ -235,6 +362,14 @@ class _ViewerHandler(BaseHTTPRequestHandler):
 
         if path == "/":
             self._send_html(index_html(self.store))
+            return
+
+        if path == "/live":
+            self._send_html(live_html(self.store))
+            return
+
+        if path == "/atlas":
+            self._send_html(atlas_html(self.store))
             return
 
         if path.startswith("/run/"):
