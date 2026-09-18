@@ -65,6 +65,74 @@ CAMPAIGN_PRESETS: dict[str, dict[str, float]] = {
     "adversarial_belief": {"budget": 300, "cost_cap": 1.0},
 }
 
+# Plain-English description of every campaign preset, sourced from the
+# run_* docstrings in cartographer/exec/evaluator.py and docs/lab-log.md.
+# Shown on /launch so a first-time visitor can tell what each preset does
+# without reading source. `new` marks presets recently added that a
+# returning user might not know about yet.
+CAMPAIGN_DESCRIPTIONS: dict[str, dict[str, object]] = {
+    "state": {
+        "query_kind": "state",
+        "summary": (
+            "Sweeps chain_length from 2 to 30 -- pure multi-step object-state "
+            "tracking, no perspective involved. Both Nemotron tiers pass this "
+            "cleanly even at 30-step chains; it hasn't found a boundary yet."
+        ),
+        "typical_cost": "~$0.005-0.015",
+        "typical_duration": "a few minutes",
+        "new": False,
+    },
+    "belief": {
+        "query_kind": "belief",
+        "summary": (
+            "Sweeps chain_length, scramble, coref_pressure, and "
+            "distractor_events (plus witness_cutoff) at once -- theory-of-mind "
+            "false-belief tracking. This is the dimension where real capability "
+            "gaps have shown up (Nano's continuity-of-observation error)."
+        ),
+        "typical_cost": "~$0.03-0.09",
+        "typical_duration": "10-30 minutes",
+        "new": False,
+    },
+    "order": {
+        "query_kind": "order",
+        "summary": (
+            "Sweeps chain_length, scramble, distractor_events, and "
+            "filler_events -- tests recovering true chronology when narration "
+            "order is scrambled relative to real event timestamps."
+        ),
+        "typical_cost": "~$0.01-0.03",
+        "typical_duration": "5-15 minutes",
+        "new": False,
+    },
+    "breaking_point": {
+        "query_kind": "belief (default)",
+        "summary": (
+            "Escalation mode: walks a single ray through the FULL joint "
+            "difficulty space (all six dims at once, base to generator ceiling), "
+            "bisects to find where the model actually breaks, then hands the "
+            "frontier to decomposition and fresh-seed confirmation."
+        ),
+        "typical_cost": "~$0.05-0.15",
+        "typical_duration": "15-40 minutes",
+        "new": False,
+    },
+    "adversarial_belief": {
+        "query_kind": "belief",
+        "summary": (
+            "Foil-driven trap selection -- picks worlds where plausible-but-"
+            "wrong answers compete with the truth; broke Ultra where "
+            "max-difficulty escalation couldn't. At every config point "
+            "(including baseline), the world used is the winner of an "
+            "adversarial seed search over that config, not just whatever the "
+            "derived task seed happens to produce."
+        ),
+        "typical_cost": "~$0.02-0.06",
+        "typical_duration": "10-25 minutes",
+        "new": True,
+    },
+}
+
 _RUNNERS: dict[str, Callable] = {
     "state": run_state_campaign,
     "belief": run_belief_campaign,
@@ -153,10 +221,40 @@ def _provider_options(selected: str = "nebius") -> str:
     )
 
 
+def _preset_cards_html(campaign_types: list[str] | None = None) -> str:
+    """Plain-English description card per campaign preset, in
+    CAMPAIGN_PRESETS iteration order (alphabetical) unless a caller
+    supplies an explicit order. Each card names its query kind, a
+    one-sentence description of what it tests, typical cost, and typical
+    duration -- and a NEW badge for recently added presets."""
+    types = campaign_types or sorted(CAMPAIGN_PRESETS)
+    cards = []
+    for t in types:
+        desc = CAMPAIGN_DESCRIPTIONS.get(t, {})
+        preset = CAMPAIGN_PRESETS[t]
+        badge = ' <span class="pill pill-PASS">NEW</span>' if desc.get("new") else ""
+        cards.append(
+            '<div class="stat-box">'
+            f'<p style="margin:0 0 0.3rem;"><strong class="mono">{html.escape(t)}</strong>{badge}'
+            f' <span class="meta">&middot; query kind: {html.escape(str(desc.get("query_kind", "-")))}</span></p>'
+            f'<p class="meta" style="margin:0 0 0.4rem;">{html.escape(str(desc.get("summary", "")))}</p>'
+            f'<p class="meta" style="margin:0;">budget {int(preset["budget"])} trials &middot; '
+            f'cap ${preset["cost_cap"]} &middot; typical cost {html.escape(str(desc.get("typical_cost", "-")))} '
+            f'&middot; typical duration {html.escape(str(desc.get("typical_duration", "-")))}</p>'
+            "</div>"
+        )
+    return f'<div class="stat-grid" style="grid-template-columns: 1fr;">{"".join(cards)}</div>'
+
+
 def launch_form_html() -> str:
-    """Step 1: provider + key form."""
+    """Step 1: provider + key form, plus a description card for every
+    campaign preset so a first-time visitor can see what's available
+    (including adversarial_belief, the newest mode) before even loading
+    models."""
     return f"""
     <h1>Launch a campaign</h1>
+    <p class="meta">Pick a provider, load its models, then choose one of the
+    campaign presets described below.</p>
     <form method="post" action="/launch">
       <input type="hidden" name="step" value="models">
       <p><label>Provider:
@@ -166,6 +264,8 @@ def launch_form_html() -> str:
         <span class="meta">leave empty to use env/ key file</span></p>
       <p><button type="submit">Load models</button></p>
     </form>
+    <h2>Campaign presets</h2>
+    {_preset_cards_html()}
     """
 
 
@@ -195,21 +295,16 @@ def models_step_html(provider_name: str, token: str, models: list[str]) -> str:
     type_opts = "".join(
         f'<option value="{t}">{t}</option>' for t in sorted(CAMPAIGN_PRESETS)
     )
-    presets = {t: CAMPAIGN_PRESETS[t] for t in CAMPAIGN_PRESETS}
-    default = presets["state"]
-    preset_note = " &middot; ".join(
-        f"{t}: budget {int(p['budget'])}, cap ${p['cost_cap']}" for t, p in presets.items()
-    )
+    default = CAMPAIGN_PRESETS["state"]
     return f"""
     <p><a href="/launch">&larr; start over</a></p>
     <h1>Launch a campaign &mdash; {html.escape(provider_name)}</h1>
-    <p class="meta">{len(models)} chat-capable models found.</p>
+    <p class="meta">{len(models)} chat-capable models found. Pick a model and a campaign type below.</p>
     <form method="post" action="/launch">
       <input type="hidden" name="step" value="start">
       <input type="hidden" name="token" value="{html.escape(token)}">
       <p><label>Model: <select name="model">{model_opts}</select></label></p>
-      <p><label>Campaign type: <select name="campaign_type">{type_opts}</select></label><br>
-         <span class="meta">presets &mdash; {preset_note}</span></p>
+      <p><label>Campaign type: <select name="campaign_type">{type_opts}</select></label></p>
       <p><label>Budget (trials): <input name="budget" value="{int(default['budget'])}"></label></p>
       <p><label>Cost cap (USD): <input name="cost_cap" value="{default['cost_cap']}"></label></p>
       <p><label>Advanced: max tokens <input name="max_tokens" value=""></label><br>
@@ -217,6 +312,8 @@ def models_step_html(provider_name: str, token: str, models: list[str]) -> str:
          models get a bigger budget automatically)</span></p>
       <p><button type="submit">Launch</button></p>
     </form>
+    <h2>What each campaign type tests</h2>
+    {_preset_cards_html()}
     """
 
 

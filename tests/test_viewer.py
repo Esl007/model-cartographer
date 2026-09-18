@@ -21,6 +21,7 @@ from cartographer.viewer.serve import (
     live_html,
     record_html,
     run_html,
+    runs_html,
 )
 
 
@@ -93,9 +94,9 @@ def _seed_store(tmp_path):
     return store, r1, r2, r3
 
 
-def test_index_html_shows_verdict_tallies(tmp_path):
+def test_runs_html_shows_verdict_tallies(tmp_path):
     store, r1, r2, r3 = _seed_store(tmp_path)
-    page = index_html(store)
+    page = runs_html(store)
 
     assert "run-a" in page
     assert '<a href="/run/run-a">run-a</a>' in page
@@ -103,6 +104,20 @@ def test_index_html_shows_verdict_tallies(tmp_path):
     # the redesigned table's single "pass rate" pill: 1/3 = 33%)
     assert ">3<" in page
     assert "33%" in page
+
+
+def test_index_html_overview_shows_summary_and_quick_links(tmp_path):
+    store, r1, r2, r3 = _seed_store(tmp_path)
+    page = index_html(store)
+
+    # plain-English description + live summary cards
+    assert "Overview" in page
+    assert "Total trials" in page
+    assert "Total spend" in page
+    assert ">3<" in page  # total trials count
+    # quick links to every other section
+    for href in ("/findings", "/coverage", "/runs", "/live", "/atlas", "/launch"):
+        assert f'href="{href}"' in page
 
 
 def test_run_html_lists_records_with_links(tmp_path):
@@ -557,3 +572,98 @@ def test_current_run_never_leaks_cancel_event():
         assert "cancel_event" not in run
     finally:
         launch_mod._reset_for_tests()
+
+
+# ---------------------------------------------------------------------------
+# Information-architecture redesign: persistent nav, /findings, /coverage,
+# /runs split out of the old index, and trap kinds surfaced on run/record
+# detail pages.
+# ---------------------------------------------------------------------------
+
+_NAV_LABELS = ["Overview", "Findings", "Coverage", "Runs", "Live", "Atlas", "Launch"]
+
+
+def test_nav_present_on_every_page(tmp_path):
+    from cartographer.viewer.coverage import coverage_html
+    from cartographer.viewer.findings import findings_html
+
+    store, r1, r2, r3 = _seed_store(tmp_path)
+    pages = [
+        index_html(store),
+        runs_html(store),
+        findings_html(),
+        coverage_html(),
+        run_html(store, "run-a"),
+        record_html(store, r1.record_id),
+        live_html(store),
+        atlas_html(store),
+    ]
+    for page in pages:
+        for label in _NAV_LABELS:
+            assert label in page
+
+
+def test_findings_page_lists_the_four_modes(tmp_path):
+    from cartographer.viewer.findings import findings_html
+
+    page = findings_html()
+    assert "Findings" in page
+    # belief -> reality collapse (witness-rendering bug, now corrected)
+    assert "collapse" in page.lower()
+    # Nano continuity-of-observation
+    assert "continuity" in page.lower() and "Nano" in page
+    # Ultra protagonist-continuity pronoun bias
+    assert "pronoun" in page.lower() and "Ultra" in page
+    # Ultra abstention under trap pressure
+    assert "abstention" in page.lower() or "abstain" in page.lower()
+    assert "needs-replication" in page.lower() or "needs replication" in page.lower()
+    # strategic result: escalation failed, trap-selection succeeded
+    assert "trap" in page.lower()
+    # retractions kept, collapsed
+    assert "Retractions" in page
+    assert "RETRACTED" in page
+
+
+def test_coverage_page_lists_dims_and_foils():
+    from cartographer.viewer.coverage import coverage_html
+
+    page = coverage_html()
+    assert "Coverage" in page
+    for dim in (
+        "chain_length", "scramble", "coref_pressure",
+        "distractor_events", "filler_events", "witness_cutoff",
+    ):
+        assert dim in page
+    for foil in (
+        "final_true_state", "last_mentioned_location", "last_witnessed_by_anyone",
+        "query_agent_own_last_move", "most_frequent_location",
+    ):
+        assert foil in page
+    assert "Not yet covered" in page
+
+
+def test_run_html_shows_trap_kinds_for_adversarial_records(tmp_path):
+    store = ResultsStore(tmp_path / "adv.sqlite")
+    rec = ExperimentRecord(
+        run_id="camp-adversarial_belief-modelx-001",
+        model_name="model-x",
+        latent_params={"chain_length": 2.0},
+        realized_dims={"chain_length": 2.0},
+        render_mode=RenderMode.TEMPLATE,
+        task_seed=1,
+        trial_seed=1,
+        verdict=Verdict.FAIL,
+        verifier_detail="kind=belief;campaign=1;adversarial=1;traps=final_true_state,last_mentioned_location",
+        tokens_in=5,
+        tokens_out=5,
+        cost_usd=0.001,
+        latency_ms=50.0,
+        finish_reason="stop",
+    )
+    store.append_many([rec])
+    page = run_html(store, rec.run_id)
+    assert "final_true_state" in page
+    assert "last_mentioned_location" in page
+
+    record_page = record_html(store, rec.record_id)
+    assert "final_true_state" in record_page

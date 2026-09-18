@@ -435,7 +435,11 @@ def test_adversarial_belief_option_appears_in_models_step_form(tmp_path):
     deps = _deps(tmp_path)
     page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, deps)
     assert 'value="adversarial_belief"' in page
-    assert "adversarial_belief: budget 300, cap $1.0" in page
+    assert "budget 300 trials" in page
+    assert "cap $1.0" in page
+    # plain-English description + NEW badge for the recently added preset
+    assert "foil-driven trap selection" in page.lower()
+    assert "NEW" in page
 
 
 def test_adversarial_belief_dispatches_through_start(tmp_path):

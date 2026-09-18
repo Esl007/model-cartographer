@@ -24,6 +24,8 @@ from ..store.schema import ExperimentRecord
 from ..store.store import ResultsStore
 from . import launch as launch_mod
 from .atlas import atlas_html
+from .coverage import coverage_html
+from .findings import findings_html
 
 _DEFAULT_DB_PATH = "results/pilot.sqlite"
 _DEFAULT_PORT = 8788
@@ -43,7 +45,10 @@ _KNOWN_RUN_BUDGETS = {
 # ---------------------------------------------------------------------------
 
 _NAV_ITEMS = [
-    ("runs", "/", "Runs"),
+    ("overview", "/", "Overview"),
+    ("findings", "/findings", "Findings"),
+    ("coverage", "/coverage", "Coverage"),
+    ("runs", "/runs", "Runs"),
     ("live", "/live", "Live"),
     ("atlas", "/atlas", "Atlas"),
     ("launch", "/launch", "Launch"),
@@ -259,7 +264,7 @@ def _relative_time(ts: datetime | None) -> str:
     return f"{int(age_s // 86400)}d ago"
 
 
-def index_html(store: ResultsStore) -> str:
+def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
     cur = store._conn.execute(
         "SELECT run_id, model_name, verdict, cost_usd, created_at FROM experiments"
     )
@@ -288,7 +293,6 @@ def index_html(store: ResultsStore) -> str:
         counts = agg["counts"]
         total = sum(counts.values())
         passn = counts.get("PASS", 0)
-        failn = counts.get("FAIL", 0) + counts.get("ERROR", 0)
         pass_rate = (passn / total * 100.0) if total else 0.0
         newest = None
         if agg["created_ats"]:
@@ -297,8 +301,6 @@ def index_html(store: ResultsStore) -> str:
             newest is not None and _age_seconds(newest) <= _COMPLETE_AFTER_S
         )
         status = "live" if is_live else "complete"
-        detail = _parse_verifier_detail(None)  # placeholder for kind lookup below
-        kind = "-"
         safe_run_id = html.escape(run_id)
         model_short = html.escape(_short_model(agg["model"]))
         rows_html.append(
@@ -312,14 +314,123 @@ def index_html(store: ResultsStore) -> str:
             f"<td>{status}</td>"
             "</tr>"
         )
+    return rows_html, by_run
 
+
+def runs_html(store: ResultsStore) -> str:
+    """The raw per-run table (formerly the home page)."""
+    rows_html, _ = _runs_table_rows(store)
     table = (
         "<table><thead><tr><th>run_id</th><th>model</th><th>records</th>"
         "<th>pass rate</th><th>cost</th><th>started</th><th>status</th>"
         "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
-    body = f"<h1>Runs</h1>{table}"
-    return _shell("Model Cartographer results", "runs", body)
+    body = (
+        "<h1>Runs</h1>"
+        '<p class="meta">Every campaign/pilot run recorded in this store, one row each. '
+        'Click a run_id for its per-trial record table.</p>'
+        f"{table}"
+    )
+    return _shell("Runs", "runs", body)
+
+
+_QUICK_LINKS = [
+    ("/findings", "Findings", "The capability map -- confirmed failure modes, mechanisms, and evidence."),
+    ("/coverage", "Coverage", "What we test (query kinds, difficulty dims, foil traps) and what we don't."),
+    ("/runs", "Runs", "Raw table of every campaign/pilot run recorded in this store."),
+    ("/live", "Live", "Watch an in-progress campaign's trials come in, with ETA."),
+    ("/atlas", "Atlas", "Cross-model pass-rate charts per query kind and dimension."),
+    ("/launch", "Launch", "Start a new campaign against a model from the browser."),
+]
+
+
+def index_html(store: ResultsStore) -> str:
+    """Overview dashboard: what this instrument does, three summary cards
+    computed live from the store, and quick links into the rest of the
+    site. The raw per-run table lives at /runs.
+    """
+    cur = store._conn.execute("SELECT verdict, cost_usd, verifier_detail, model_name FROM experiments")
+    rows = cur.fetchall()
+
+    total_trials = len(rows)
+    total_spend = sum(r["cost_usd"] or 0.0 for r in rows)
+
+    by_model_kind: dict[tuple[str, str], dict[str, int]] = {}
+    for r in rows:
+        kind = _query_kind_from_detail(r["verifier_detail"])
+        model = _short_model(r["model_name"])
+        agg = by_model_kind.setdefault((model, kind), {"n": 0, "pass": 0})
+        agg["n"] += 1
+        if r["verdict"] == "PASS":
+            agg["pass"] += 1
+
+    model_kind_rows = "".join(
+        f'<tr><td class="mono">{html.escape(model)}</td><td>{html.escape(kind)}</td>'
+        f'<td>{agg["pass"]}/{agg["n"]}</td>'
+        f'<td>{(agg["pass"] / agg["n"] * 100.0 if agg["n"] else 0.0):.0f}%</td></tr>'
+        for (model, kind), agg in sorted(by_model_kind.items())
+        if kind != "-"
+    )
+    model_kind_table = (
+        "<table><thead><tr><th>model</th><th>query kind</th><th>pass/total</th>"
+        "<th>rate</th></tr></thead><tbody>"
+        + (model_kind_rows or '<tr><td colspan="4" class="meta">No trials recorded yet.</td></tr>')
+        + "</tbody></table>"
+    )
+
+    findings_summary = "".join(
+        f"<li>{html.escape(f.name)} <span class=\"meta\">({html.escape(f.status)})</span></li>"
+        for f in _confirmed_findings_preview()
+    )
+
+    body = f"""
+    <h1>Overview</h1>
+    <p class="meta">This is the home page: what the instrument does, what
+    it has found so far, and where to go next.</p>
+
+    <p>Model Cartographer generates synthetic story worlds with a known
+    ground truth, asks a model questions about object state, belief, and
+    event order at controlled difficulty, and records every trial so
+    capability boundaries and failure modes can be mapped and audited.</p>
+
+    <div class="stat-grid">
+      <div class="stat-box" style="grid-column: span 2;">
+        <p style="margin:0 0 0.4rem;"><strong>Models tested &middot; pass rates by query kind</strong></p>
+        {model_kind_table}
+      </div>
+      <div class="stat-box" style="grid-column: span 1;">
+        <p style="margin:0 0 0.4rem;"><strong>Confirmed failure modes</strong></p>
+        <ul style="margin:0; padding-left: 1.1rem;">{findings_summary or '<li class="meta">none yet</li>'}</ul>
+        <p class="meta" style="margin-top:0.5rem;"><a href="/findings">full capability map &rarr;</a></p>
+      </div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-box"><div class="stat-num">{total_trials}</div><div class="stat-label">Total trials</div></div>
+      <div class="stat-box"><div class="stat-num">${total_spend:.4f}</div><div class="stat-label">Total spend</div></div>
+    </div>
+
+    <h2>Where to go</h2>
+    <div class="stat-grid">
+      {"".join(
+          f'<div class="stat-box"><p style="margin:0 0 0.3rem;"><a href="{href}"><strong>{html.escape(label)}</strong></a></p>'
+          f'<p class="meta" style="margin:0;">{html.escape(desc)}</p></div>'
+          for href, label, desc in _QUICK_LINKS
+      )}
+    </div>
+    """
+    return _shell("Model Cartographer", "overview", body)
+
+
+def _query_kind_from_detail(detail: str | None) -> str:
+    parsed = _parse_verifier_detail(detail)
+    return parsed.get("kind", "-")
+
+
+def _confirmed_findings_preview():
+    from .findings import FINDINGS
+
+    return [f for f in FINDINGS if f.status == "confirmed"][:4]
 
 
 def _short_model(model_name: str) -> str:
@@ -555,6 +666,7 @@ def live_html(store: ResultsStore) -> str:
     is_active_run = active is not None and run_id == active["run_id"]
     body = f"""
     <h1>Live: {safe_run_id}</h1>
+    <p class="meta">Auto-refreshing monitor for an in-progress (or just-finished) campaign run.</p>
     <p><a href="/run/{safe_run_id}">full run detail &rarr;</a></p>
     {bar_html}
     {_stop_button_html(is_active_run, stopping)}
@@ -580,15 +692,17 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         kind = detail.get("kind", "-")
         # difficulty is not always encoded in verifier_detail; fall back to "-".
         difficulty = detail.get("difficulty", "-")
+        traps = detail.get("traps", "")
+        traps_html = f' <span class="meta mono">traps={html.escape(traps)}</span>' if traps else ""
         rows_html.append(
             "<tr>"
             f'<td class="mono">{html.escape(r.model_name)}</td>'
             f"<td>{_verdict_pill(r.verdict.name)}</td>"
-            f"<td>{html.escape(kind)}</td>"
+            f"<td>{html.escape(kind)}{traps_html}</td>"
             f"<td>{html.escape(difficulty)}</td>"
             f'<td class="mono">{r.cost_usd:.6f}</td>'
             f'<td class="mono">{r.tokens_in}/{r.tokens_out}</td>'
-            f'<td><a href="/record/{html.escape(r.record_id)}">detail</a></td>'
+            f'<td><a href="/record/{html.escape(r.record_id)}">full transcript &rarr;</a></td>'
             "</tr>"
         )
 
@@ -597,7 +711,15 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         "<th>difficulty</th><th>cost ($)</th><th>tokens in/out</th><th></th>"
         "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
-    body = f"<h1>Run {safe_run_id}</h1>{table}"
+    body = (
+        f"<h1>Run {safe_run_id}</h1>"
+        '<p class="meta">Every trial recorded for this run. Click "full transcript" '
+        "for the prompt, model reasoning, response, verdict, answer key, and "
+        "(for adversarial runs) the trap kind(s) the world was seeded to test.</p>"
+        f'<p><a href="/live?run={safe_run_id}">watch live &rarr;</a> &middot; '
+        f'<a href="/atlas">compare across models &rarr;</a></p>'
+        f"{table}"
+    )
     return _shell(f"Run {run_id}", "runs", body)
 
 
@@ -644,9 +766,18 @@ def record_html(store: ResultsStore, record_id: str) -> str:
     except KeyError:
         lineage_links = "(lineage unavailable)"
 
+    detail = _parse_verifier_detail(record.verifier_detail)
+    traps = detail.get("traps", "")
+    trap_line = (
+        f'<p class="meta">trap kind(s) this world was seeded for: <span class="mono">{html.escape(traps)}</span></p>'
+        if traps
+        else ""
+    )
+
     body = f"""
     <p><a href="/run/{html.escape(record.run_id)}">&larr; run {html.escape(record.run_id)}</a></p>
     <h1>Record {safe_record_id}</h1>
+    <p class="meta">Full transcript for one trial: prompt, model reasoning, response, verdict, and provenance.</p>
     <p class="meta">
       model: <span class="mono">{html.escape(record.model_name)}</span> &middot;
       verdict: {_verdict_pill(record.verdict.name)} &middot;
@@ -656,6 +787,7 @@ def record_html(store: ResultsStore, record_id: str) -> str:
       latency: <span class="mono">{record.latency_ms:.1f} ms</span>
     </p>
     <p class="meta">verifier_detail: <span class="mono">{html.escape(record.verifier_detail or "-")}</span></p>
+    {trap_line}
     <p class="meta">lineage: {lineage_links}</p>
 
     <h2>Prompt</h2>
@@ -693,6 +825,18 @@ class _ViewerHandler(BaseHTTPRequestHandler):
 
         if path == "/":
             self._send_html(index_html(self.store))
+            return
+
+        if path == "/runs":
+            self._send_html(runs_html(self.store))
+            return
+
+        if path == "/findings":
+            self._send_html(findings_html())
+            return
+
+        if path == "/coverage":
+            self._send_html(coverage_html())
             return
 
         if path == "/live":

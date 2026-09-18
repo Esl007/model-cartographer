@@ -7,6 +7,72 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-18 — BUILD (confirmed) — viewer information-architecture redesign
+
+**What we saw (user feedback, verbatim):** "The UI and UX is shitty. I
+don't know shit to navigate this and I can't find all the information.
+You're saying to run the new mode but don't know where exactly it is."
+The viewer had grown as a debug console: home page was a raw runs table,
+`/launch` listed campaign presets as bare dropdown values with no
+explanation, and there was no page anywhere that summarized what the
+instrument had actually found — including the project's own owner
+couldn't locate `adversarial_belief` (the newest campaign preset) or its
+significance.
+
+**Fix (viewer redesign, `cartographer/viewer/**`):**
+- `/` is now an overview dashboard: one-paragraph plain-English
+  description of the instrument, a live "models tested x pass rate per
+  query kind" card, a "confirmed failure modes" preview linking to
+  `/findings`, total-trials/total-spend stat boxes, and quick links with
+  one-line descriptions to every other section. The old raw runs table
+  moved to `/runs` (`runs_html`, still linked from the nav).
+- `/launch` now renders a description card for every campaign preset
+  (query kind, one-sentence summary, typical cost, typical duration)
+  instead of a one-line budget/cap note, on both the pre-model-load and
+  post-model-load steps. `adversarial_belief` gets a NEW badge and the
+  description "foil-driven trap selection — picks worlds where
+  plausible-but-wrong answers compete with the truth; broke Ultra where
+  max-difficulty escalation couldn't" (`launch.py::CAMPAIGN_DESCRIPTIONS`).
+- New `/findings` page (`findings.py`): hard-coded, dated, run_id-tagged
+  capability map sourced from this log — belief→reality collapse
+  (corrected post-witness-fix), Nano continuity-of-observation,
+  witness_cutoff generalization, Ultra protagonist-continuity pronoun
+  bias (6/6 ablation separation), Ultra abstention-under-trap-pressure
+  (marked needs-replication), and the strategic escalation-vs-trap-
+  selection result. A collapsed "Retractions" section keeps the
+  pre-witness-fix "Nemotron Super has an intrinsic false-belief floor"
+  claim visible with its root cause, instead of deleting it —
+  self-skepticism as a visible feature, not silent history-rewriting.
+- New `/coverage` page (`coverage.py`): full inventory of the 3 query
+  kinds, 6 difficulty dims, 5 foil traps, and the analysis machinery
+  (escalation, resample-gate, ablation, fresh-seed confirmation), sourced
+  from the relevant modules' docstrings, plus an honest "Not yet covered"
+  roadmap (tool/action planning, instruction constraints, code,
+  quantitative reasoning, long-context retrieval).
+- Run detail (`/run/<id>`) now surfaces `traps=...` (parsed from
+  `verifier_detail`) inline per row for adversarial runs, and links to
+  "full transcript" (record detail) instead of a bare "detail" link;
+  record detail (`/record/<id>`) surfaces the same trap-kind line.
+- Persistent nav (Overview / Findings / Coverage / Runs / Live / Atlas /
+  Launch) with active-page highlighting was already present as a shared
+  shell (`_shell`/`_NAV_ITEMS`) and just got the two new entries; every
+  page already had or now has an h1 + one-line `.meta` subtitle.
+
+**Tests:** extended `tests/test_viewer.py` (nav-present-on-every-page,
+findings lists all four modes + retractions, coverage lists all 6 dims +
+5 foils, run/record detail show trap kinds for adversarial records,
+overview shows live summary + quick links) and `tests/test_launch.py`
+(preset cards show the adversarial_belief description + NEW badge).
+Renamed the old `test_index_html_shows_verdict_tallies` to
+`test_runs_html_shows_verdict_tallies` against the relocated `/runs`
+builder. Full suite: 259/259 passing (up from 254). Sanity-checked by
+actually starting `python3 -m cartographer.viewer.serve` against
+`results/campaign.sqlite` and curling every route (all 200) plus
+confirming real `traps=...` values render on an actual adversarial run's
+detail page.
+
+---
+
 ## 2026-09-18 — BUILD (confirmed) — foil model + adversarial seed search: redefining difficulty as trap salience, not knob magnitude
 
 Motivated directly by the 2026-09-17 entries below: across all 38

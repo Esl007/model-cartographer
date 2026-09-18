@@ -203,7 +203,11 @@ def atlas_html(store: ResultsStore) -> str:
     records = [r for r in all_records if r.run_id.startswith(_CAMPAIGN_RUN_PREFIX)]
 
     if not records:
-        body = "<h1>Cross-model atlas</h1><p>No campaign data.</p>"
+        body = (
+            "<h1>Cross-model atlas</h1>"
+            '<p class="meta">Pass rate vs. difficulty, compared across models.</p>'
+            "<p>No campaign data.</p>"
+        )
         return _shell("Cross-model atlas", "atlas", body)
 
     # Group by query_kind -> model -> records.
@@ -289,6 +293,8 @@ def atlas_html(store: ResultsStore) -> str:
 
     body = (
         "<h1>Cross-model atlas</h1>"
+        '<p class="meta">Pass rate vs. difficulty, per query kind and dimension, '
+        "compared across every model with campaign data in this store.</p>"
         + "".join(chart_sections)
         + "<h2>Summary</h2>"
         + summary_table
