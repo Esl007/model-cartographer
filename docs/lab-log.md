@@ -293,6 +293,73 @@ Files: `cartographer/ablate/__init__.py`, `cartographer/ablate/resample.py`,
 
 ---
 
+## 2026-09-17 — FINDING (confirmed) — adversarial (foil-driven) selection breaks Ultra where magnitude-escalation could not; new failure mode found
+
+First live run of `run_adversarial_belief_campaign` against Nemotron Ultra
+(`camp-adv-belief-ultra-001`): 150 calls, $0.4477, 141 PASS / 6 FAIL / 3 ERROR
+(94.0%). Compare: the full escalation ray (`camp-breaking_point-ultra-002`)
+cranked every scalar knob to the generator's hard ceiling and never dropped
+Ultra below 0.857 — no boundary. Trap-selection at *minimal* structural
+complexity did better than maximal magnitude.
+
+**Per-dim pass rates:** chain_length 0.96, scramble **0.86**, coref_pressure
+1.00, distractor_events 0.96, witness_cutoff 1.00. The weak-signal refinement
+pass fired on `scramble` (the machinery built for exactly this diffuse-failure
+case working on real data).
+
+**Counterintuitive structural result: all 6 failures occurred at
+`chain_length=2` — the SHORTEST chain.** Four of six shared scramble=0.71, and
+every one carried the same triple-trap signature (final_true_state +
+last_mentioned_location + last_witnessed_by_anyone all diverging). Working
+hypothesis: short chains give the model little redundant evidence to
+self-correct against, so a highly salient wrong answer dominates; long chains
+supply corroborating scaffolding. If it survives replication this inverts the
+project's founding assumption that difficulty scales with magnitude.
+
+**Resample discipline applied (5x each, temp=0), per the standing post-Priya
+rule — 3 of 6 failures survived:**
+- fail#0 (scramble 0.48): 'unknown' 5/5 — STABLE. answer_key='the supply closet'.
+- fail#4 (scramble 0.71): 'unknown' 5/5 — STABLE. answer_key='the loading dock'.
+- fail#5 (scramble 0.71): 'south stairwell' 4/5 — STABLE. answer_key='the garage'.
+- fail#1, #2, #3: not reproducible (MoE variance; one resample hit a token cap).
+All three stable prompts reproduce byte-identically from stored seed+params,
+and their answer keys are simulation-derived — these are real.
+
+**NEW FAILURE MODE, distinct from the two already catalogued:** two of the three
+stable failures are Ultra answering **'unknown'** — declining to attribute any
+belief — when the belief IS determinable from witnessed events. This is the
+*opposite* of the belief→reality collapse (77% of prior failures) and of the
+protagonist-continuity bias. Call it **belief-attribution abstention under trap
+pressure**: when foils are dense and narration is scrambled, the model retreats
+to "no belief" rather than committing to the inferable one. Needs replication on
+fresh seeds before headlining.
+
+---
+
+## 2026-09-17 — BUG (latent, open) — cap-truncation with non-empty reasoning would be mis-scored as FAIL
+
+While resampling the above, one Ultra response came back `finish_reason=length`,
+`tokens_out=8000`, `reasoning` field empty, and `text` full of truncated
+chain-of-thought — the model never reached an answer. `PipelineEvaluator` only
+routes cap-hits to ERROR when the text is EMPTY; a truncated *reasoning dump* is
+non-empty, so it would be handed to the verifier, mismatch the answer key, and be
+recorded as a capability FAIL.
+
+**Blast radius: ZERO on existing data — verified, not assumed.** Queried all 292
+stored FAIL records across every run: none has `finish_reason='length'`. No
+historical number is contaminated. (An initial alarm that this affected all
+results was checked and retracted within minutes.) The bug is latent: it fires
+only when a cap-truncation lands with non-empty text, which happened in an
+ad-hoc resample but not in any campaign.
+
+**Fix (not yet applied):** treat `finish_reason == 'length'` as ERROR/cap_hit
+regardless of whether text is empty, and/or trigger the existing
+`max_tokens_retry` escalation on truncated-but-non-empty responses too. Add a
+regression test with a mocked length-capped non-empty response asserting the
+verdict is ERROR, not FAIL.
+
+---
+
 ## 2026-09-17 — FINDING (confirmed) — escalation mode finds Ultra's ceiling exceeds the generator's current limits
 
 `run_breaking_point_campaign` against `nvidia/Nemotron-3-Ultra-550b-a55b`
