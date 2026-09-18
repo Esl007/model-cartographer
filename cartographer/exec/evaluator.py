@@ -28,6 +28,7 @@ from ..store.schema import ExperimentRecord, RenderMode, Verdict
 from ..store.store import ResultsStore
 from ..world.generate import DimParams, generate
 from ..world.measure import measure
+from ..world.search import search_adversarial_seeds
 from .client import Client
 from .pricing import cost_usd
 
@@ -148,6 +149,8 @@ class PipelineEvaluator:
         max_tokens: int | None = None,
         max_tokens_retry: int | None = None,
         cancel_event: threading.Event | None = None,
+        adversarial: bool = False,
+        adversarial_candidates: int = 40,
     ) -> None:
         self.client = client
         self.model = model
@@ -156,6 +159,8 @@ class PipelineEvaluator:
         self.query_kind = query_kind
         self.cost_cap_usd = cost_cap_usd
         self.base = base if base is not None else _default_base(query_kind)
+        self.adversarial = adversarial
+        self.adversarial_candidates = adversarial_candidates
 
         default_max_tokens, default_max_tokens_retry = default_token_budget(model)
         if max_tokens is not None:
@@ -199,12 +204,38 @@ class PipelineEvaluator:
                 self._record_capped(params, config, seed, trial_seed, reason="cancelled")
                 return False
 
+        adversarial_note = ""
+        if self.adversarial:
+            # Instead of generating the world directly from the derived
+            # task seed, search a deterministic batch of candidate seeds
+            # (all derived from the same task seed, so the whole thing
+            # stays reproducible) and use the one that plants the most
+            # salient trap(s) for a shallow reasoner. Pure simulation --
+            # free relative to the API call that follows.
+            winners = search_adversarial_seeds(
+                params, seed, n_candidates=self.adversarial_candidates, top_k=1
+            )
+            if winners:
+                seed, profile = winners[0]
+                traps = ",".join(profile.trap_kinds)
+                adversarial_note = (
+                    f";adversarial=1;traps={traps}"
+                    f";foil_score={round(profile.salience_weighted_score, 4)}"
+                )
+                adversarial_n_diverging = float(profile.n_diverging)
+            else:
+                adversarial_note = ";adversarial=1;traps=;foil_score=0"
+                adversarial_n_diverging = 0.0
+
         world = generate(params, seed)
         name_map = build_name_map(world, seed)
         rendered = render(world, name_map, seed)
         realized_dims = measure(world)
+        if self.adversarial:
+            realized_dims = dict(realized_dims)
+            realized_dims["foil_divergence"] = adversarial_n_diverging
 
-        verifier_detail = f"kind={self.query_kind};campaign=1"
+        verifier_detail = f"kind={self.query_kind};campaign=1{adversarial_note}"
 
         result = self.client.chat(
             model=self.model,
@@ -580,6 +611,63 @@ def run_belief_campaign(
         cost_cap_usd=cost_cap,
         max_tokens=max_tokens,
         cancel_event=cancel_event,
+    )
+    if parallelism is None:
+        parallelism = _default_parallelism(client)
+    config = _belief_scheduler_config(budget, parallelism)
+
+    def on_record(cfg: dict, passed: bool, seed: int) -> None:
+        pass  # PipelineEvaluator already persists every trial itself.
+
+    state = run_campaign(evaluator, config, on_record=on_record)
+    if evaluator.capped:
+        state.notes.append("cost_cap_hit")
+    state.evaluator = evaluator  # type: ignore[attr-defined]
+    return state
+
+
+def run_adversarial_belief_campaign(
+    client: Client,
+    store: ResultsStore,
+    run_id: str,
+    model: str,
+    budget: int = 300,
+    cost_cap: float = 1.0,
+    parallelism: int | None = None,
+    max_tokens: int | None = None,
+    cancel_event: threading.Event | None = None,
+) -> CampaignState:
+    """Belief-query campaign with `PipelineEvaluator.adversarial=True`: at
+    every config point probed by the scheduler (including the BASELINE),
+    the world actually used is the winner of an adversarial seed search
+    over that config, not just whatever the derived task seed happens to
+    produce. The point is that every task administered is already a
+    trap -- the five scalar knobs (chain_length, scramble, coref_pressure,
+    distractor_events, filler_events) plus witness_cutoff then measure how
+    trap-*compounding* interacts with those traps, rather than measuring
+    whether a trap exists at all (see docs/lab-log.md's foil-model entry).
+
+    Uses the same dims as `run_belief_campaign` (which already includes
+    `witness_cutoff` in its sweep) -- `_belief_scheduler_config` is reused
+    verbatim.
+
+    `parallelism=None` defaults to the client provider's
+    `suggested_parallelism` (Groq 2, Nebius 6 -- rate-limit-aware).
+    `max_tokens=None` defaults to the model-heuristic budget in
+    `default_token_budget` (bigger for "ultra"-class reasoners).
+    `cancel_event`, when provided, lets a caller (e.g. /launch's stop
+    button) cooperatively cancel an in-flight campaign between trials.
+    """
+    evaluator = PipelineEvaluator(
+        client=client,
+        model=model,
+        store=store,
+        run_id=run_id,
+        query_kind="belief",
+        cost_cap_usd=cost_cap,
+        max_tokens=max_tokens,
+        cancel_event=cancel_event,
+        adversarial=True,
     )
     if parallelism is None:
         parallelism = _default_parallelism(client)

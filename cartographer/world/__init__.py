@@ -13,6 +13,8 @@ from .mutate import (
     extend_chain,
     scramble_narration,
 )
+from .foils import FoilProfile, foil_answers, foil_divergence
+from .search import search_adversarial_seeds
 
 __all__ = [
     "Entity",
@@ -40,4 +42,8 @@ __all__ = [
     "add_filler",
     "extend_chain",
     "scramble_narration",
+    "FoilProfile",
+    "foil_answers",
+    "foil_divergence",
+    "search_adversarial_seeds",
 ]

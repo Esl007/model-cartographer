@@ -44,6 +44,7 @@ from typing import Callable
 from ..exec import client as client_mod
 from ..exec.client import GROQ, NEBIUS, Client, Provider
 from ..exec.evaluator import (
+    run_adversarial_belief_campaign,
     run_belief_campaign,
     run_breaking_point_campaign,
     run_order_campaign,
@@ -61,6 +62,7 @@ CAMPAIGN_PRESETS: dict[str, dict[str, float]] = {
     "belief": {"budget": 700, "cost_cap": 1.0},
     "order": {"budget": 400, "cost_cap": 0.5},
     "breaking_point": {"budget": 350, "cost_cap": 0.75},
+    "adversarial_belief": {"budget": 300, "cost_cap": 1.0},
 }
 
 _RUNNERS: dict[str, Callable] = {
@@ -68,6 +70,7 @@ _RUNNERS: dict[str, Callable] = {
     "belief": run_belief_campaign,
     "order": run_order_campaign,
     "breaking_point": run_breaking_point_campaign,
+    "adversarial_belief": run_adversarial_belief_campaign,
 }
 
 

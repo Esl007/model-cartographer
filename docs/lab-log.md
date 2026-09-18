@@ -7,6 +7,292 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-18 — BUILD (confirmed) — foil model + adversarial seed search: redefining difficulty as trap salience, not knob magnitude
+
+Motivated directly by the 2026-09-17 entries below: across all 38
+post-witness-fix belief FAILs on Nano/Super/Ultra, 71% were the model
+answering the object's TRUE FINAL LOCATION instead of the queried agent's
+actual believed location (belief→reality collapse) — while the five
+scalar difficulty knobs (chain_length, scramble, coref_pressure,
+distractor_events, filler_events) showed near-zero discrimination; only
+`witness_cutoff` (which forces belief≠reality directly) produced real
+signal. Conclusion acted on here: difficulty should be redefined from
+"magnitude of knobs" to "salience of plausible-but-wrong answers" (foils),
+and that redefinition should be a measurable, searchable property of a
+generated world — not just a post-hoc explanation for failures already
+observed.
+
+**Foil model (`cartographer/world/foils.py`).** `foil_answers(world,
+name_map)` computes what a *shallow reasoner* would answer, per query
+kind. Belief: `final_true_state` (the belief→reality-collapse trap),
+`last_mentioned_location` (trust narration order over witnessing),
+`last_witnessed_by_anyone` (conflate "someone saw it" with "the query
+agent knows it"), `query_agent_own_last_move` ("I moved it, so I know
+where it is" — a trap only when something happens to the object
+afterward that the agent doesn't see), `most_frequent_location`. State:
+`first_mentioned_location`, `most_frequent_location`. Order:
+`narration_order_answer` — trusting narration order over real timestamps,
+the direct foil for what `scramble` is supposed to stress.
+`foil_divergence(world, name_map)` returns a `FoilProfile`: which foils
+diverge from the true answer (`trap_kinds`), how many (`n_diverging`),
+and a `salience_weighted_score` — each diverging foil's weight is the
+fractional narration-position (0..1) of its LAST mention, so a wrong
+answer planted in the closing sentence outweighs one only mentioned in
+the opening sentence. A world where nothing diverges is trivially easy
+(the lazy answer happens to be right); verified this actually occurs at
+chain_length=1 with zero distractors/filler (test:
+`test_no_witness_cutoff_can_still_be_trivial`).
+
+**Adversarial seed search (`cartographer/world/search.py`).**
+`search_adversarial_seeds(params, base_seed, n_candidates=40, top_k=1,
+require_kinds=())` derives `n_candidates` seeds from `base_seed` via the
+same sha256-stream idiom as `generate.py`, generates+validates each
+world, scores by `salience_weighted_score`, and returns the top-k. Pure
+simulation — zero API calls, so this is free relative to the token spend
+that follows. Deterministic: same `(params, base_seed, n_candidates,
+top_k, require_kinds)` always returns the same result (verified in
+`test_search_is_deterministic`). The key empirical test
+(`test_key_empirical_search_concentrates_traps`) runs 50 seeds at a fixed
+mid-difficulty belief config and checks the mean `salience_weighted_score`
+of the search's top-1 picks against the mean of the single unselected
+seed each trial would otherwise have used — **selected mean was ≥1.5x the
+unselected mean** (the test enforces this ratio as a hard assertion), so
+the search demonstrably concentrates traps rather than picking arbitrarily.
+
+**Evaluator wiring (`cartographer/exec/evaluator.py`).**
+`PipelineEvaluator` gained `adversarial: bool = False` and
+`adversarial_candidates: int = 40`. When on, `__call__` runs
+`search_adversarial_seeds` from the normally-derived task seed and
+substitutes the winning seed for world generation — so `task_seed` /
+`rendering_seed` in the persisted record are the CHOSEN adversarial seed,
+not the plain derived one (this is deliberate: it's what actually got
+administered). `verifier_detail` gains
+`;adversarial=1;traps=<comma-joined trap_kinds>;foil_score=<rounded
+score>`; `realized_dims` gains `foil_divergence` (the count of diverging
+foils) so the atlas/scheduler can treat trap density as a measured
+dimension alongside the existing five. New preset
+`run_adversarial_belief_campaign`: belief query, `adversarial=True`, same
+dims as `run_belief_campaign` (which already sweeps `witness_cutoff`) —
+the point is that even the BASELINE config gets its world adversarially
+selected, so escalation measures trap-*compounding*, not "does a trap
+exist." Registered in `/launch`'s `CAMPAIGN_PRESETS["adversarial_belief"]
+= {"budget": 300, "cost_cap": 1.0}` and `_RUNNERS` dispatch — the only
+viewer-territory edit made, and additive (didn't touch anything the
+concurrent ablate-track agent might have added to those same dicts).
+
+**Offline report (`scripts/foil_report.py`).** Loads
+`results/campaign.sqlite` read-only, regenerates each post-witness-fix
+belief FAIL's world from stored `(latent_params, task_seed,
+rendering_seed)`, and checks whether the model's normalized response text
+matches one of the diverging foils' surface strings. Judgment call: exact
+byte-for-byte world regeneration is only valid for runs started AFTER the
+`313e3b2` generator-hardening commit (2026-09-17 17:20:02 UTC), which
+changed chain-actor exclusion/witness-set assignment inside `generate()` —
+verified this by literally diffing regenerated vs. stored prompt text.
+`camp-belief-nemotron-nano-001` and `camp-belief-nemotron-super-002`
+predate that commit and are excluded with an explicit warning rather than
+silently mis-attributed to a world the model was never actually shown;
+the other three post-fix belief runs against Nano/Super/Ultra tiers
+(`camp-belief-nvidia-nemotron-3-nano-30b-a3b-001`,
+`camp-belief-nemotron-3-super-120b-a12b-001`,
+`camp-belief-nemotron-3-ultra-550b-a55b-001` — 14+5+3 = 22 FAILs total)
+reconstruct exactly, 22/22. Report output, run once against the live
+store:
+
+```
+=== NVIDIA-Nemotron-3-Nano-30B-A3B (14 belief FAILs, 14/14 exactly reconstructed) ===
+trap kind                     count   % of FAILs
+------------------------------------------------
+final_true_state                 12        85.7%
+UNCLASSIFIED                      2        14.3%
+(any foil matched)               12        85.7%
+
+=== Nemotron-3-Ultra-550b-a55b (3 belief FAILs, 3/3 exactly reconstructed) ===
+trap kind                     count   % of FAILs
+------------------------------------------------
+final_true_state                  2        66.7%
+UNCLASSIFIED                      1        33.3%
+(any foil matched)                2        66.7%
+
+=== nemotron-3-super-120b-a12b (5 belief FAILs, 5/5 exactly reconstructed) ===
+trap kind                     count   % of FAILs
+------------------------------------------------
+final_true_state                  3        60.0%
+UNCLASSIFIED                      2        40.0%
+(any foil matched)                3        60.0%
+
+=== overall ===
+17/22 belief FAILs (77.3%) matched a plausible-but-wrong foil answer
+
+Note: the following belief runs predate the generator-hardening commit (313e3b2, 2026-09-17 17:20:02 UTC) and cannot be exactly regenerated by the current generate() -- excluded from this report:
+  - camp-belief-nemotron-nano-001
+  - camp-belief-nemotron-super-002
+```
+
+77.3% on the exactly-reconstructable subset, same direction and order of
+magnitude as the originally-eyeballed 71% across all 38 — and every trap
+that DID resolve was `final_true_state`, i.e. belief→reality collapse
+alone accounts for the entire matched share on this data; no other named
+foil fired even once on these FAILs. That's a sharper, narrower claim
+than "shallow reasoners fall for various foils" — on this evidence the
+project has exactly one dominant, well-characterized failure mode, and
+the foil model now gives a name and a reproducible detector for it.
+
+**Other judgment calls.** (1) `salience_weighted_score`'s lateness
+weighting looks only at the location-naming subsequence (Move
+destinations + Tell claims) for belief/state queries, and at the query
+pair's own narration positions for order queries — chosen because those
+are exactly the sentences a shallow reasoner would be scanning for an
+answer; filler/distractor sentences don't carry candidate answers so
+weighting against the full sentence list would just dilute the score.
+(2) `foil_answers`/`foil_divergence` live in `cartographer/world/foils.py`
+rather than `render/`, even though they need `NameMap` for surface
+strings, to keep the query-answering logic beside `simulate.py`'s
+`answer()` (the ground truth it's being compared against) — this forced
+a `TYPE_CHECKING`-only import of `NameMap` in `foils.py` and a
+function-local import of `build_name_map` in `search.py`, since
+`render/naming.py` imports `world.model`, which runs through
+`world/__init__.py` at package-load time; importing `render` at module
+scope from inside `world/` would be circular. (3)
+`query_agent_own_last_move` returns `None` (never a trap) when the agent
+never acted as mover, rather than falling back to some other value —
+`None` foils are excluded from divergence scoring by design, since a foil
+that was never planted can't be a trap. (4) Zero live campaigns run as
+part of this task (per the no-network constraint) — `run_adversarial_belief_campaign`
+is wired and unit-tested against a scripted fake client only; the first
+live `adversarial_belief` run against a real model is future work.
+
+Files: `cartographer/world/foils.py`, `cartographer/world/search.py`,
+`cartographer/world/__init__.py`, `cartographer/exec/evaluator.py`,
+`cartographer/viewer/launch.py`, `scripts/foil_report.py`,
+`tests/test_foils.py`, `tests/test_foil_report.py`, additions to
+`tests/test_evaluator.py` and `tests/test_launch.py`. 25 new tests, full
+suite green (254 passed, including the concurrently-developed
+`cartographer/ablate/` track).
+
+---
+
+## 2026-09-18 — BUILD (decided) — automated the manual Ultra pronoun-ablation loop (`cartographer/ablate/`)
+
+Motivation: the manual loop that isolated the Ultra pronoun-actor-tracking
+bug (resample the same prompt to rule out noise, make one minimal
+answer-key-preserving edit, resample both versions) was the project's most
+valuable diagnostic move so far and needed to become automatic and
+deterministic, with ground truth always coming from simulation, never a
+model's own judgment. Built as a new, self-contained package plus tests
+and a dry-run analysis script; no edits to `cartographer/world/` or
+`cartographer/exec/evaluator.py` (owned by a concurrent session).
+
+**`cartographer/ablate/resample.py`** -- `resample_failure(evaluator,
+config, task_seed, n=5, stable_threshold=0.5)` re-runs the SAME
+config+seed `n` times and reports `is_stable_failure = pass_rate <=
+stable_threshold`, reusing `cartographer.confirm.stats.wilson_interval`
+for the CI. This is deliberately the cheapest possible check, and runs
+before any attribution, precisely because the "Priya" case above was a
+single-trial FAIL prematurely reported as a finding (4/5 resamples came
+back correct) -- this gate would have caught it before a single ablation
+call was spent.
+
+**`cartographer/ablate/ablations.py`** -- six deterministic prompt
+transforms over the SAME latent `World`, each provably preserving
+`answer_key` (asserted internally; `AblationUnavailable` raised, never
+silently swallowed by the ablation itself, when a world can't yield an
+answer-key-preserving variant for that ablation).
+- `baseline` -- unmodified render (control).
+- `pronoun_suppression` -- resolver-backed, not regex: `render()` already
+  records exactly which sentence/entity every pronoun substitution came
+  from (`RenderedTask.meta["pronoun_referents"]`), so this inverts those
+  exact substitutions back to real names rather than guessing at
+  coreference from surface text.
+- `distractor_removal` / `filler_removal` -- **judgment call, changed
+  approach mid-build**: the obvious route (regenerate from the same seed
+  with `distractor_events=0`/`filler_events=0` via `world.generate.DimParams`)
+  was tried first and rejected. `World` doesn't retain the `DimParams` it
+  was built from, and reconstructing `witness_cutoff`/`coref_pressure`
+  well enough to reproduce the same witness assignments purely by
+  measuring the world proved unreliable -- confirmed empirically:
+  regenerating from a reconstructed `DimParams` changed the belief answer
+  key on ordinary worlds with `witness_cutoff > 0` or `coref_pressure > 0`
+  (exactly the dimension this whole project's main finding depends on).
+  Switched to direct surgery on the already-built `World`: drop the
+  target events wholesale, reindex `narration_order` (and an `order`
+  query's `Query.pair`, which held stale old-indices and needed
+  remapping too -- caught by a 120-world/3-query-kind sweep before
+  landing), leave every surviving event's `witnesses`/`actor` fields
+  byte-identical. Zero answer-key drift across the sweep once fixed.
+- `witness_explicitation` -- rewrites only witness-marker sentences
+  (located via `RenderedTask.meta["sentence_is_witness"]`, not text
+  matching) to a single canonical "`<Name> was present and saw this`"
+  template. **Second judgment call**: originally implemented on top of
+  `pronoun_suppression`'s output, which made it indistinguishable from
+  `pronoun_suppression` in every test case (both ended up removing every
+  pronoun in the story) -- caught by the planted-sensitivity test for
+  model A, which attributed to both ablations instead of just one.
+  Rewritten to start from the ordinary baseline render (pronouns intact
+  in the main narration) and touch only witness sentences, so a model
+  sensitive to main-narrative pronoun ambiguity still fails this ablation.
+- `temporal_normalization` -- narration re-emitted in true chronological
+  order; answer key is provably unchanged since `narration_order` never
+  participates in `world/simulate.py::answer`.
+
+**`cartographer/ablate/attribute.py`** -- `attribute_failure(
+evaluator_factory, world, name_map, seed, n=5, alpha=0.05)`: resample-gates
+first (returns `stable=False` immediately if the failure evaporates,
+running zero ablations); otherwise runs every ablation available for that
+world `n` times, two-proportion z-tests each against the resample gate's
+own baseline arm (no extra baseline calls spent), Holm-Bonferroni corrects
+across the family, and attributes any ablation that is both
+corrected-significant and has effect size > 0.3. Multiple attributions are
+allowed and reported; none attributing yields the honest note "cause not
+isolated by current ablation catalog" rather than an error.
+
+**Tests (`tests/test_ablate.py`, 11 new, all passing, zero network)** --
+mirrors the synthetic-zoo discipline: plants a known sensitivity and
+requires the engine to recover it exactly.
+- Fake model A fails iff a story sentence's subject is a bare pronoun
+  ("he "/"she ") -- attribution names `pronoun_suppression` only (after
+  the witness_explicitation redesign above; before that fix it named
+  both, which is what caught the confound).
+- Fake model B fails iff more than 2 distractor-object sentences are
+  present -- attribution names `distractor_removal` only.
+- Fake model C is a deterministic seeded coin biased ~60% pass (mirroring
+  the real Priya case's 4/5-passed profile) -- the resample gate correctly
+  marks `stable=False` and runs zero ablations. This is the direct
+  regression test for the retracted single-trial claim above.
+- Fake model D fails everywhere -- no attribution, honest "cause not
+  isolated" note, while still confirming every ablation was actually
+  tried (distinguishing this from model C's gate short-circuit).
+- Every ablation's answer-key invariant checked across 120 generated
+  worlds (40 seeds x 3 query kinds), not just 20.
+- `attribute_failure` and `resample_failure` both checked for
+  byte-identical output across repeated identical-input calls.
+
+**`scripts/attribute_failures.py`** -- loads `results/campaign.sqlite`
+READ-ONLY (via `ResultsStore._all()`, the same internal pattern
+`export_jsonl` itself uses for a full dump), selects post-fix belief FAILs
+newest-first, regenerates each world from its exact stored `latent_params`
++ `task_seed` (exact reconstruction here, unlike the ablation catalog's
+post-hoc guess, because the real `DimParams` dict is on the record), and
+prints the ablation plan (which ablations are available, estimated call
+count) in `--dry-run`-equivalent default mode -- no flag needed, nothing
+but local sqlite reads and pure Python happens unless `--live` is passed
+explicitly. `--live` wires a real `cartographer.exec.client.Client`
+against Nebius and is fully implemented but was never invoked in this
+session (verified: ran the dry-run path only, against a `/tmp` copy of
+the real store, never opening the tracked file writably).
+
+Verified: `python3 -m pytest -q` -- 254 passed (was previously green
+before this work; net +11 from `test_ablate.py`, remainder from a
+concurrently-running session's own `cartographer/world/` work). No edits
+outside this session's assigned territory
+(`cartographer/ablate/`, `tests/test_ablate.py`, `scripts/`).
+
+Files: `cartographer/ablate/__init__.py`, `cartographer/ablate/resample.py`,
+`cartographer/ablate/ablations.py`, `cartographer/ablate/attribute.py`,
+`tests/test_ablate.py`, `scripts/attribute_failures.py`.
+
+---
+
 ## 2026-09-17 — FINDING (confirmed) — escalation mode finds Ultra's ceiling exceeds the generator's current limits
 
 `run_breaking_point_campaign` against `nvidia/Nemotron-3-Ultra-550b-a55b`

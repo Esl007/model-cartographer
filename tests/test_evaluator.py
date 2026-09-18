@@ -494,3 +494,86 @@ def test_no_cancel_event_behaves_as_before(tmp_path):
     assert len(client.calls) == 1
     assert ev.cancelled is False
     store.close()
+
+
+# --- adversarial mode -------------------------------------------------------
+
+
+def _adversarial_belief_base() -> DimParams:
+    return DimParams(
+        chain_length=4, scramble=0.3, coref_pressure=1, distractor_events=2,
+        distractor_similarity="same_category", filler_events=2, query_kind="belief",
+        witness_cutoff=0.5,
+    )
+
+
+def _adversarial_rendered(base: DimParams, config: dict, trial_seed: int, n_candidates: int = 40):
+    """Mirrors what PipelineEvaluator does internally in adversarial mode:
+    derive the task seed, run the adversarial search from it, and render
+    the winning world -- so a test can script the client with the correct
+    expected answer for whichever world adversarial mode actually picks."""
+    from cartographer.world.search import search_adversarial_seeds
+
+    params = _apply_config(base, config)
+    task_seed = _task_seed(config, trial_seed)
+    winners = search_adversarial_seeds(params, task_seed, n_candidates=n_candidates, top_k=1)
+    seed, profile = winners[0]
+    world = generate(params, seed)
+    name_map = build_name_map(world, seed)
+    rendered = render(world, name_map, seed)
+    return seed, profile, rendered
+
+
+def test_adversarial_mode_records_traps_and_foil_score(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    base = _adversarial_belief_base()
+    config = {"chain_length": 4, "witness_cutoff": 0.5}
+    seed, profile, rendered = _adversarial_rendered(base, config, trial_seed=3)
+
+    client = ScriptedClient(script=[_ok(rendered.answer_key)])
+    ev = PipelineEvaluator(
+        client, "m", store, "run1", "belief", cost_cap_usd=10.0, base=base, adversarial=True,
+    )
+    ok = ev(config, trial_seed=3)
+
+    assert ok is True
+    records = store.by_run("run1")
+    assert len(records) == 1
+    record = records[0]
+    assert record.task_seed == seed  # the chosen adversarial seed, not the plain task seed
+    assert ";adversarial=1" in record.verifier_detail
+    assert f"traps={','.join(profile.trap_kinds)}" in record.verifier_detail
+    assert "foil_score=" in record.verifier_detail
+    assert record.realized_dims["foil_divergence"] == float(profile.n_diverging)
+    store.close()
+
+
+def test_adversarial_mode_off_by_default(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    base = _adversarial_belief_base()
+    ev = PipelineEvaluator(ScriptedClient(), "m", store, "run1", "belief", cost_cap_usd=10.0, base=base)
+    assert ev.adversarial is False
+    ev({"chain_length": 4}, trial_seed=1)
+    record = store.by_run("run1")[0]
+    assert "adversarial=1" not in (record.verifier_detail or "")
+    assert "foil_divergence" not in record.realized_dims
+    store.close()
+
+
+def test_adversarial_mode_deterministic_seed_choice(tmp_path):
+    """Same config/trial_seed under adversarial mode picks the same world
+    both times (determinism carries through the search)."""
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    base = _adversarial_belief_base()
+    config = {"chain_length": 4, "witness_cutoff": 0.5}
+
+    client = ScriptedClient(default_text="wrong answer entirely")
+    ev = PipelineEvaluator(
+        client, "m", store, "run1", "belief", cost_cap_usd=10.0, base=base, adversarial=True,
+    )
+    ev(config, trial_seed=9)
+    ev(config, trial_seed=9)
+
+    prompts = [c[1] for c in client.calls]
+    assert prompts[0] == prompts[1]
+    store.close()

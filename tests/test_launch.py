@@ -414,3 +414,66 @@ def test_handle_start_registers_a_cancel_event(tmp_path):
 def test_request_stop_with_no_active_campaign_is_a_noop(tmp_path):
     assert launch_mod.current_run() is None
     assert launch_mod.request_stop() is False
+
+
+# ---------------------------------------------------------------------------
+# adversarial_belief preset registration
+# ---------------------------------------------------------------------------
+
+
+def test_adversarial_belief_preset_registered():
+    assert "adversarial_belief" in launch_mod.CAMPAIGN_PRESETS
+    preset = launch_mod.CAMPAIGN_PRESETS["adversarial_belief"]
+    assert preset == {"budget": 300, "cost_cap": 1.0}
+    assert "adversarial_belief" in launch_mod._RUNNERS
+    from cartographer.exec.evaluator import run_adversarial_belief_campaign
+
+    assert launch_mod._RUNNERS["adversarial_belief"] is run_adversarial_belief_campaign
+
+
+def test_adversarial_belief_option_appears_in_models_step_form(tmp_path):
+    deps = _deps(tmp_path)
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, deps)
+    assert 'value="adversarial_belief"' in page
+    assert "adversarial_belief: budget 300, cap $1.0" in page
+
+
+def test_adversarial_belief_dispatches_through_start(tmp_path):
+    calls = []
+
+    def fake_adversarial_runner(client, store, run_id, model, budget, cost_cap, max_tokens=None, cancel_event=None):
+        calls.append((run_id, model, budget, cost_cap))
+        store.append(
+            ExperimentRecord(
+                run_id=run_id, model_name=model, latent_params={}, realized_dims={},
+                render_mode=RenderMode.TEMPLATE, task_seed=0, trial_seed=0,
+                verdict=Verdict.PASS, tokens_in=1, tokens_out=1, cost_usd=0.0, latency_ms=1.0,
+            )
+        )
+
+    deps = _deps(
+        tmp_path,
+        client_factory=_FakeClient,
+        runners={"adversarial_belief": fake_adversarial_runner},
+    )
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, deps)
+    token = page.split('name="token" value="')[1].split('"')[0]
+    started, run_id = handle_start(
+        {
+            "token": token,
+            "model": "acme/Model-A",
+            "campaign_type": "adversarial_belief",
+            "budget": "300",
+            "cost_cap": "1.0",
+        },
+        deps,
+    )
+    assert started
+    for _ in range(200):
+        if launch_mod.current_run() is None:
+            break
+        time.sleep(0.01)
+    assert calls and calls[0][0] == run_id
+    store = ResultsStore(deps.db_path)
+    assert len(store.by_run(run_id)) == 1
+    store.close()
