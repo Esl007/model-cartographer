@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from ..render import build_name_map, render, verify
@@ -681,3 +681,276 @@ def run_adversarial_belief_campaign(
         state.notes.append("cost_cap_hit")
     state.evaluator = evaluator  # type: ignore[attr-defined]
     return state
+
+
+# ---------------------------------------------------------------------------
+# full_map: the one-button profile -- chains every preset as stages under one
+# parent run, one shared cost budget.
+# ---------------------------------------------------------------------------
+
+# Trial-budget target for each stage at the full_map preset's default
+# budget=600 (state ~60, order ~80, belief ~200, adversarial_belief ~160,
+# breaking_point gets the remainder ~100). Scales linearly with whatever
+# `budget` the caller passes.
+_FULL_MAP_STAGE_BUDGET_SHARES: dict[str, float] = {
+    "state": 60 / 600,
+    "order": 80 / 600,
+    "belief": 200 / 600,
+    "adversarial_belief": 160 / 600,
+    "breaking_point": 100 / 600,
+}
+
+# Proportional share of the shared cost_cap each stage gets (sums to 1.0),
+# mirroring the trial-budget weights above.
+_FULL_MAP_STAGE_COST_SHARES: dict[str, float] = {
+    "state": 0.08,
+    "order": 0.14,
+    "belief": 0.32,
+    "adversarial_belief": 0.22,
+    "breaking_point": 0.24,
+}
+
+_FULL_MAP_STAGE_ORDER = ["state", "order", "belief", "adversarial_belief", "breaking_point"]
+
+
+@dataclass
+class StageSummary:
+    """Per-stage summary for a full_map run: enough to render a card without
+    re-reading every record."""
+
+    stage: str
+    run_id: str
+    n_records: int = 0
+    n_pass: int = 0
+    n_fail: int = 0
+    n_error: int = 0
+    pass_rate: float | None = None
+    spend_usd: float = 0.0
+    boundaries: dict = field(default_factory=dict)
+    hypotheses_n: int = 0
+    breaking_point_t_star: float | None = None
+    breaking_point_found: bool | None = None
+    exhausted: bool = False
+    skipped: bool = False
+    note: str = ""
+
+    def to_json_dict(self) -> dict:
+        return {
+            "stage": self.stage,
+            "run_id": self.run_id,
+            "n_records": self.n_records,
+            "n_pass": self.n_pass,
+            "n_fail": self.n_fail,
+            "n_error": self.n_error,
+            "pass_rate": self.pass_rate,
+            "spend_usd": self.spend_usd,
+            "boundaries": dict(self.boundaries),
+            "hypotheses_n": self.hypotheses_n,
+            "breaking_point_t_star": self.breaking_point_t_star,
+            "breaking_point_found": self.breaking_point_found,
+            "exhausted": self.exhausted,
+            "skipped": self.skipped,
+            "note": self.note,
+        }
+
+
+@dataclass
+class FullMapResult:
+    """Aggregated result of a `run_full_map_campaign` call: one parent
+    `run_id` fanning out into per-stage child run_ids
+    (`f"{run_id}/{stage}"`), each a full campaign in its own right."""
+
+    run_id: str
+    stages: list = field(default_factory=list)
+    total_spend_usd: float = 0.0
+    total_records: int = 0
+    cancelled: bool = False
+    notes: list = field(default_factory=list)
+
+    def stage_run_ids(self) -> list:
+        return [s.run_id for s in self.stages]
+
+    def to_json_dict(self) -> dict:
+        return {
+            "run_id": self.run_id,
+            "stages": [s.to_json_dict() for s in self.stages],
+            "total_spend_usd": self.total_spend_usd,
+            "total_records": self.total_records,
+            "cancelled": self.cancelled,
+            "notes": list(self.notes),
+        }
+
+
+def _child_run_id(parent_run_id: str, stage: str) -> str:
+    return f"{parent_run_id}/{stage}"
+
+
+def _campaign_state_summary(
+    stage: str, run_id: str, state: CampaignState, spend_usd: float, n_records: int
+) -> StageSummary:
+    evaluator = getattr(state, "evaluator", None)
+    n_error = getattr(evaluator, "error_count", 0) if evaluator is not None else 0
+    n_pass = 0
+    n_fail = 0
+    for pts in state.points.values():
+        for _, passed in pts:
+            if passed:
+                n_pass += 1
+            else:
+                n_fail += 1
+    pass_rate = n_pass / (n_pass + n_fail) if (n_pass + n_fail) else None
+    exhausted = any("exhaust" in n for n in state.notes)
+    return StageSummary(
+        stage=stage,
+        run_id=run_id,
+        n_records=n_records,
+        n_pass=n_pass,
+        n_fail=n_fail,
+        n_error=n_error,
+        pass_rate=pass_rate,
+        spend_usd=spend_usd,
+        boundaries=dict(state.boundaries),
+        hypotheses_n=len(state.hypotheses),
+        exhausted=exhausted,
+        note="; ".join(state.notes),
+    )
+
+
+def run_full_map_campaign(
+    client: Client,
+    store: ResultsStore,
+    run_id: str,
+    model: str,
+    budget: int = 600,
+    cost_cap: float = 2.0,
+    max_tokens: int | None = None,
+    cancel_event: threading.Event | None = None,
+    parallelism: int | None = None,
+) -> FullMapResult:
+    """The one-button profile: chains state -> order -> belief ->
+    adversarial_belief -> breaking_point as STAGES under one parent
+    `run_id`, sharing one overall trial budget and one overall cost cap.
+
+    Each stage runs as its own campaign against a child run_id
+    (`f"{run_id}/{stage}"`), using the SAME `store` and `client` -- so the
+    viewer can group child stages under the parent (see
+    `cartographer.report.verdict` and the viewer's run grouping) while each
+    stage's records stay independently queryable via
+    `store.by_run(child_run_id)`.
+
+    Budget/cost allocation: `budget` (trials) and `cost_cap` (USD) are split
+    across stages proportionally, matching the target ~60/80/200/160/
+    remainder trial split at the default budget=600
+    (`_FULL_MAP_STAGE_BUDGET_SHARES`) and the cost shares in
+    `_FULL_MAP_STAGE_COST_SHARES`. If a stage exhausts its own budget or
+    cost cap, that's logged in its `StageSummary` and the battery continues
+    to the next stage -- one stage running dry never blocks the others.
+
+    Breaking-point seeding: if the belief stage found any dim boundaries,
+    the breaking_point stage's ray is re-seeded so each `RayDim.base_value`
+    sits at the discovered boundary (clamped inside the dim's own
+    [base, limit] span) instead of the generator's easy default --
+    concentrating the escalation ray near the region belief already
+    flagged as risky. If no boundary was found (or the belief stage didn't
+    run), the default all-ceiling ray (`default_belief_ray()`) is used
+    unmodified and a note records the fallback.
+
+    `cancel_event` is checked before each stage starts (a cancellation
+    between stages skips all remaining stages immediately) AND is passed
+    through to every stage's own evaluator (a cancellation mid-stage also
+    stops that stage cleanly without wasting the rest of its budget).
+    """
+    result = FullMapResult(run_id=run_id)
+    belief_boundaries: dict = {}
+
+    for stage in _FULL_MAP_STAGE_ORDER:
+        if cancel_event is not None and cancel_event.is_set():
+            result.cancelled = True
+            result.notes.append(f"cancelled before stage={stage}")
+            break
+
+        stage_budget = max(1, round(budget * _FULL_MAP_STAGE_BUDGET_SHARES[stage]))
+        stage_cost_cap = max(0.0001, cost_cap * _FULL_MAP_STAGE_COST_SHARES[stage])
+        child_run_id = _child_run_id(run_id, stage)
+
+        try:
+            if stage in ("state", "order", "belief", "adversarial_belief"):
+                runner = {
+                    "state": run_state_campaign,
+                    "order": run_order_campaign,
+                    "belief": run_belief_campaign,
+                    "adversarial_belief": run_adversarial_belief_campaign,
+                }[stage]
+                state = runner(
+                    client, store, child_run_id, model,
+                    budget=stage_budget, cost_cap=stage_cost_cap,
+                    max_tokens=max_tokens, cancel_event=cancel_event,
+                    parallelism=parallelism,
+                )
+                summary = _campaign_state_summary(
+                    stage, child_run_id, state, state.evaluator.spent_usd,
+                    len(store.by_run(child_run_id)),
+                )
+                if stage == "belief":
+                    belief_boundaries = dict(state.boundaries)
+            elif stage == "breaking_point":
+                ray = default_belief_ray()
+                if belief_boundaries:
+                    new_dims = []
+                    for d in ray.dims:
+                        if d.name in belief_boundaries:
+                            midpoint, _, _ = belief_boundaries[d.name]
+                            lo, hi = d.base_value, d.limit_value
+                            seeded_base = min(max(midpoint, min(lo, hi)), max(lo, hi))
+                            new_dims.append(replace(d, base_value=seeded_base))
+                        else:
+                            new_dims.append(d)
+                    ray = EscalationRay(dims=tuple(new_dims))
+                    seed_note = (
+                        f"breaking_point ray re-seeded near belief boundaries: "
+                        f"{sorted(belief_boundaries)}"
+                    )
+                else:
+                    seed_note = (
+                        "breaking_point ray used default "
+                        "(no belief boundaries found to seed from)"
+                    )
+
+                evaluator = PipelineEvaluator(
+                    client=client, model=model, store=store, run_id=child_run_id,
+                    query_kind="belief", cost_cap_usd=stage_cost_cap,
+                    max_tokens=max_tokens, cancel_event=cancel_event,
+                )
+                bp = find_breaking_point(evaluator, ray, budget=stage_budget)
+                summary = StageSummary(
+                    stage=stage,
+                    run_id=child_run_id,
+                    n_records=len(store.by_run(child_run_id)),
+                    n_error=evaluator.error_count,
+                    spend_usd=evaluator.spent_usd,
+                    breaking_point_t_star=bp.t_star,
+                    breaking_point_found=bp.found,
+                    hypotheses_n=1 if bp.hypothesis is not None else 0,
+                    note=f"{bp.note}; {seed_note}".strip("; "),
+                )
+            else:  # pragma: no cover -- exhaustive by construction
+                continue
+        except Exception as exc:  # a stage failing must not kill the battery
+            summary = StageSummary(
+                stage=stage,
+                run_id=child_run_id,
+                skipped=True,
+                note=f"stage raised: {exc!r}",
+            )
+            result.notes.append(f"stage={stage} raised {exc!r}; continuing to next stage")
+
+        result.stages.append(summary)
+        result.total_spend_usd += summary.spend_usd
+        result.total_records += summary.n_records
+
+        if cancel_event is not None and cancel_event.is_set():
+            result.cancelled = True
+            result.notes.append(f"cancelled during/after stage={stage}")
+            break
+
+    return result

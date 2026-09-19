@@ -667,3 +667,23 @@ def test_run_html_shows_trap_kinds_for_adversarial_records(tmp_path):
 
     record_page = record_html(store, rec.record_id)
     assert "final_true_state" in record_page
+
+
+# --- verdict panel wiring ----------------------------------------------------
+
+
+def test_run_detail_page_contains_verdict_panel_marker(tmp_path):
+    """run_html must render the "what this run revealed" panel at the top
+    (see cartographer.report.verdict / cartographer.viewer.serve.verdict_panel_html)."""
+    store, _, _, _ = _seed_store(tmp_path)
+    page = run_html(store, "run-a")
+    assert 'data-testid="verdict-panel"' in page
+    # The verdict panel comes before the raw per-trial table in the body.
+    assert page.index('data-testid="verdict-panel"') < page.index("<table>")
+
+
+def test_run_detail_page_verdict_panel_graceful_when_empty(tmp_path):
+    store = ResultsStore(tmp_path / "empty.sqlite")
+    page = run_html(store, "no-such-run")
+    assert "No records found." in page
+    store.close()

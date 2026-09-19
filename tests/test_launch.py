@@ -58,9 +58,10 @@ def test_models_step_populates_dropdown_without_leaking_key(tmp_path):
     assert "acme/model-a" in page and "acme/model-b" in page
     assert 'name="model"' in page
     assert 'name="campaign_type"' in page
-    # presets prefilled (state budget/cap from exec.evaluator)
-    assert 'value="160"' in page
-    assert 'value="0.5"' in page
+    # presets prefilled (full_map is the default-selected preset -- the
+    # one-button "profile this model" campaign, budget/cap from exec.evaluator)
+    assert 'value="600"' in page
+    assert 'value="2.0"' in page
     # THE key never appears anywhere in the HTML -- only an opaque token.
     assert SENTINEL_KEY not in page
     assert 'name="token"' in page
@@ -481,3 +482,76 @@ def test_adversarial_belief_dispatches_through_start(tmp_path):
     store = ResultsStore(deps.db_path)
     assert len(store.by_run(run_id)) == 1
     store.close()
+
+
+# ---------------------------------------------------------------------------
+# full_map preset: default-selected, RECOMMENDED badge
+# ---------------------------------------------------------------------------
+
+
+def test_full_map_preset_registered():
+    assert "full_map" in launch_mod.CAMPAIGN_PRESETS
+    preset = launch_mod.CAMPAIGN_PRESETS["full_map"]
+    assert preset == {"budget": 600, "cost_cap": 2.0}
+    assert "full_map" in launch_mod._RUNNERS
+    from cartographer.exec.evaluator import run_full_map_campaign
+
+    assert launch_mod._RUNNERS["full_map"] is run_full_map_campaign
+
+
+def test_full_map_is_the_default_campaign_type():
+    assert launch_mod.DEFAULT_CAMPAIGN_TYPE == "full_map"
+
+
+def test_launch_form_shows_full_map_as_recommended(tmp_path):
+    page = launch_mod.launch_form_html()
+    assert "full_map" in page
+    assert "RECOMMENDED" in page
+    assert "one budget, one report" in page.lower() or "one report" in page.lower()
+
+
+def test_models_step_defaults_to_full_map_selected_and_prefilled(tmp_path):
+    deps = _deps(tmp_path)
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, deps)
+    # full_map option is marked selected in the campaign_type dropdown.
+    assert '<option value="full_map" selected>' in page
+    # its preset values are prefilled into the budget/cost_cap fields.
+    assert 'value="600"' in page
+    assert 'value="2.0"' in page
+    assert "RECOMMENDED" in page
+
+
+def test_full_map_dispatches_through_start(tmp_path):
+    calls = []
+
+    def fake_full_map_runner(client, store, run_id, model, budget, cost_cap, max_tokens=None, cancel_event=None):
+        calls.append((run_id, model, budget, cost_cap))
+        store.append(
+            ExperimentRecord(
+                run_id=f"{run_id}/state", model_name=model, latent_params={}, realized_dims={},
+                render_mode=RenderMode.TEMPLATE, task_seed=0, trial_seed=0,
+                verdict=Verdict.PASS, tokens_in=1, tokens_out=1, cost_usd=0.0, latency_ms=1.0,
+            )
+        )
+
+    deps = _deps(
+        tmp_path,
+        client_factory=_FakeClient,
+        runners={"full_map": fake_full_map_runner},
+    )
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, deps)
+    token = page.split('name="token" value="')[1].split('"')[0]
+    started, run_id = handle_start(
+        {
+            "token": token,
+            "model": "acme/Model-A",
+            "campaign_type": "full_map",
+            "budget": "600",
+            "cost_cap": "2.0",
+        },
+        deps,
+    )
+    assert started is True
+    thread = launch_mod._CURRENT_RUN["thread"]
+    thread.join(timeout=5)
+    assert calls and calls[0][0] == run_id

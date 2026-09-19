@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from ..report.verdict import run_verdict
 from ..store.schema import ExperimentRecord
 from ..store.store import ResultsStore
 from . import launch as launch_mod
@@ -268,6 +269,56 @@ def _relative_time(ts: datetime | None) -> str:
     return f"{int(age_s // 86400)}d ago"
 
 
+def _verdict_headline_safe(store: ResultsStore, run_id: str) -> str:
+    """`run_verdict`'s headline, defensively -- never let a verdict
+    computation (which regenerates worlds) break a listing page."""
+    try:
+        return run_verdict(store, run_id).headline
+    except Exception:
+        return ""
+
+
+def verdict_panel_html(store: ResultsStore, run_id: str) -> str:
+    """Renders the "what this run revealed" panel: headline + paragraphs +
+    up to 3 notable failure examples. Meant to sit at the TOP of the run
+    detail page, above the raw per-trial table."""
+    try:
+        verdict = run_verdict(store, run_id)
+    except Exception as exc:  # never let a verdict crash the run page
+        return (
+            '<div class="stat-box" style="grid-column: 1 / -1;">'
+            '<p class="meta">verdict unavailable for this run '
+            f"({html.escape(repr(exc))}).</p></div>"
+        )
+
+    paragraphs_html = "".join(f"<p>{html.escape(p)}</p>" for p in verdict.paragraphs)
+
+    failures_html = ""
+    if verdict.notable_failures:
+        items = []
+        for f in verdict.notable_failures:
+            items.append(
+                "<li>"
+                f'<a href="/record/{html.escape(f.record_id)}">record {html.escape(f.record_id[:8])}</a>: '
+                f'<span class="meta">asked</span> "{html.escape(f.question)}" &middot; '
+                f'<span class="meta">model said</span> "{html.escape(f.model_answer)}" &middot; '
+                f'<span class="meta">correct</span> "{html.escape(f.correct_answer)}" &mdash; '
+                f"{html.escape(f.why_wrong)}"
+                "</li>"
+            )
+        failures_html = (
+            "<h3>Notable failures</h3><ul>" + "".join(items) + "</ul>"
+        )
+
+    return (
+        '<div class="stat-box" style="grid-column: 1 / -1;" data-testid="verdict-panel">'
+        f'<h2 style="margin-top:0;">{html.escape(verdict.headline)}</h2>'
+        f"{paragraphs_html}"
+        f"{failures_html}"
+        "</div>"
+    )
+
+
 def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
     cur = store._conn.execute(
         "SELECT run_id, model_name, verdict, cost_usd, created_at FROM experiments"
@@ -283,6 +334,30 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
         agg["cost"] += row["cost_usd"] or 0.0
         if row["created_at"]:
             agg["created_ats"].append(row["created_at"])
+
+    # full_map runs record no rows directly against the parent run_id --
+    # every trial lives under f"{parent}/{stage}" child run_ids. Fold those
+    # child rows' aggregates up into a synthetic parent entry (and drop the
+    # raw child rows from the top-level table) so /runs shows one grouped
+    # row per full_map launch instead of five disconnected stage rows.
+    parents: dict[str, dict] = {}
+    child_run_ids: set[str] = set()
+    for run_id in list(by_run.keys()):
+        if "/" in run_id:
+            parent, stage = run_id.rsplit("/", 1)
+            child_run_ids.add(run_id)
+            agg = by_run[run_id]
+            p = parents.setdefault(
+                parent, {"counts": {}, "model": agg["model"], "cost": 0.0, "created_ats": []}
+            )
+            for verdict_name, n in agg["counts"].items():
+                p["counts"][verdict_name] = p["counts"].get(verdict_name, 0) + n
+            p["cost"] += agg["cost"]
+            p["created_ats"].extend(agg["created_ats"])
+    for parent, agg in parents.items():
+        by_run[parent] = agg
+    for child in child_run_ids:
+        by_run.pop(child, None)
 
     active = launch_mod.current_run()
     active_run_id = active["run_id"] if active else None
@@ -307,9 +382,15 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
         status = "live" if is_live else "complete"
         safe_run_id = html.escape(run_id)
         model_short = html.escape(_short_model(agg["model"]))
+        headline = _verdict_headline_safe(store, run_id)
+        headline_html = (
+            f'<div class="meta" style="margin-top:0.15rem;">{html.escape(headline)}</div>'
+            if headline
+            else ""
+        )
         rows_html.append(
             "<tr>"
-            f'<td class="mono"><a href="/run/{safe_run_id}">{safe_run_id}</a></td>'
+            f'<td class="mono"><a href="/run/{safe_run_id}">{safe_run_id}</a>{headline_html}</td>'
             f'<td class="mono">{model_short}</td>'
             f"<td>{total}</td>"
             f'<td><span class="pill pill-PASS">{pass_rate:.0f}%</span></td>'
@@ -331,8 +412,9 @@ def runs_html(store: ResultsStore) -> str:
     )
     body = (
         "<h1>Runs</h1>"
-        '<p class="meta">Every campaign/pilot run recorded in this store, one row each. '
-        'Click a run_id for its per-trial record table.</p>'
+        '<p class="meta">Every campaign/pilot run recorded in this store, one row each '
+        '(full_map runs are grouped under their parent run_id). Each run_id shows a '
+        "one-line verdict; click through for the full report and per-trial table.</p>"
         f"{table}"
     )
     return _shell("Runs", "runs", body)
@@ -387,6 +469,28 @@ def index_html(store: ResultsStore) -> str:
         for f in _confirmed_findings_preview()
     )
 
+    _, by_run_for_headlines = _runs_table_rows(store)
+
+    def _headline_sort_key(rid: str) -> str:
+        ats = by_run_for_headlines[rid]["created_ats"]
+        return max(ats) if ats else ""
+
+    recent_run_ids = sorted(by_run_for_headlines.keys(), key=_headline_sort_key, reverse=True)[:5]
+    recent_verdicts_items = []
+    for rid in recent_run_ids:
+        headline = _verdict_headline_safe(store, rid)
+        if not headline:
+            continue
+        recent_verdicts_items.append(
+            f'<li><a href="/run/{html.escape(rid)}"><span class="mono">{html.escape(rid)}</span></a>'
+            f" &mdash; {html.escape(headline)}</li>"
+        )
+    recent_verdicts_html = (
+        "".join(recent_verdicts_items)
+        if recent_verdicts_items
+        else '<li class="meta">no runs yet</li>'
+    )
+
     body = f"""
     <h1>Overview</h1>
     <p class="meta">This is the home page: what the instrument does, what
@@ -413,6 +517,10 @@ def index_html(store: ResultsStore) -> str:
       <div class="stat-box"><div class="stat-num">{total_trials}</div><div class="stat-label">Total trials</div></div>
       <div class="stat-box"><div class="stat-num">${total_spend:.4f}</div><div class="stat-label">Total spend</div></div>
     </div>
+
+    <h2>What recent runs revealed</h2>
+    <ul style="margin:0; padding-left: 1.1rem;">{recent_verdicts_html}</ul>
+    <p class="meta" style="margin-top:0.5rem;"><a href="/runs">all runs &rarr;</a></p>
 
     <h2>Where to go</h2>
     <div class="stat-grid">
@@ -682,12 +790,30 @@ def live_html(store: ResultsStore) -> str:
     return _shell(f"Live: {run_id}", "live", body, refresh=not complete)
 
 
+_FULL_MAP_RUN_STAGES = ["state", "order", "belief", "adversarial_belief", "breaking_point"]
+
+
 def run_html(store: ResultsStore, run_id: str) -> str:
     records = store.by_run(run_id)
     safe_run_id = html.escape(run_id)
 
+    # A full_map PARENT run_id has no records of its own -- every trial
+    # lives under f"{run_id}/{stage}" child run_ids. Pull those in (labeled
+    # by stage) so the table still shows every trial for a full_map launch.
+    is_full_map_parent = False
     if not records:
-        body = f"<h1>Run {safe_run_id}</h1><p>No records found.</p>"
+        for stage in _FULL_MAP_RUN_STAGES:
+            child = store.by_run(f"{run_id}/{stage}")
+            if child:
+                is_full_map_parent = True
+                records.extend(child)
+
+    if not records:
+        body = (
+            f"<h1>Run {safe_run_id}</h1>"
+            f"{verdict_panel_html(store, run_id)}"
+            "<p>No records found.</p>"
+        )
         return _shell(f"Run {run_id}", "runs", body)
 
     rows_html = []
@@ -698,9 +824,15 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         difficulty = detail.get("difficulty", "-")
         traps = detail.get("traps", "")
         traps_html = f' <span class="meta mono">traps={html.escape(traps)}</span>' if traps else ""
+        stage_html = ""
+        if is_full_map_parent:
+            stage = _stage_from_run_id_local(r.run_id)
+            if stage:
+                stage_html = f'<td class="mono">{html.escape(stage)}</td>'
         rows_html.append(
             "<tr>"
             f'<td class="mono">{html.escape(r.model_name)}</td>'
+            f"{stage_html}"
             f"<td>{_verdict_pill(r.verdict.name)}</td>"
             f"<td>{html.escape(kind)}{traps_html}</td>"
             f"<td>{html.escape(difficulty)}</td>"
@@ -710,13 +842,17 @@ def run_html(store: ResultsStore, run_id: str) -> str:
             "</tr>"
         )
 
+    stage_header = "<th>stage</th>" if is_full_map_parent else ""
     table = (
-        "<table><thead><tr><th>model</th><th>verdict</th><th>kind</th>"
+        "<table><thead><tr><th>model</th>"
+        f"{stage_header}"
+        "<th>verdict</th><th>kind</th>"
         "<th>difficulty</th><th>cost ($)</th><th>tokens in/out</th><th></th>"
         "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
     body = (
         f"<h1>Run {safe_run_id}</h1>"
+        f"{verdict_panel_html(store, run_id)}"
         '<p class="meta">Every trial recorded for this run. Click "full transcript" '
         "for the prompt, model reasoning, response, verdict, answer key, and "
         "(for adversarial runs) the trap kind(s) the world was seeded to test.</p>"
@@ -725,6 +861,12 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         f"{table}"
     )
     return _shell(f"Run {run_id}", "runs", body)
+
+
+def _stage_from_run_id_local(run_id: str) -> str | None:
+    if "/" in run_id:
+        return run_id.rsplit("/", 1)[-1]
+    return None
 
 
 def record_html(store: ResultsStore, record_id: str) -> str:

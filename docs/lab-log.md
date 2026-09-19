@@ -7,6 +7,115 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-19 — BUILD (confirmed) — one-button `full_map` campaign + plain-English verdict panels
+
+**User feedback driving this (verbatim):** (1) "there are 5 different types
+of campaign type. Are we supposed to run them one by one? That sounds
+counterintuitive." (2) "still the UX sucks. I get no idea what the test
+reveals."
+
+**Fix 1 — `full_map` campaign (`cartographer/exec/evaluator.py`):**
+`run_full_map_campaign(client, store, run_id, model, budget=600,
+cost_cap=2.0, ...)` chains state -> order -> belief -> adversarial_belief
+-> breaking_point as stages under one parent `run_id`, each stage running
+as a full campaign against a child run_id (`f"{run_id}/{stage}"`) against
+the SAME store/client. Budget and cost_cap are split proportionally per
+stage (`_FULL_MAP_STAGE_BUDGET_SHARES` / `_FULL_MAP_STAGE_COST_SHARES`,
+targeting ~60/80/200/160/remainder trials at the default budget=600). A
+stage exhausting its own cap logs a note and the battery continues to the
+next stage (never blocks). If the belief stage finds a dim boundary, the
+breaking_point stage's `EscalationRay` is re-seeded so that dim's
+`base_value` sits at the discovered boundary instead of the generator's
+easy default, concentrating the escalation ray where belief already found
+trouble; falls back to the default all-ceiling ray with a note if no
+boundary was found. Returns a `FullMapResult` (list of `StageSummary`:
+pass rate, boundaries, hypotheses, spend per stage). Wired into
+`/launch`: `full_map` added to `CAMPAIGN_PRESETS`, `DEFAULT_CAMPAIGN_TYPE
+= "full_map"` (now the pre-selected option in the campaign_type dropdown
+and the prefilled budget/cost_cap), and a RECOMMENDED-badged description
+card.
+
+**Fix 2 — verdict panels (`cartographer/report/verdict.py`, new):**
+`run_verdict(store, run_id) -> RunVerdict` is a pure, deterministic,
+no-LLM function that reads stored records and produces a headline +
+plain-English paragraphs + up to 3 concrete notable-failure examples.
+Saturation detection (pass rate >= 97% -> "did not challenge the model"),
+sharp-boundary / diffuse-weakness detection via tercile-bucketed per-dim
+pass rates, and belief-failure classification by regenerating the exact
+world from stored `(latent_params, task_seed, rendering_seed)` provenance
+(same idiom as `scripts/foil_report.py`) and matching the model's response
+against `cartographer.world.foils.foil_answers` -- guarded by a
+`created_at` cutoff so pre-`313e3b2` runs that can't be exactly
+regenerated get an honest "predates the generator-hardening fix" note
+instead of a silent mis-attribution. `full_map` parent run_ids (no direct
+records -- everything lives under child `f"{run_id}/{stage}"` run_ids) get
+an aggregated per-stage verdict via `_full_map_verdict`. Handles empty
+runs, all-ERROR runs, and state/order runs (no foil language) gracefully.
+Wired into the viewer: `run_html` now renders the verdict panel
+(`data-testid="verdict-panel"`) above the raw per-trial table (and pulls
+in child-stage records for full_map parents); `/runs` shows each run's
+one-line headline under its run_id (full_map child run_ids are folded
+into a synthetic parent row so the table shows one row per full_map
+launch, not five); the overview page (`/`) gained a "What recent runs
+revealed" section listing the 5 most recent runs' headlines.
+
+**Real verdict examples generated against `results/campaign.sqlite`**
+(pasted verbatim, unedited):
+
+```
+=== camp-adversarial_belief-nemotron-3-ultra-550b-a55b-001 ===
+HEADLINE: Run camp-adversarial_belief-nemotron-3-ultra-550b-a55b-001: 97% pass rate on belief queries.
+- Of 133 scored trials (belief query kind), the model passed 97% and failed 3%.
+- 2 additional trial(s) ended in ERROR (infra failures, cost cap, or cancellation) and are excluded from the pass rate above.
+- Diffuse weakness (below 90% but no outright flip) on: temporal (pass rate 88% at the high end).
+- In 3 of 4 classifiable belief failures the model reported where the object ACTUALLY was, not where the queried entity BELIEVED it was -- it collapsed their perspective into reality.
+```
+
+For comparison, a saturated adversarial run and an older pre-hardening
+belief run both produced the expected qualitatively-different copy:
+`camp-adversarial_belief-nemotron-3-ultra-550b-a55b-002` -> "passed
+essentially everything (99%) -- this test did not challenge the model";
+`camp-belief-nemotron-super-002` -> "4 belief FAIL(s) were recorded, but
+they predate the generator-hardening fix and can't be safely
+re-classified against regenerated ground truth."
+
+**Judgment calls:**
+- Stage cost/budget shares are fixed proportional constants, not
+  adaptively rebalanced when an earlier stage under- or over-spends --
+  kept simple and deterministic rather than trying to redistribute unused
+  cap live.
+- `breaking_point`'s per-record "pass rate" isn't directly comparable to
+  the other stages' (it's an escalation ray, not a flat sweep), so
+  `_full_map_verdict` reports it qualitatively (pass/fail counts across
+  the ray) rather than folding it into the "weak province" pass-rate
+  comparison used for the other four stages.
+- Belief-failure classification treats any record with `created_at >=
+  2026-09-17T17:20:42` as reconstructable (mirrors `313e3b2`'s commit
+  time) rather than maintaining an explicit run_id allowlist like
+  `scripts/foil_report.py` -- works for any future run without needing a
+  code change, at the cost of being a few seconds less precise than an
+  exact commit-boundary check (immaterial in practice, campaigns run in
+  minutes-to-hours batches, never split across that exact second).
+- Sharp-boundary / diffuse-weakness detection buckets each dim's *realized*
+  values into terciles rather than reusing the scheduler's own
+  explore/refine points, so it works uniformly across dims with very
+  different numbers of observed levels (including full_map runs where
+  every stage explores a different set of dims).
+
+**Verification:** 298/298 tests pass (up from the 259-baseline the task
+started against; the difference also includes tests added concurrently by
+the propose/ work in this same window). New: 6 full_map evaluator tests
+(`tests/test_evaluator.py`), 8 verdict tests
+(`tests/test_verdict.py`), 2 viewer verdict-panel tests
+(`tests/test_viewer.py`), 5 /launch full_map tests
+(`tests/test_launch.py`), plus 1 existing /launch test updated to assert
+the new full_map default instead of the old state default. Sanity-checked
+live against `results/campaign.sqlite` (see verdict examples above) and
+confirmed `run_html`/`index_html`/`runs_html` all render without error on
+every real stored run_id, including the pre-hardening ones.
+
+---
+
 ## 2026-09-18 — BUILD (confirmed) — viewer information-architecture redesign
 
 **What we saw (user feedback, verbatim):** "The UI and UX is shitty. I

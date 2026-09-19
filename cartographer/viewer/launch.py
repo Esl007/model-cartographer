@@ -47,6 +47,7 @@ from ..exec.evaluator import (
     run_adversarial_belief_campaign,
     run_belief_campaign,
     run_breaking_point_campaign,
+    run_full_map_campaign,
     run_order_campaign,
     run_state_campaign,
 )
@@ -63,7 +64,12 @@ CAMPAIGN_PRESETS: dict[str, dict[str, float]] = {
     "order": {"budget": 400, "cost_cap": 0.5},
     "breaking_point": {"budget": 350, "cost_cap": 0.75},
     "adversarial_belief": {"budget": 300, "cost_cap": 1.0},
+    "full_map": {"budget": 600, "cost_cap": 2.0},
 }
+
+# The default-selected campaign preset on /launch -- the one-button
+# "profile this model" option (see CAMPAIGN_DESCRIPTIONS["full_map"]).
+DEFAULT_CAMPAIGN_TYPE = "full_map"
 
 # Plain-English description of every campaign preset, sourced from the
 # run_* docstrings in cartographer/exec/evaluator.py and docs/lab-log.md.
@@ -131,6 +137,19 @@ CAMPAIGN_DESCRIPTIONS: dict[str, dict[str, object]] = {
         "typical_duration": "10-25 minutes",
         "new": True,
     },
+    "full_map": {
+        "query_kind": "state, order, belief, adversarial_belief, breaking_point",
+        "summary": (
+            "RECOMMENDED. Runs the complete battery -- state, ordering, belief, "
+            "adversarial traps, and breaking-point search -- one budget, one "
+            "report. Answers \"what can this model actually do\" in a single "
+            "launch instead of five separate campaign types."
+        ),
+        "typical_cost": "~$0.10-0.30",
+        "typical_duration": "30-90 minutes",
+        "new": True,
+        "recommended": True,
+    },
 }
 
 _RUNNERS: dict[str, Callable] = {
@@ -139,6 +158,7 @@ _RUNNERS: dict[str, Callable] = {
     "order": run_order_campaign,
     "breaking_point": run_breaking_point_campaign,
     "adversarial_belief": run_adversarial_belief_campaign,
+    "full_map": run_full_map_campaign,
 }
 
 
@@ -227,12 +247,18 @@ def _preset_cards_html(campaign_types: list[str] | None = None) -> str:
     supplies an explicit order. Each card names its query kind, a
     one-sentence description of what it tests, typical cost, and typical
     duration -- and a NEW badge for recently added presets."""
-    types = campaign_types or sorted(CAMPAIGN_PRESETS)
+    types = campaign_types or sorted(
+        CAMPAIGN_PRESETS, key=lambda t: (t != DEFAULT_CAMPAIGN_TYPE, t)
+    )
     cards = []
     for t in types:
         desc = CAMPAIGN_DESCRIPTIONS.get(t, {})
         preset = CAMPAIGN_PRESETS[t]
-        badge = ' <span class="pill pill-PASS">NEW</span>' if desc.get("new") else ""
+        badge = ""
+        if desc.get("recommended"):
+            badge += ' <span class="pill pill-PASS">RECOMMENDED</span>'
+        if desc.get("new"):
+            badge += ' <span class="pill pill-PASS">NEW</span>'
         cards.append(
             '<div class="stat-box">'
             f'<p style="margin:0 0 0.3rem;"><strong class="mono">{html.escape(t)}</strong>{badge}'
@@ -293,9 +319,10 @@ def models_step_html(provider_name: str, token: str, models: list[str]) -> str:
         f'<option value="{html.escape(m)}">{html.escape(m)}</option>' for m in models
     )
     type_opts = "".join(
-        f'<option value="{t}">{t}</option>' for t in sorted(CAMPAIGN_PRESETS)
+        f'<option value="{t}"{" selected" if t == DEFAULT_CAMPAIGN_TYPE else ""}>{t}</option>'
+        for t in sorted(CAMPAIGN_PRESETS)
     )
-    default = CAMPAIGN_PRESETS["state"]
+    default = CAMPAIGN_PRESETS[DEFAULT_CAMPAIGN_TYPE]
     return f"""
     <p><a href="/launch">&larr; start over</a></p>
     <h1>Launch a campaign &mdash; {html.escape(provider_name)}</h1>

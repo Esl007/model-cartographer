@@ -577,3 +577,165 @@ def test_adversarial_mode_deterministic_seed_choice(tmp_path):
     prompts = [c[1] for c in client.calls]
     assert prompts[0] == prompts[1]
     store.close()
+
+
+# --- full_map campaign ------------------------------------------------------
+
+
+from cartographer.exec.evaluator import FullMapResult, StageSummary, run_full_map_campaign  # noqa: E402
+
+
+def test_full_map_runs_all_five_stages_under_child_run_ids(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    # default_text always "wrong" -- every trial FAILs, but that's fine, we
+    # only care that every stage ran and persisted records under its own
+    # child run_id.
+    client = ScriptedClient(default_text="definitely not the right answer")
+
+    result = run_full_map_campaign(
+        client, store, "camp-full-map-test-001", "fake/model",
+        budget=300, cost_cap=0.5,
+    )
+
+    assert isinstance(result, FullMapResult)
+    stages_seen = [s.stage for s in result.stages]
+    assert stages_seen == ["state", "order", "belief", "adversarial_belief", "breaking_point"]
+
+    for stage in stages_seen:
+        child_run_id = f"camp-full-map-test-001/{stage}"
+        records = store.by_run(child_run_id)
+        assert records, f"stage {stage} recorded no records"
+        assert all(r.run_id == child_run_id for r in records)
+
+    assert result.total_records == sum(s.n_records for s in result.stages)
+    store.close()
+
+
+def test_full_map_budget_partitioned_across_stages(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+
+    budget = 300
+    result = run_full_map_campaign(
+        client, store, "camp-full-map-budget-001", "fake/model",
+        budget=budget, cost_cap=0.5,
+    )
+
+    # No single stage should have consumed the entire shared budget --
+    # each stage's own trial count should roughly track its target share
+    # (state gets the smallest slice, belief/adversarial the largest).
+    by_stage = {s.stage: s.n_records for s in result.stages}
+    assert by_stage["state"] > 0
+    assert by_stage["belief"] >= by_stage["state"]
+    # Total records across all stages must not blow past the shared budget
+    # by more than a small per-stage rounding slop.
+    assert sum(by_stage.values()) <= budget + len(by_stage)
+    store.close()
+
+
+def test_full_map_cost_cap_exhaustion_continues_to_next_stage(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    # A priced model + a near-zero overall cost_cap: the first stage(s)
+    # will exhaust their tiny per-stage cap almost immediately, but the
+    # battery must still reach every later stage (as zero-cost/zero-call
+    # capped records, per PipelineEvaluator._record_capped).
+    client = ScriptedClient(default_text="wrong")
+
+    result = run_full_map_campaign(
+        client, store, "camp-full-map-tinycap-001", "openai/gpt-oss-20b",
+        budget=300, cost_cap=0.0000001,
+    )
+
+    stages_seen = [s.stage for s in result.stages]
+    assert stages_seen == ["state", "order", "belief", "adversarial_belief", "breaking_point"]
+    # Every stage still produced at least one persisted record (even if it's
+    # just a cost_capped marker record) -- the battery didn't stop early.
+    for stage in stages_seen:
+        assert store.by_run(f"camp-full-map-tinycap-001/{stage}")
+    store.close()
+
+
+def test_full_map_cancellation_stops_cleanly(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+    cancel_event = threading.Event()
+    cancel_event.set()  # already cancelled before the battery even starts
+
+    result = run_full_map_campaign(
+        client, store, "camp-full-map-cancel-001", "fake/model",
+        budget=30, cost_cap=0.05, cancel_event=cancel_event,
+    )
+
+    assert result.cancelled is True
+    # Cancelled before the first stage even starts -- no stages ran.
+    assert result.stages == []
+    store.close()
+
+
+def test_full_map_aggregates_spend_and_records_correctly(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+
+    result = run_full_map_campaign(
+        client, store, "camp-full-map-agg-001", "fake/model",
+        budget=300, cost_cap=0.5,
+    )
+
+    # total_spend_usd/total_records must equal the sum over stages (no
+    # double counting, no dropped stages).
+    assert result.total_spend_usd == pytest.approx(sum(s.spend_usd for s in result.stages))
+    assert result.total_records == sum(s.n_records for s in result.stages)
+    for s in result.stages:
+        assert isinstance(s, StageSummary)
+        assert s.run_id == f"camp-full-map-agg-001/{s.stage}"
+    store.close()
+
+
+def test_full_map_breaking_point_seeds_from_belief_boundaries(tmp_path, monkeypatch):
+    """If the belief stage's CampaignState reports a boundary on some dim,
+    the breaking_point stage's ray should be re-seeded near it (base_value
+    moved off the generator default) rather than using the plain default
+    ray -- verified via the stage note recording which path was taken."""
+    store = ResultsStore(tmp_path / "db.sqlite3")
+
+    # A client that always fails so run_belief_campaign's scheduler is
+    # virtually guaranteed to record SOME pass/fail flip (baseline configs
+    # are the easiest, later a lot are "wrong"); to make this deterministic
+    # instead of relying on real generation, we monkeypatch run_belief_campaign
+    # to return a CampaignState with an explicit boundary.
+    import cartographer.exec.evaluator as ev_mod
+    from cartographer.schedule.scheduler import CampaignState
+
+    fake_state = CampaignState(boundaries={"chain_length": (5.0, 4.0, 6.0)})
+
+    class _FakeEvaluator:
+        spent_usd = 0.01
+        error_count = 0
+
+    fake_state.evaluator = _FakeEvaluator()  # type: ignore[attr-defined]
+
+    def _fake_run_belief_campaign(client, store, run_id, model, **kwargs):
+        # Still write at least one record so store.by_run(child) is non-empty.
+        from cartographer.store.schema import ExperimentRecord, RenderMode, Verdict
+
+        store.append(
+            ExperimentRecord(
+                run_id=run_id, model_name=model, latent_params={}, realized_dims={},
+                render_mode=RenderMode.TEMPLATE, task_seed=1, trial_seed=1,
+                verdict=Verdict.PASS,
+            )
+        )
+        return fake_state
+
+    monkeypatch.setattr(ev_mod, "run_belief_campaign", _fake_run_belief_campaign)
+
+    client = ScriptedClient(default_text="wrong")
+    result = ev_mod.run_full_map_campaign(
+        client, store, "camp-full-map-seed-001", "fake/model",
+        budget=300, cost_cap=0.5,
+    )
+
+    bp_summary = next(s for s in result.stages if s.stage == "breaking_point")
+    assert "re-seeded near belief boundaries" in bp_summary.note
+    assert "chain_length" in bp_summary.note
+    store.close()
