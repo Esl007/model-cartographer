@@ -239,3 +239,81 @@ def test_full_map_verdict_aggregates_child_stages(tmp_path):
     assert verdict.stats["stages"]["belief"]["pass_rate"] == pytest.approx(0.0)
     assert "belief" in verdict.headline.lower() or "weak province" in verdict.headline.lower()
     store.close()
+
+
+# --- verification (Task 2): verified counts + noise exclusion ------------
+
+
+def test_verdict_no_verification_data_shows_caution_line(tmp_path):
+    """A run with FAILs but zero verify trials (old run, or verify="manual")
+    must say "failures not yet verified" and point at the action, not
+    silently report raw counts as if they were trustworthy."""
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    _add_passing_trials(store, "run-unverified", "state", "fake/model", 3, {"chain_length": 2}, start_seed=0)
+    _add_failing_trials(store, "run-unverified", "state", "fake/model", 2, {"chain_length": 2}, start_seed=100)
+
+    verdict = run_verdict(store, "run-unverified")
+    joined = " ".join(verdict.paragraphs)
+
+    assert "not yet verified" in joined
+    assert "Verify failures" in joined
+    assert "scripts/verify_past_failures.py" in joined
+    store.close()
+
+
+def test_verdict_mixed_stable_and_noise_reports_verified_counts(tmp_path):
+    """The exact copy the coordinator specified: N failures recorded, M
+    survived verification, K were noise and excluded."""
+    from cartographer.exec.evaluator import VERIFY_SUFFIX
+    from cartographer.store.schema import ExperimentRecord, RenderMode
+
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    run_id = "run-mixed-verify"
+    _add_passing_trials(store, run_id, "state", "fake/model", 2, {"chain_length": 2}, start_seed=0)
+    # 9 FAILs total: 6 stable (all-wrong resamples), 3 noise (all-correct resamples).
+    _add_failing_trials(store, run_id, "state", "fake/model", 9, {"chain_length": 2}, start_seed=200)
+
+    fails = [r for r in store.by_run(run_id) if r.verdict == Verdict.FAIL]
+    assert len(fails) == 9
+    stable_fails, noise_fails = fails[:6], fails[6:]
+
+    def _append_verify_trial(original, verdict, i):
+        store.append(
+            ExperimentRecord(
+                run_id=f"{run_id}{VERIFY_SUFFIX}",
+                model_name="fake/model",
+                latent_params=dict(original.latent_params),
+                realized_dims=dict(original.realized_dims),
+                render_mode=RenderMode.TEMPLATE,
+                task_seed=original.task_seed,
+                trial_seed=original.trial_seed,
+                rendering_seed=original.rendering_seed,
+                prompt_text=original.prompt_text,
+                response_text="resample response",
+                verdict=verdict,
+                verifier_detail=f"kind=state;campaign=1;verify=1;verify_of={original.record_id};sample={i}",
+            )
+        )
+
+    for original in stable_fails:
+        for i in range(3):
+            _append_verify_trial(original, Verdict.FAIL, i)  # all wrong -> stable
+    for original in noise_fails:
+        for i in range(3):
+            _append_verify_trial(original, Verdict.PASS, i)  # all correct -> noise
+
+    verdict = run_verdict(store, run_id)
+    joined = " ".join(verdict.paragraphs)
+
+    assert "9 failures recorded" in joined
+    assert "6 survived verification" in joined
+    assert "3 were sampling noise and are excluded from findings" in joined
+
+    # Verified stats must reflect verified counts (noise excluded from the
+    # failure tally used for pass_rate -- 2 PASS + 6 stable FAIL = 8
+    # scored, pass_rate = 2/8 = 0.25), and notable_failures must never
+    # include a noise-classified record.
+    assert verdict.stats["pass_rate"] == pytest.approx(2 / 8)
+    noise_ids = {r.record_id for r in noise_fails}
+    assert all(f.record_id not in noise_ids for f in verdict.notable_failures)
+    store.close()

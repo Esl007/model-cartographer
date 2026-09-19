@@ -492,13 +492,15 @@ def handle_start(
     except ValueError:
         return False, error_html("budget, cost cap, and max tokens must be numeric")
 
-    # Checkbox semantics: present (any truthy value) -> "auto", absent
-    # (unchecked boxes aren't submitted at all in an HTML form POST) ->
-    # "manual". Defaults to "auto" (checked) to match the form's default
-    # `checked` attribute when the field is simply missing from `form`
-    # entirely (e.g. a caller building the dict directly rather than via
-    # an actual browser form submit).
-    verify = "auto" if form.get("verify_failures", "1") else "manual"
+    # Standard HTML checkbox semantics: a CHECKED box submits
+    # verify_failures=1; an UNCHECKED box is omitted from the POST body
+    # entirely (browsers never send unchecked checkboxes), so "absent"
+    # means "unchecked" means "manual" -- not "auto". The form itself
+    # defaults the box to `checked` (see models_step_html), so a real user
+    # gets "auto" unless they deliberately uncheck it; a caller building
+    # `form` programmatically must pass "verify_failures": "1" explicitly
+    # to get "auto".
+    verify = "auto" if form.get("verify_failures") else "manual"
 
     run_id = next_run_id(deps.db_path, campaign_type, model)
     provider = _PROVIDERS[provider_name]

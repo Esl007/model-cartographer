@@ -13,10 +13,13 @@ import pytest
 
 from cartographer.exec.client import ChatResult
 from cartographer.exec.evaluator import (
+    VERIFY_SUFFIX,
     PipelineEvaluator,
     _apply_config,
     _task_seed,
+    classify_all_verified_failures,
     default_token_budget,
+    run_verify_failures,
 )
 from cartographer.render import build_name_map, render
 from cartographer.store.schema import Verdict
@@ -739,3 +742,261 @@ def test_full_map_breaking_point_seeds_from_belief_boundaries(tmp_path, monkeypa
     assert "re-seeded near belief boundaries" in bp_summary.note
     assert "chain_length" in bp_summary.note
     store.close()
+
+
+# --- run_verify_failures ---------------------------------------------------
+
+
+def _make_fail_record(store, model="fake/model", run_id="run-verify-001", trial_seed=1):
+    """Run one real PipelineEvaluator trial against a client that always
+    answers wrong, so it's guaranteed to persist exactly one FAIL record
+    with a real stored prompt_text -- the exact thing run_verify_failures
+    replays. Returns the FAIL ExperimentRecord."""
+    before_ids = {r.record_id for r in store.by_run(run_id)}
+    client = ScriptedClient(default_text="definitely the wrong answer")
+    ev = PipelineEvaluator(client, model, store, run_id, "state", cost_cap_usd=10.0)
+    ev({"chain_length": 2}, trial_seed=trial_seed)
+    records = store.by_run(run_id)
+    new_fails = [
+        r for r in records if r.verdict == Verdict.FAIL and r.record_id not in before_ids
+    ]
+    assert len(new_fails) == 1, f"expected exactly one NEW FAIL, got {[r.verdict for r in records]}"
+    return new_fails[0]
+
+
+def _true_answer_for(record):
+    """Recompute the correct answer text for a stored record via the same
+    regeneration idiom evaluator.py itself uses."""
+    from cartographer.exec.evaluator import _apply_config, _default_base
+    from cartographer.world.foils import foil_divergence
+
+    base = _default_base("state")
+    params = _apply_config(base, record.latent_params)
+    world = generate(params, record.task_seed)
+    name_map = build_name_map(world, record.rendering_seed)
+    profile = foil_divergence(world, name_map)
+    return profile.true_answer
+
+
+def test_verify_failures_classifies_noise_when_resamples_mostly_pass(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    run_id = "run-verify-noise"
+    original = _make_fail_record(store, run_id=run_id)
+    correct = _true_answer_for(original)
+
+    # 3 resamples, all correct -> pass_rate = 3/4 = 0.75 > 0.5 -> noise.
+    resample_client = ScriptedClient(script=[
+        ChatResult(text=correct, tokens_in=10, tokens_out=5, latency_ms=1.0, finish_reason="stop"),
+        ChatResult(text=correct, tokens_in=10, tokens_out=5, latency_ms=1.0, finish_reason="stop"),
+        ChatResult(text=correct, tokens_in=10, tokens_out=5, latency_ms=1.0, finish_reason="stop"),
+    ])
+
+    result = run_verify_failures(resample_client, "fake/model", store, run_id, n=3)
+
+    assert result.n_fails_total == 1
+    assert result.n_verified == 1
+    assert result.n_noise == 1
+    assert result.n_stable == 0
+    assert resample_client.calls  # actually called the client
+
+    # Verify trials were persisted under f"{run_id}/verify", linked to the
+    # original record_id.
+    verify_records = store.by_run(f"{run_id}{VERIFY_SUFFIX}")
+    assert len(verify_records) == 3
+    for r in verify_records:
+        assert f"verify_of={original.record_id}" in (r.verifier_detail or "")
+    assert sum(1 for r in verify_records if r.verdict == Verdict.PASS) == 3
+
+    # Original FAIL record is untouched (append-only invariant).
+    reread = [r for r in store.by_run(run_id) if r.record_id == original.record_id][0]
+    assert reread.verdict == Verdict.FAIL
+    assert reread.response_text == original.response_text
+
+    classification = classify_all_verified_failures(store, run_id)
+    assert classification[original.record_id].status == "noise"
+    store.close()
+
+
+def test_verify_failures_classifies_stable_when_resamples_mostly_fail(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    run_id = "run-verify-stable"
+    original = _make_fail_record(store, run_id=run_id)
+
+    # 3 resamples, all wrong -> pass_rate = 0/4 = 0.0 <= 0.5 -> stable.
+    resample_client = ScriptedClient(default_text="still wrong")
+
+    result = run_verify_failures(resample_client, "fake/model", store, run_id, n=3)
+
+    assert result.n_verified == 1
+    assert result.n_stable == 1
+    assert result.n_noise == 0
+
+    classification = classify_all_verified_failures(store, run_id)
+    assert classification[original.record_id].status == "stable"
+    assert classification[original.record_id].n_samples == 3
+    assert classification[original.record_id].n_pass == 0
+    store.close()
+
+
+def test_verify_failures_threshold_boundary_exactly_half_is_stable(tmp_path):
+    """pass_rate == stable_threshold (0.5) counts as stable (<=, not <)."""
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    run_id = "run-verify-boundary"
+    original = _make_fail_record(store, run_id=run_id)
+    correct = _true_answer_for(original)
+
+    # n=3 resamples: 1 correct, 2 wrong -> pass_rate = (0+1)/4 = 0.25 -> stable
+    # (use n=1 with 1 correct to hit exactly 1/2 = 0.5): original FAIL (1
+    # fail) + 1 resample pass = 1 pass out of 2 total = 0.5 exactly.
+    resample_client = ScriptedClient(script=[
+        ChatResult(text=correct, tokens_in=10, tokens_out=5, latency_ms=1.0, finish_reason="stop"),
+    ])
+
+    result = run_verify_failures(resample_client, "fake/model", store, run_id, n=1, stable_threshold=0.5)
+
+    assert result.n_stable == 1
+    assert result.n_noise == 0
+    classification = classify_all_verified_failures(store, run_id)
+    assert classification[original.record_id].pass_rate == pytest.approx(0.5)
+    assert classification[original.record_id].status == "stable"
+    store.close()
+
+
+def test_verify_failures_skips_passes_never_resamples_them(tmp_path):
+    """A run with only PASS records should never call the client at all --
+    verification is FAIL-only, by construction."""
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    run_id = "run-verify-allpass"
+
+    # A client that always answers correctly relative to whatever the true
+    # state ends up being isn't reliable to script generically, so instead
+    # directly persist a PASS record.
+    from cartographer.store.schema import ExperimentRecord, RenderMode
+
+    store.append(
+        ExperimentRecord(
+            run_id=run_id, model_name="fake/model", latent_params={}, realized_dims={},
+            render_mode=RenderMode.TEMPLATE, task_seed=1, trial_seed=1,
+            verdict=Verdict.PASS, prompt_text="does not matter",
+        )
+    )
+
+    resample_client = ScriptedClient(default_text="anything")
+    result = run_verify_failures(resample_client, "fake/model", store, run_id, n=3)
+
+    assert result.n_fails_total == 0
+    assert result.n_verified == 0
+    assert resample_client.calls == []
+    store.close()
+
+
+def test_verify_failures_cost_cap_slice_stops_early(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    run_id = "run-verify-costcap"
+    _make_fail_record(store, run_id=run_id, model="openai/gpt-oss-120b")
+
+    resample_client = ScriptedClient(default_text="still wrong")
+    # A cost_cap_slice of exactly 0.0 must stop before any resample call is made.
+    result = run_verify_failures(
+        resample_client, "openai/gpt-oss-120b", store, run_id, n=3, cost_cap_slice=0.0
+    )
+
+    assert result.n_verified == 0
+    assert resample_client.calls == []
+    store.close()
+
+
+def test_verify_failures_max_verified_truncates_and_logs(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    run_id = "run-verify-truncate"
+    for i in range(3):
+        _make_fail_record(store, run_id=run_id, trial_seed=100 + i)
+
+    resample_client = ScriptedClient(default_text="still wrong")
+    result = run_verify_failures(
+        resample_client, "fake/model", store, run_id, n=1, max_verified=2
+    )
+
+    assert result.n_fails_total == 3
+    assert result.n_verified == 2
+    assert result.truncated is True
+    assert any("truncated" in note for note in result.notes)
+    store.close()
+
+
+def test_verify_failures_cancel_event_stops_cleanly(tmp_path):
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    run_id = "run-verify-cancel"
+    for i in range(3):
+        _make_fail_record(store, run_id=run_id, trial_seed=200 + i)
+
+    cancel_event = threading.Event()
+    cancel_event.set()  # already cancelled before verification starts
+
+    resample_client = ScriptedClient(default_text="still wrong")
+    result = run_verify_failures(
+        resample_client, "fake/model", store, run_id, n=3, cancel_event=cancel_event
+    )
+
+    assert result.cancelled is True
+    assert result.n_verified == 0
+    assert resample_client.calls == []
+    store.close()
+
+
+def test_campaign_verify_manual_mode_spends_zero_verification_calls(tmp_path):
+    """run_state_campaign(..., verify="manual") must record FAILs as usual
+    but never call run_verify_failures -- zero extra API calls beyond the
+    main scheduler loop."""
+    import cartographer.exec.evaluator as ev_mod
+
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+
+    verify_calls = []
+    real_run_verify_failures = ev_mod.run_verify_failures
+
+    def _spy(*args, **kwargs):
+        verify_calls.append((args, kwargs))
+        return real_run_verify_failures(*args, **kwargs)
+
+    import unittest.mock as mock
+
+    with mock.patch.object(ev_mod, "run_verify_failures", side_effect=_spy):
+        ev_mod.run_state_campaign(
+            client, store, "camp-state-manual-001", "fake/model",
+            budget=10, cost_cap=0.05, verify="manual",
+        )
+
+    assert verify_calls == []
+    # No f"{run_id}/verify" records exist either.
+    assert store.by_run("camp-state-manual-001/verify") == []
+    store.close()
+
+
+def test_campaign_verify_auto_mode_calls_verify_failures(tmp_path):
+    """The inverse check: verify="auto" (the default) actually invokes
+    verification when the main loop produced at least one FAIL."""
+    import cartographer.exec.evaluator as ev_mod
+
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    client = ScriptedClient(default_text="wrong")
+
+    state = ev_mod.run_state_campaign(
+        client, store, "camp-state-auto-001", "fake/model",
+        budget=10, cost_cap=0.5, verify="auto",
+    )
+
+    assert any("verify_failures:" in note for note in state.notes)
+    store.close()
+
+
+def test_run_verify_failures_invalid_mode_raises():
+    import cartographer.exec.evaluator as ev_mod
+
+    store = None
+    with pytest.raises(ValueError):
+        ev_mod._run_campaign_with_verification(
+            "state", ev_mod._state_scheduler_config, ScriptedClient(), store,
+            "run", "model", 10, 0.5, None, None, None, verify="bogus",
+        )

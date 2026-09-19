@@ -21,7 +21,12 @@ import string
 from collections import Counter
 from dataclasses import dataclass, field
 
-from ..exec.evaluator import _apply_config, _default_base
+from ..exec.evaluator import (
+    VERIFY_SUFFIX,
+    _apply_config,
+    _default_base,
+    classify_all_verified_failures,
+)
 from ..render import build_name_map, render
 from ..store.schema import ExperimentRecord, Verdict
 from ..store.store import ResultsStore
@@ -218,8 +223,78 @@ def _dim_region_rates(records: list) -> dict:
     return out
 
 
-def _notable_failures(run_id: str, records: list, limit: int = 3) -> list:
+def _verified_only(records: list, verification: dict) -> list:
+    """FAIL records with verification, excluding any classified `noise`.
+    Non-FAIL records and unverified FAILs pass through unchanged -- this
+    is a filter over the failure set only, not a general record filter."""
+    out = []
+    for r in records:
+        if r.verdict != Verdict.FAIL:
+            out.append(r)
+            continue
+        fv = verification.get(r.record_id)
+        if fv is not None and fv.status == "noise":
+            continue
+        out.append(r)
+    return out
+
+
+def _verification_summary(records: list, verification: dict) -> dict:
+    """Tally FAILs by verification status: stable / noise / unverified."""
     fails = [r for r in records if r.verdict == Verdict.FAIL]
+    tally = {"n_fails": len(fails), "n_stable": 0, "n_noise": 0, "n_unverified": 0}
+    for r in fails:
+        fv = verification.get(r.record_id)
+        status = fv.status if fv is not None else "unverified"
+        tally[f"n_{status}"] += 1
+    return tally
+
+
+def _verification_paragraph(summary: dict) -> str | None:
+    """Plain-English sentence about verification, or None if there's
+    nothing to say (no FAILs at all)."""
+    n_fails = summary["n_fails"]
+    if n_fails == 0:
+        return None
+    n_stable = summary["n_stable"]
+    n_noise = summary["n_noise"]
+    n_unverified = summary["n_unverified"]
+
+    if n_unverified == n_fails:
+        # None of the FAILs in this run have been verified at all.
+        return (
+            f"{n_fails} failure(s) recorded; failures not yet verified -- use "
+            "\"Verify failures\" on this page (or "
+            "scripts/verify_past_failures.py)."
+        )
+
+    if n_noise == 0 and n_unverified == 0:
+        return f"{n_fails} failures recorded; all {n_stable} survived verification."
+
+    if n_noise:
+        tail = f"; {n_unverified} not yet verified." if n_unverified else "."
+        return (
+            f"{n_fails} failures recorded; {n_stable} survived verification "
+            f"({n_noise} were sampling noise and are excluded from findings)"
+            f"{tail}"
+        )
+    # n_noise == 0 but some unverified remain (n_stable + n_unverified == n_fails).
+    return (
+        f"{n_fails} failures recorded; {n_stable} survived verification, "
+        f"{n_unverified} not yet verified."
+    )
+
+
+def _notable_failures(
+    run_id: str, records: list, limit: int = 3, verification: dict | None = None
+) -> list:
+    verification = verification or {}
+    fails = [
+        r
+        for r in records
+        if r.verdict == Verdict.FAIL
+        and getattr(verification.get(r.record_id), "status", None) != "noise"
+    ]
     out: list = []
     for r in fails:
         if len(out) >= limit:
@@ -263,10 +338,19 @@ def _notable_failures(run_id: str, records: list, limit: int = 3) -> list:
     return out
 
 
-def _belief_collapse_paragraph(records: list) -> str | None:
+def _belief_collapse_paragraph(records: list, verification: dict | None = None) -> str | None:
     """For belief/adversarial_belief runs: classify every FAIL against the
-    foil model and, if a majority pattern emerges, say it in English."""
-    fails = [r for r in records if r.verdict == Verdict.FAIL and _query_kind_of(r) == "belief"]
+    foil model and, if a majority pattern emerges, say it in English.
+    Noise-classified failures (see `verify_failures`) are excluded -- they
+    aren't a real failure-mode signal."""
+    verification = verification or {}
+    fails = [
+        r
+        for r in records
+        if r.verdict == Verdict.FAIL
+        and _query_kind_of(r) == "belief"
+        and getattr(verification.get(r.record_id), "status", None) != "noise"
+    ]
     if not fails:
         return None
     reconstructable = [r for r in fails if _is_reconstructable(r)]
@@ -303,10 +387,13 @@ def _belief_collapse_paragraph(records: list) -> str | None:
     )
 
 
-def _headline_and_summary_paragraphs(run_id: str, records: list) -> tuple:
-    pass_rate = _pass_rate(records)
+def _headline_and_summary_paragraphs(run_id: str, records: list, store: ResultsStore) -> tuple:
+    verification = classify_all_verified_failures(store, run_id)
+    verified_records = _verified_only(records, verification)
+
+    pass_rate = _pass_rate(verified_records)
     n = len(records)
-    scored_n = sum(1 for r in records if r.verdict in (Verdict.PASS, Verdict.FAIL))
+    scored_n = sum(1 for r in verified_records if r.verdict in (Verdict.PASS, Verdict.FAIL))
     error_n = sum(1 for r in records if r.verdict == Verdict.ERROR)
 
     query_kinds = Counter(_query_kind_of(r) for r in records)
@@ -342,7 +429,12 @@ def _headline_and_summary_paragraphs(run_id: str, records: list) -> tuple:
             "cap, or cancellation) and are excluded from the pass rate above."
         )
 
-    dim_rates = _dim_region_rates(records)
+    verification_summary = _verification_summary(records, verification)
+    verification_para = _verification_paragraph(verification_summary)
+    if verification_para:
+        paragraphs.append(verification_para)
+
+    dim_rates = _dim_region_rates(verified_records)
     sharp = []
     diffuse = []
     for dim, rates in dim_rates.items():
@@ -364,7 +456,7 @@ def _headline_and_summary_paragraphs(run_id: str, records: list) -> tuple:
         )
 
     if kind == "belief":
-        belief_para = _belief_collapse_paragraph(records)
+        belief_para = _belief_collapse_paragraph(records, verification)
         if belief_para:
             paragraphs.append(belief_para)
 
@@ -380,10 +472,16 @@ def _stage_from_run_id(run_id: str) -> str | None:
 def _is_full_map_parent(store: ResultsStore, run_id: str) -> bool:
     """A full_map parent run_id itself has no directly-recorded records
     (all records live under f"{run_id}/{stage}" child run_ids) -- detect it
-    by checking whether any child run_ids exist."""
+    by checking whether any child run_ids exist. `f"{run_id}/verify"` (the
+    resample-verification child every plain run can now have -- see
+    `cartographer.exec.evaluator.VERIFY_SUFFIX`) is explicitly excluded
+    from this check: it is not a full_map stage, and a plain (non-
+    full_map) run with verified FAILs must not be misdetected as a
+    full_map parent just because it has that one child run_id.
+    """
     cur = store._conn.execute(
-        "SELECT DISTINCT run_id FROM experiments WHERE run_id LIKE ?",
-        (f"{run_id}/%",),
+        "SELECT DISTINCT run_id FROM experiments WHERE run_id LIKE ? AND run_id != ?",
+        (f"{run_id}/%", f"{run_id}{VERIFY_SUFFIX}"),
     )
     return cur.fetchone() is not None
 
@@ -404,7 +502,9 @@ def _full_map_verdict(store: ResultsStore, run_id: str) -> RunVerdict:
             stage_paragraphs.append(f"{stage}: not run (no records).")
             continue
         any_records = True
-        pass_rate = _pass_rate(records)
+        verification = classify_all_verified_failures(store, child_run_id)
+        verified_records = _verified_only(records, verification)
+        pass_rate = _pass_rate(verified_records)
         n = len(records)
         stats["stages"][stage] = {"n_records": n, "pass_rate": pass_rate}
         if pass_rate is None:
@@ -413,11 +513,13 @@ def _full_map_verdict(store: ResultsStore, run_id: str) -> RunVerdict:
         if stage == "breaking_point":
             # breaking_point's "pass rate" over raw records is less
             # meaningful than its own found/t_star -- report qualitatively.
+            # breaking_point is never auto-verified (see run_full_map_campaign's
+            # docstring), so its FAILs are always reported raw/unverified.
             fails = sum(1 for r in records if r.verdict == Verdict.FAIL)
             passes = sum(1 for r in records if r.verdict == Verdict.PASS)
             stage_paragraphs.append(
                 f"breaking_point: escalation ray probed with {passes} pass / "
-                f"{fails} fail across {n} trials."
+                f"{fails} fail across {n} trials (failures not yet verified)."
             )
         elif pass_rate >= _SATURATION_PASS_RATE:
             stage_paragraphs.append(
@@ -428,11 +530,19 @@ def _full_map_verdict(store: ResultsStore, run_id: str) -> RunVerdict:
                 f"{stage.capitalize()} is a weak province: {pass_rate * 100:.0f}% "
                 f"pass rate across {n} trials."
             )
+        if stage != "breaking_point":
+            verification_para = _verification_paragraph(
+                _verification_summary(records, verification)
+            )
+            if verification_para:
+                stage_paragraphs.append(f"({stage}) {verification_para}")
         if stage in ("belief", "adversarial_belief"):
-            belief_para = _belief_collapse_paragraph(records)
+            belief_para = _belief_collapse_paragraph(records, verification)
             if belief_para:
                 stage_paragraphs.append(f"({stage}) {belief_para}")
-        all_failures.extend(_notable_failures(child_run_id, records, limit=2))
+        all_failures.extend(
+            _notable_failures(child_run_id, records, limit=2, verification=verification)
+        )
 
     if not any_records:
         return _empty_verdict(run_id)
@@ -476,15 +586,18 @@ def run_verdict(store: ResultsStore, run_id: str) -> RunVerdict:
     if all(r.verdict == Verdict.ERROR for r in records):
         return _all_error_verdict(run_id, records)
 
-    headline, paragraphs = _headline_and_summary_paragraphs(run_id, records)
+    headline, paragraphs = _headline_and_summary_paragraphs(run_id, records, store)
+    verification = classify_all_verified_failures(store, run_id)
+    verified_records = _verified_only(records, verification)
     stats = {
         "n_records": len(records),
-        "pass_rate": _pass_rate(records),
+        "pass_rate": _pass_rate(verified_records),
         "n_pass": sum(1 for r in records if r.verdict == Verdict.PASS),
         "n_fail": sum(1 for r in records if r.verdict == Verdict.FAIL),
         "n_error": sum(1 for r in records if r.verdict == Verdict.ERROR),
+        "verification": _verification_summary(records, verification),
     }
-    notable = _notable_failures(run_id, records)
+    notable = _notable_failures(run_id, records, verification=verification)
 
     return RunVerdict(
         headline=headline,

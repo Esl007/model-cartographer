@@ -17,6 +17,7 @@ query kinds explored so far.
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 from dataclasses import dataclass, field, replace
 from typing import Callable
@@ -364,6 +365,378 @@ class PipelineEvaluator:
         self.store.append(record)
 
 
+# ---------------------------------------------------------------------------
+# Post-campaign verification: automatic resample-gating of FAIL records.
+#
+# See docs/lab-log.md and cartographer/ablate/resample.py for the origin
+# story -- a single-trial FAIL against a big MoE model (temp=0) is
+# frequently NOT reproducible (expert-routing noise), and trusting it
+# without a resample check has already produced one retracted finding (the
+# "Priya" case). `resample_failure` already does the resample+classify
+# arithmetic for one (config, task_seed); `run_verify_failures` is the glue
+# that runs it, automatically, over every FAIL in a just-finished campaign,
+# and persists the outcome as new append-only records rather than mutating
+# the original FAIL.
+# ---------------------------------------------------------------------------
+
+# Verify at most this many FAILs per run by default -- a pathological
+# 100%-FAIL run must not blow the cost cap on verification alone. Most
+# recent (by created_at) FAILs are chosen first when truncating.
+_DEFAULT_MAX_VERIFIED = 30
+
+VERIFY_SUFFIX = "/verify"
+
+
+@dataclass
+class VerifyFailuresResult:
+    """Summary of one `run_verify_failures` call: how many FAILs were
+    considered, how many were actually verified (vs. skipped by the cap or
+    cancellation), and the aggregate stable/noise split."""
+
+    run_id: str
+    n_fails_total: int = 0
+    n_verified: int = 0
+    n_stable: int = 0
+    n_noise: int = 0
+    n_skipped_cap: int = 0
+    truncated: bool = False
+    cancelled: bool = False
+    spent_usd: float = 0.0
+    call_count: int = 0
+    notes: list = field(default_factory=list)
+
+    def to_json_dict(self) -> dict:
+        return {
+            "run_id": self.run_id,
+            "n_fails_total": self.n_fails_total,
+            "n_verified": self.n_verified,
+            "n_stable": self.n_stable,
+            "n_noise": self.n_noise,
+            "n_skipped_cap": self.n_skipped_cap,
+            "truncated": self.truncated,
+            "cancelled": self.cancelled,
+            "spent_usd": self.spent_usd,
+            "call_count": self.call_count,
+            "notes": list(self.notes),
+        }
+
+
+def run_verify_failures(
+    client: Client,
+    model: str,
+    store: ResultsStore,
+    run_id: str,
+    n: int = 3,
+    stable_threshold: float = 0.5,
+    cost_cap_slice: float = 0.25,
+    max_tokens: int | None = None,
+    max_tokens_retry: int | None = None,
+    max_verified: int = _DEFAULT_MAX_VERIFIED,
+    cancel_event: threading.Event | None = None,
+) -> VerifyFailuresResult:
+    """Post-campaign verification pass: resample every stored FAIL for
+    `run_id` `n` more times against the EXACT stored prompt (reusing
+    `record.prompt_text` -- no regeneration, so there's zero drift from the
+    original task) and record whether the failure is `stable` (the model
+    still fails most of the time) or `noise` (it mostly passes on
+    resample -- the original single trial was a fluke, most often MoE
+    expert-routing variance at temp=0).
+
+    Design: classification is DERIVED AT READ TIME from the verify trial
+    records, not written as a separate summary/marker record. Each
+    resample trial is stored as its own append-only `ExperimentRecord`
+    with `run_id=f"{run_id}/verify"` (mirrors the full_map child-run-id
+    convention already used elsewhere in this module) and
+    `verifier_detail` carrying `verify_of=<original_record_id>;sample=<i>`
+    plus `kind=<query_kind>;campaign=1;verify=1`. To classify an original
+    FAIL, a reader queries `store.by_run(f"{run_id}/verify")`, filters for
+    `verify_of=<record_id>`, and computes pass_rate including the original
+    trial (see `classify_verified_failure` below) -- no new column, no
+    schema migration, and the append-only invariant on the ORIGINAL record
+    is never touched. This was chosen over a per-FAIL summary marker
+    record because the summary would just be a cache of exactly this
+    computation (cheap, small n) and a stale cache is worse than deriving
+    it fresh every time; it also means a differently-configured re-read
+    (e.g. a different `stable_threshold`) doesn't need new records.
+
+    Cost discipline: only FAIL records are ever resampled (never PASS --
+    that's the whole point, FAILs are a small 2-14% slice of trials so
+    this adds only a few % to total campaign cost). `max_verified` caps
+    how many FAILs get verified at all (most-recent-first by `created_at`,
+    so a pathological high-FAIL-rate run can't blow the budget); anything
+    beyond the cap is left unverified and `result.truncated` is set.
+    `cost_cap_slice` is a SEPARATE budget from the parent campaign's own
+    cost_cap -- callers that want verification cost counted inside one
+    combined cap should size the campaign's own cap down by
+    `cost_cap_slice` before calling this (see each `run_*_campaign`
+    preset's verification wiring, which does exactly that).
+    `cancel_event`, shared with the parent campaign's, is checked between
+    every resample call so a cooperative cancel stops verification
+    cleanly without leaving a half-verified run in a confusing state.
+
+    `verify="manual"` at the campaign-preset layer means this function is
+    never called at all -- zero extra calls, by construction (there is no
+    other short-circuit to test).
+    """
+    result = VerifyFailuresResult(run_id=run_id)
+
+    all_records = store.by_run(run_id)
+    fails = [r for r in all_records if r.verdict == Verdict.FAIL]
+    result.n_fails_total = len(fails)
+    if not fails:
+        return result
+
+    # Most-recent-first by created_at (ties broken by record_id for
+    # determinism), then cap at max_verified.
+    fails_sorted = sorted(fails, key=lambda r: (r.created_at or "", r.record_id), reverse=True)
+    if len(fails_sorted) > max_verified:
+        result.truncated = True
+        result.notes.append(
+            f"truncated: {len(fails_sorted)} FAILs found, only verifying the "
+            f"{max_verified} most recent (max_verified cap)"
+        )
+    to_verify = fails_sorted[:max_verified]
+    result.n_skipped_cap = len(fails_sorted) - len(to_verify)
+
+    default_max_tokens, default_max_tokens_retry = default_token_budget(model)
+    eff_max_tokens = max_tokens if max_tokens is not None else default_max_tokens
+    eff_max_tokens_retry = (
+        max_tokens_retry if max_tokens_retry is not None else default_max_tokens_retry
+    )
+
+    verify_run_id = f"{run_id}{VERIFY_SUFFIX}"
+    spent = 0.0
+    calls = 0
+
+    for original in to_verify:
+        if cancel_event is not None and cancel_event.is_set():
+            result.cancelled = True
+            result.notes.append(f"cancelled after verifying {result.n_verified}/{len(to_verify)}")
+            break
+        if spent >= cost_cap_slice:
+            result.notes.append(
+                f"cost_cap_slice (${cost_cap_slice:.4f}) hit after verifying "
+                f"{result.n_verified}/{len(to_verify)}"
+            )
+            break
+        if not original.prompt_text:
+            # Nothing to replay (e.g. a pre-fidelity-gate record with no
+            # stored prompt) -- skip, can't verify without the exact task.
+            continue
+
+        query_kind = _query_kind_of_verifier_detail(original.verifier_detail)
+        n_pass_incl_original = 0  # the original FAIL never passed
+        n_total = 1  # the original FAIL counts toward the denominator
+
+        for i in range(n):
+            if cancel_event is not None and cancel_event.is_set():
+                result.cancelled = True
+                break
+            if spent >= cost_cap_slice:
+                break
+
+            call_result = client.chat(
+                model=model,
+                prompt=original.prompt_text,
+                max_tokens=eff_max_tokens,
+                max_tokens_retry=eff_max_tokens_retry,
+            )
+            cost = cost_usd(model, call_result.tokens_in, call_result.tokens_out)
+            spent += cost
+            calls += 1
+
+            if call_result.error is not None:
+                verdict = Verdict.ERROR
+                detail = (
+                    f"kind={query_kind};campaign=1;verify=1;"
+                    f"verify_of={original.record_id};sample={i};error={call_result.error}"
+                )
+            else:
+                # Re-verify against the SAME rendered task the original
+                # prompt came from. `verify()` needs the RenderedTask +
+                # name_map, which aren't stored directly -- but the record
+                # carries everything needed to reconstruct them
+                # deterministically (task_seed, latent_params, rendering_seed).
+                try:
+                    _, _, rendered, name_map = _regenerate_for_verify(original)
+                    verdict = verify(call_result.text, rendered, name_map)
+                except Exception as exc:  # pragma: no cover -- defensive
+                    verdict = Verdict.ERROR
+                    detail = (
+                        f"kind={query_kind};campaign=1;verify=1;"
+                        f"verify_of={original.record_id};sample={i};"
+                        f"regen_error={exc!r}"
+                    )
+                    _append_verify_record(
+                        store, verify_run_id, model, original, call_result, verdict, detail, cost
+                    )
+                    n_total += 1
+                    continue
+                if call_result.finish_reason == "length":
+                    verdict = Verdict.ERROR
+                detail = (
+                    f"kind={query_kind};campaign=1;verify=1;"
+                    f"verify_of={original.record_id};sample={i}"
+                )
+
+            _append_verify_record(
+                store, verify_run_id, model, original, call_result, verdict, detail, cost
+            )
+            n_total += 1
+            if verdict == Verdict.PASS:
+                n_pass_incl_original += 1
+
+        pass_rate = n_pass_incl_original / n_total if n_total else 0.0
+        is_stable = pass_rate <= stable_threshold
+        result.n_verified += 1
+        if is_stable:
+            result.n_stable += 1
+        else:
+            result.n_noise += 1
+
+        if result.cancelled:
+            break
+
+    result.spent_usd = spent
+    result.call_count = calls
+    return result
+
+
+def _query_kind_of_verifier_detail(detail: str | None) -> str:
+    if detail:
+        m = re.search(r"kind=([a-z]+)", detail)
+        if m:
+            return m.group(1)
+    return "belief"
+
+
+def _regenerate_for_verify(record: ExperimentRecord):
+    """Rebuild the exact World/RenderedTask/name_map a stored record was
+    generated from, so a resample response can be verified against the
+    same ground truth as the original (mirrors
+    `cartographer.report.verdict._regenerate`, duplicated narrowly here to
+    avoid a circular import between `exec.evaluator` and `report.verdict`).
+    """
+    query_kind = _query_kind_of_verifier_detail(record.verifier_detail)
+    base = _default_base(query_kind)
+    params = _apply_config(base, record.latent_params)
+    world = generate(params, record.task_seed)
+    name_map = build_name_map(world, record.rendering_seed)
+    rendered = render(world, name_map, record.rendering_seed)
+    return world, name_map, rendered, name_map
+
+
+def _append_verify_record(
+    store: ResultsStore,
+    verify_run_id: str,
+    model: str,
+    original: ExperimentRecord,
+    call_result,
+    verdict: Verdict,
+    detail: str,
+    cost: float,
+) -> None:
+    record = ExperimentRecord(
+        run_id=verify_run_id,
+        model_name=model,
+        latent_params=dict(original.latent_params),
+        realized_dims=dict(original.realized_dims),
+        render_mode=original.render_mode,
+        task_seed=original.task_seed,
+        trial_seed=original.trial_seed,
+        rendering_seed=original.rendering_seed,
+        prompt_text=original.prompt_text,
+        response_text=call_result.text,
+        verdict=verdict,
+        verifier_detail=detail,
+        tokens_in=call_result.tokens_in,
+        tokens_out=call_result.tokens_out,
+        cost_usd=cost,
+        latency_ms=call_result.latency_ms,
+        reasoning_text=call_result.reasoning,
+        finish_reason=call_result.finish_reason,
+    )
+    store.append(record)
+
+
+@dataclass(frozen=True)
+class FailureVerification:
+    """Derived (not stored) classification of one original FAIL record,
+    computed by reading its verify trials from `f"{run_id}/verify"`."""
+
+    record_id: str
+    status: str  # "stable" | "noise" | "unverified"
+    n_samples: int  # verify trials found (0 if unverified)
+    n_pass: int  # verify-trial passes only (original FAIL excluded)
+    pass_rate: float | None  # including the original FAIL as a fail; None if unverified
+
+
+def classify_verified_failure(
+    store: ResultsStore,
+    run_id: str,
+    record_id: str,
+    stable_threshold: float = 0.5,
+    verify_trials: list | None = None,
+) -> FailureVerification:
+    """Derive the stable/noise/unverified status of one original FAIL
+    record by reading its verify trials from `f"{run_id}/verify"`.
+
+    `verify_trials`, if given, must be the full list of records from
+    `store.by_run(f"{run_id}/verify")` -- callers classifying many FAILs
+    from the same run should fetch that list ONCE and pass it in to avoid
+    an O(n) store query per FAIL.
+    """
+    if verify_trials is None:
+        verify_trials = store.by_run(f"{run_id}{VERIFY_SUFFIX}")
+
+    needle = re.compile(rf"verify_of={re.escape(record_id)}(;|$)")
+    mine = [r for r in verify_trials if needle.search(r.verifier_detail or "")]
+    if not mine:
+        return FailureVerification(record_id=record_id, status="unverified", n_samples=0, n_pass=0, pass_rate=None)
+
+    n_pass = sum(1 for r in mine if r.verdict == Verdict.PASS)
+    n_total = len(mine) + 1  # +1 for the original FAIL, which never passed
+    pass_rate = n_pass / n_total
+    status = "stable" if pass_rate <= stable_threshold else "noise"
+    return FailureVerification(
+        record_id=record_id, status=status, n_samples=len(mine), n_pass=n_pass, pass_rate=pass_rate
+    )
+
+
+def classify_all_verified_failures(
+    store: ResultsStore, run_id: str, stable_threshold: float = 0.5
+) -> dict[str, FailureVerification]:
+    """Classify every FAIL in `run_id` at once (one store query for the
+    FAILs, one for the verify trials, O(n) grouping) -- the batch-friendly
+    counterpart to `classify_verified_failure` for verdict/viewer code
+    that needs the whole run's picture."""
+    fails = [r for r in store.by_run(run_id) if r.verdict == Verdict.FAIL]
+    verify_trials = store.by_run(f"{run_id}{VERIFY_SUFFIX}")
+    by_original: dict[str, list] = {}
+    for r in verify_trials:
+        detail = r.verifier_detail or ""
+        m = re.search(r"verify_of=([0-9a-fA-F]+)", detail)
+        if m:
+            by_original.setdefault(m.group(1), []).append(r)
+
+    out: dict[str, FailureVerification] = {}
+    for f in fails:
+        mine = by_original.get(f.record_id, [])
+        if not mine:
+            out[f.record_id] = FailureVerification(
+                record_id=f.record_id, status="unverified", n_samples=0, n_pass=0, pass_rate=None
+            )
+            continue
+        n_pass = sum(1 for r in mine if r.verdict == Verdict.PASS)
+        n_total = len(mine) + 1
+        pass_rate = n_pass / n_total
+        status = "stable" if pass_rate <= stable_threshold else "noise"
+        out[f.record_id] = FailureVerification(
+            record_id=f.record_id, status=status, n_samples=len(mine), n_pass=n_pass, pass_rate=pass_rate
+        )
+    return out
+
+
 def _state_scheduler_config(budget: int, parallelism: int = 6) -> SchedulerConfig:
     return SchedulerConfig(
         dims=[DimSpec("chain_length", 2, 30, True)],
@@ -424,6 +797,97 @@ def _default_parallelism(client: Client) -> int:
     return getattr(provider, "suggested_parallelism", 6)
 
 
+# Share of a campaign's own `cost_cap` reserved for the automatic
+# post-campaign verification stage (Task 1). The scheduler's own budget is
+# reduced by this fraction before the main loop runs, so
+# "cost counted inside the existing cost_cap" holds literally: verification
+# spend and main-loop spend together can never exceed the caller's original
+# `cost_cap`.
+_VERIFY_COST_CAP_SHARE = 0.15
+
+
+def _run_campaign_with_verification(
+    query_kind: str,
+    scheduler_config_fn: Callable[[int, int], SchedulerConfig],
+    client: Client,
+    store: ResultsStore,
+    run_id: str,
+    model: str,
+    budget: int,
+    cost_cap: float,
+    parallelism: int | None,
+    max_tokens: int | None,
+    cancel_event: threading.Event | None,
+    verify: str = "auto",
+    adversarial: bool = False,
+) -> CampaignState:
+    """Shared body for the state/order/belief/adversarial_belief presets:
+    run the main scheduler loop, then -- if `verify == "auto"` -- an
+    automatic resample-verification pass over that run's FAIL records, all
+    inside one combined `cost_cap`.
+
+    `verify` is one of:
+      - "auto" (default): run the resample-verification stage automatically
+        after the main loop, spending real API calls, cost counted inside
+        this same `cost_cap`.
+      - "manual": record FAILs as usual but spend ZERO verification calls;
+        a human (or `scripts/verify_past_failures.py --live`, or the
+        run-detail page's "Verify failures now" button) can trigger
+        verification for this run later, on demand.
+    """
+    if verify not in ("auto", "manual"):
+        raise ValueError(f'verify must be "auto" or "manual", got {verify!r}')
+    verify_failures_enabled = verify == "auto"
+    main_cost_cap = cost_cap
+    verify_cost_cap = 0.0
+    if verify_failures_enabled:
+        verify_cost_cap = cost_cap * _VERIFY_COST_CAP_SHARE
+        main_cost_cap = cost_cap - verify_cost_cap
+
+    evaluator = PipelineEvaluator(
+        client=client,
+        model=model,
+        store=store,
+        run_id=run_id,
+        query_kind=query_kind,
+        cost_cap_usd=main_cost_cap,
+        max_tokens=max_tokens,
+        cancel_event=cancel_event,
+        adversarial=adversarial,
+    )
+    if parallelism is None:
+        parallelism = _default_parallelism(client)
+    config = scheduler_config_fn(budget, parallelism)
+
+    def on_record(cfg: dict, passed: bool, seed: int) -> None:
+        pass  # PipelineEvaluator already persists every trial itself.
+
+    state = run_campaign(evaluator, config, on_record=on_record)
+    if evaluator.capped:
+        state.notes.append("cost_cap_hit")
+
+    if verify_failures_enabled and not (cancel_event is not None and cancel_event.is_set()):
+        vresult = run_verify_failures(
+            client=client,
+            model=model,
+            store=store,
+            run_id=run_id,
+            cost_cap_slice=verify_cost_cap,
+            max_tokens=max_tokens,
+            cancel_event=cancel_event,
+        )
+        evaluator.spent_usd += vresult.spent_usd
+        state.notes.append(
+            f"verify_failures: {vresult.n_verified} verified "
+            f"({vresult.n_stable} stable, {vresult.n_noise} noise)"
+            + (", truncated" if vresult.truncated else "")
+            + (", cancelled" if vresult.cancelled else "")
+        )
+
+    state.evaluator = evaluator  # type: ignore[attr-defined]
+    return state
+
+
 def run_state_campaign(
     client: Client,
     store: ResultsStore,
@@ -434,6 +898,7 @@ def run_state_campaign(
     parallelism: int | None = None,
     max_tokens: int | None = None,
     cancel_event: threading.Event | None = None,
+    verify: str = "auto",
 ) -> CampaignState:
     """Run the "state" query-kind campaign: sweep chain_length from 2 to 30.
 
@@ -443,29 +908,18 @@ def run_state_campaign(
     `default_token_budget` (bigger for "ultra"-class reasoners).
     `cancel_event`, when provided, lets a caller (e.g. /launch's stop
     button) cooperatively cancel an in-flight campaign between trials.
+    `verify="auto"` (default) runs the automatic resample-noise check
+    (Task 1) over every FAIL after the main loop finishes, with its cost
+    counted inside this same `cost_cap`; pass `verify="manual"` to record
+    FAILs without spending any verification calls (they stay
+    unverified until triggered later by hand -- the run-detail page's
+    "Verify failures now" action or `scripts/verify_past_failures.py
+    --live`).
     """
-    evaluator = PipelineEvaluator(
-        client=client,
-        model=model,
-        store=store,
-        run_id=run_id,
-        query_kind="state",
-        cost_cap_usd=cost_cap,
-        max_tokens=max_tokens,
-        cancel_event=cancel_event,
+    return _run_campaign_with_verification(
+        "state", _state_scheduler_config, client, store, run_id, model,
+        budget, cost_cap, parallelism, max_tokens, cancel_event, verify,
     )
-    if parallelism is None:
-        parallelism = _default_parallelism(client)
-    config = _state_scheduler_config(budget, parallelism)
-
-    def on_record(cfg: dict, passed: bool, seed: int) -> None:
-        pass  # PipelineEvaluator already persists every trial itself.
-
-    state = run_campaign(evaluator, config, on_record=on_record)
-    if evaluator.capped:
-        state.notes.append("cost_cap_hit")
-    state.evaluator = evaluator  # type: ignore[attr-defined]
-    return state
 
 
 def run_order_campaign(
@@ -478,6 +932,7 @@ def run_order_campaign(
     parallelism: int | None = None,
     max_tokens: int | None = None,
     cancel_event: threading.Event | None = None,
+    verify: str = "auto",
 ) -> CampaignState:
     """Run the "order" query-kind campaign across four dims at once
     (chain_length, scramble, distractor_events, filler_events -- the dims
@@ -490,29 +945,18 @@ def run_order_campaign(
     `default_token_budget` (bigger for "ultra"-class reasoners).
     `cancel_event`, when provided, lets a caller (e.g. /launch's stop
     button) cooperatively cancel an in-flight campaign between trials.
+    `verify="auto"` (default) runs the automatic resample-noise check
+    (Task 1) over every FAIL after the main loop finishes, with its cost
+    counted inside this same `cost_cap`; pass `verify="manual"` to record
+    FAILs without spending any verification calls (they stay
+    unverified until triggered later by hand -- the run-detail page's
+    "Verify failures now" action or `scripts/verify_past_failures.py
+    --live`).
     """
-    evaluator = PipelineEvaluator(
-        client=client,
-        model=model,
-        store=store,
-        run_id=run_id,
-        query_kind="order",
-        cost_cap_usd=cost_cap,
-        max_tokens=max_tokens,
-        cancel_event=cancel_event,
+    return _run_campaign_with_verification(
+        "order", _order_scheduler_config, client, store, run_id, model,
+        budget, cost_cap, parallelism, max_tokens, cancel_event, verify,
     )
-    if parallelism is None:
-        parallelism = _default_parallelism(client)
-    config = _order_scheduler_config(budget, parallelism)
-
-    def on_record(cfg: dict, passed: bool, seed: int) -> None:
-        pass  # PipelineEvaluator already persists every trial itself.
-
-    state = run_campaign(evaluator, config, on_record=on_record)
-    if evaluator.capped:
-        state.notes.append("cost_cap_hit")
-    state.evaluator = evaluator  # type: ignore[attr-defined]
-    return state
 
 
 # The generator's hard validated ceilings (verified combined-clean across
@@ -592,6 +1036,7 @@ def run_belief_campaign(
     parallelism: int | None = None,
     max_tokens: int | None = None,
     cancel_event: threading.Event | None = None,
+    verify: str = "auto",
 ) -> CampaignState:
     """Run the "belief" query-kind campaign across four dims at once.
 
@@ -601,29 +1046,19 @@ def run_belief_campaign(
     `default_token_budget` (bigger for "ultra"-class reasoners).
     `cancel_event`, when provided, lets a caller (e.g. /launch's stop
     button) cooperatively cancel an in-flight campaign between trials.
+    `verify="auto"` (default) runs the automatic resample-noise check
+    (Task 1) over every FAIL after the main loop finishes, with its cost
+    counted inside this same `cost_cap`; pass `verify="manual"` to record
+    FAILs without spending any verification calls (they stay unverified
+    until triggered later by hand -- the run-detail page's "Verify
+    failures now" action or `scripts/verify_past_failures.py --live`).
+    This is the query kind (belief) where the noise/stable distinction
+    matters most -- see docs/lab-log.md, the Priya case.
     """
-    evaluator = PipelineEvaluator(
-        client=client,
-        model=model,
-        store=store,
-        run_id=run_id,
-        query_kind="belief",
-        cost_cap_usd=cost_cap,
-        max_tokens=max_tokens,
-        cancel_event=cancel_event,
+    return _run_campaign_with_verification(
+        "belief", _belief_scheduler_config, client, store, run_id, model,
+        budget, cost_cap, parallelism, max_tokens, cancel_event, verify,
     )
-    if parallelism is None:
-        parallelism = _default_parallelism(client)
-    config = _belief_scheduler_config(budget, parallelism)
-
-    def on_record(cfg: dict, passed: bool, seed: int) -> None:
-        pass  # PipelineEvaluator already persists every trial itself.
-
-    state = run_campaign(evaluator, config, on_record=on_record)
-    if evaluator.capped:
-        state.notes.append("cost_cap_hit")
-    state.evaluator = evaluator  # type: ignore[attr-defined]
-    return state
 
 
 def run_adversarial_belief_campaign(
@@ -636,6 +1071,7 @@ def run_adversarial_belief_campaign(
     parallelism: int | None = None,
     max_tokens: int | None = None,
     cancel_event: threading.Event | None = None,
+    verify: str = "auto",
 ) -> CampaignState:
     """Belief-query campaign with `PipelineEvaluator.adversarial=True`: at
     every config point probed by the scheduler (including the BASELINE),
@@ -657,30 +1093,17 @@ def run_adversarial_belief_campaign(
     `default_token_budget` (bigger for "ultra"-class reasoners).
     `cancel_event`, when provided, lets a caller (e.g. /launch's stop
     button) cooperatively cancel an in-flight campaign between trials.
+    `verify="auto"` (default) runs the automatic resample-noise check
+    (Task 1) over every FAIL after the main loop finishes, with its cost
+    counted inside this same `cost_cap`; pass `verify="manual"` to skip it
+    (adversarial FAILs are exactly the kind of thing worth checking for
+    noise before trusting, so "auto" is the default here too).
     """
-    evaluator = PipelineEvaluator(
-        client=client,
-        model=model,
-        store=store,
-        run_id=run_id,
-        query_kind="belief",
-        cost_cap_usd=cost_cap,
-        max_tokens=max_tokens,
-        cancel_event=cancel_event,
+    return _run_campaign_with_verification(
+        "belief", _belief_scheduler_config, client, store, run_id, model,
+        budget, cost_cap, parallelism, max_tokens, cancel_event, verify,
         adversarial=True,
     )
-    if parallelism is None:
-        parallelism = _default_parallelism(client)
-    config = _belief_scheduler_config(budget, parallelism)
-
-    def on_record(cfg: dict, passed: bool, seed: int) -> None:
-        pass  # PipelineEvaluator already persists every trial itself.
-
-    state = run_campaign(evaluator, config, on_record=on_record)
-    if evaluator.capped:
-        state.notes.append("cost_cap_hit")
-    state.evaluator = evaluator  # type: ignore[attr-defined]
-    return state
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +1249,7 @@ def run_full_map_campaign(
     max_tokens: int | None = None,
     cancel_event: threading.Event | None = None,
     parallelism: int | None = None,
+    verify: str = "auto",
 ) -> FullMapResult:
     """The one-button profile: chains state -> order -> belief ->
     adversarial_belief -> breaking_point as STAGES under one parent
@@ -859,6 +1283,19 @@ def run_full_map_campaign(
     between stages skips all remaining stages immediately) AND is passed
     through to every stage's own evaluator (a cancellation mid-stage also
     stops that stage cleanly without wasting the rest of its budget).
+
+    `verify="auto"` (default) is passed through to every
+    state/order/belief/adversarial_belief stage -- each verifies its own
+    FAILs, inside its own stage cost cap, immediately after its main loop
+    (see `_run_campaign_with_verification`'s "run per stage, not once at
+    the end" design note). Pass `verify="manual"` to skip verification
+    everywhere in the battery. breaking_point does not use
+    `_run_campaign_with_verification` (it's driven by
+    `find_breaking_point`, not `run_campaign`) so it is never auto-verified
+    here regardless of `verify` -- wiring it in would mean re-deriving
+    "which of its escalation-ray trials are FAILs worth resampling" outside
+    the CampaignState idiom this helper relies on, which would contort the
+    API for one stage; skipped deliberately rather than forced in.
     """
     result = FullMapResult(run_id=run_id)
     belief_boundaries: dict = {}
@@ -885,7 +1322,7 @@ def run_full_map_campaign(
                     client, store, child_run_id, model,
                     budget=stage_budget, cost_cap=stage_cost_cap,
                     max_tokens=max_tokens, cancel_event=cancel_event,
-                    parallelism=parallelism,
+                    parallelism=parallelism, verify=verify,
                 )
                 summary = _campaign_state_summary(
                     stage, child_run_id, state, state.evaluator.spent_usd,

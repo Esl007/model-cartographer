@@ -137,6 +137,46 @@ def test_run_html_lists_records_with_links(tmp_path):
     assert "belief" in page
 
 
+def test_run_html_shows_unverified_status_and_verify_now_action(tmp_path):
+    """Task 2: FAIL rows show a verification status, and an unverified run
+    gets a "Verify failures now" action pointing at the /verify route."""
+    store, r1, r2, r3 = _seed_store(tmp_path)
+    page = run_html(store, "run-a")
+
+    assert "unverified" in page
+    assert "Verify" in page and "failure" in page.lower()
+    assert 'action="/verify"' in page
+    assert f'name="run_id" value="run-a"' in page
+
+
+def test_run_html_shows_verified_stable_and_noise_status(tmp_path):
+    from cartographer.exec.evaluator import VERIFY_SUFFIX
+
+    store, r1, r2, r3 = _seed_store(tmp_path)
+    # r2 is the FAIL record; give it 3 verify trials, all still FAIL -> stable.
+    for i in range(3):
+        store.append(
+            ExperimentRecord(
+                run_id=f"run-a{VERIFY_SUFFIX}",
+                model_name="model-x",
+                latent_params=dict(r2.latent_params),
+                realized_dims=dict(r2.realized_dims),
+                render_mode=RenderMode.TEMPLATE,
+                task_seed=r2.task_seed,
+                trial_seed=r2.trial_seed,
+                prompt_text=r2.prompt_text,
+                response_text="still wrong",
+                verdict=Verdict.FAIL,
+                verifier_detail=f"kind=state;campaign=1;verify=1;verify_of={r2.record_id};sample={i}",
+            )
+        )
+
+    page = run_html(store, "run-a")
+    assert "verified-stable" in page
+    # No unverified FAILs remain -- the verify-now action must not render.
+    assert 'action="/verify"' not in page
+
+
 def test_run_html_unknown_run_id_no_records(tmp_path):
     store, *_ = _seed_store(tmp_path)
     page = run_html(store, "does-not-exist")

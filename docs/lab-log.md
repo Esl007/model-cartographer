@@ -1490,6 +1490,100 @@ found — the actual novel contribution) + router as closing demo.
 
 ---
 
+## 2026-09-19 — FEATURE (shipped) — automatic FAIL verification (resample-noise gate)
+
+**What we saw:** the Priya case (Ultra, 4/5 resamples passed) and 3 of 6
+adversarial-belief FAILs earlier this project both evaporated on manual
+resample — single-trial temp=0 FAILs against big MoE models (Nemotron
+Ultra/Super especially) are frequently pure expert-routing noise, not a
+real capability gap. `cartographer.ablate.resample.resample_failure`
+already did the resample+classify arithmetic but was only ever invoked by
+hand. The user's ask: make it automatic for FAILs, never for PASSes (cost
+discipline — FAILs are 2–14% of trials), and NOT force a blanket
+API-credit spend without an explicit off switch.
+
+**What shipped:**
+
+- `cartographer.exec.evaluator.run_verify_failures(client, model, store,
+  run_id, n=3, stable_threshold=0.5, cost_cap_slice, max_verified=30,
+  cancel_event)` — re-executes each stored FAIL's EXACT `prompt_text`
+  (zero regeneration drift) `n` more times, classifies `stable`
+  (pass_rate ≤ threshold, including the original FAIL) vs. `noise`
+  (mostly passes on resample). Every resample trial is a NEW append-only
+  `ExperimentRecord` under `run_id=f"{run_id}/verify"` with
+  `verifier_detail` carrying `verify_of=<original_record_id>;sample=<i>`
+  — the original FAIL record is never mutated. Classification is DERIVED
+  AT READ TIME (`classify_verified_failure` /
+  `classify_all_verified_failures`) by reading that run's verify trials,
+  not cached in a separate summary record — cheap enough (small n) that a
+  stale cache would be strictly worse, and it means a different
+  `stable_threshold` needs no new records. Capped at 30 FAILs verified per
+  run (most-recent-first), logged if truncated.
+
+- **Mode, not a blanket default-on bool** — mid-flight requirement change
+  from the user: `run_state_campaign` / `run_order_campaign` /
+  `run_belief_campaign` / `run_adversarial_belief_campaign` /
+  `run_full_map_campaign` all take `verify: str = "auto"` ("manual" spends
+  zero verification calls, recording FAILs as usual). "auto" reserves 15%
+  of the campaign's own `cost_cap` for verification (`_VERIFY_COST_CAP_SHARE`
+  in `evaluator.py`) so total spend (main loop + verification) can never
+  exceed the caller's original cap. `breaking_point` is deliberately never
+  auto-verified (it's driven by `find_breaking_point`, not `run_campaign`
+  — wiring it in would mean re-deriving "which escalation-ray trials are
+  FAILs" outside the `CampaignState` idiom this helper relies on; skipped
+  with a note rather than contorted in). For `full_map`, verification runs
+  PER STAGE immediately after that stage's own main loop, inside that
+  stage's own cost-cap slice (not once at the end across the whole
+  battery) — simpler to reason about per-stage and keeps each stage's
+  spend self-contained.
+
+- **/launch**: a "Verify failures" checkbox (default checked) with the
+  cost note "re-tests each failure 3x — typically adds a few percent to
+  cost; uncheck to skip and verify later by hand". Standard HTML checkbox
+  semantics: checked → `verify="auto"`, unchecked (simply absent from the
+  POST body, as real browsers do) → `verify="manual"`.
+
+- **Manual path is first-class**: a run's detail page (`/run/<id>`) shows
+  each FAIL row's status (`verified-stable` / `noise` / `unverified`) and,
+  if any FAILs are unverified, a "Verify N failures now" action (provider
+  + key + model form → POST `/verify`) that reuses the EXACT SAME
+  one-campaign-at-a-time thread/cancel_event machinery as `/launch`
+  (`cartographer.viewer.launch.handle_verify_now` / `_verify_now_thread`).
+  `scripts/verify_past_failures.py --live --run <run_id>` calls
+  `run_verify_failures` directly — same underlying call, no second
+  implementation. `--dry-run` (also the default with no `--live`) lists
+  every run with unverified FAILs and an estimated call/cost, zero network
+  calls.
+
+- **Verdicts** (`cartographer.report.verdict`): a run's pass_rate,
+  dim-region rates, and belief-collapse classification now all read
+  `_verified_only()` — noise-classified FAILs are excluded from findings
+  entirely, `notable_failures` never surfaces one. Exact copy for a mixed
+  9-FAIL run (6 stable, 3 noise): *"9 failures recorded; 6 survived
+  verification (3 were sampling noise and are excluded from findings)."*
+  A run with zero verification data (old runs, or `verify="manual"` never
+  followed up): *"N failure(s) recorded; failures not yet verified — use
+  \"Verify failures\" on this page (or scripts/verify_past_failures.py)."*
+
+**Bug caught building this**: `cartographer.report.verdict._is_full_map_parent`
+used a bare `LIKE f"{run_id}/%"` to detect full_map parents — a plain run
+with a `f"{run_id}/verify"` child (which every run can now have) was being
+misdetected as a full_map parent and its real records hidden. Fixed by
+excluding the verify-suffix run_id explicitly from that query
+(`tests/test_verdict.py::test_verdict_mixed_stable_and_noise_reports_verified_counts`
+caught this immediately). Also caught in the same pass: the original
+pass-rate arithmetic in `run_verify_failures` double-counted the original
+FAIL as a pass (`n_pass_incl_original` initialized to 1 instead of 0),
+which would have silently misclassified every boundary-threshold case as
+noise — fixed before any real API traffic touched it.
+
+Full suite: 318/318 passing (up from the 298-test baseline before this
+feature; net +20 tests across `test_evaluator.py`, `test_verdict.py`,
+`test_launch.py`, `test_viewer.py`). Zero live API calls anywhere in
+tests — all resample/verify behavior exercised via scripted fake clients.
+
+---
+
 ## Template for new entries
 
 ```

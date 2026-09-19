@@ -20,6 +20,7 @@ from cartographer.viewer.launch import (
     handle_launch_get,
     handle_models_step,
     handle_start,
+    handle_verify_now,
     next_run_id,
 )
 
@@ -555,3 +556,161 @@ def test_full_map_dispatches_through_start(tmp_path):
     thread = launch_mod._CURRENT_RUN["thread"]
     thread.join(timeout=5)
     assert calls and calls[0][0] == run_id
+
+
+# ---------------------------------------------------------------------------
+# Requirement change: verify mode ("auto"/"manual") form field + verify-now.
+# ---------------------------------------------------------------------------
+
+
+def test_models_step_form_has_verify_failures_checkbox(tmp_path):
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, _deps(tmp_path))
+    assert 'name="verify_failures"' in page
+    # Default-on: checkbox is checked unless the user unchecks it.
+    assert "checked" in page
+    assert "re-tests each failure 3x" in page.lower()
+
+
+def _fake_runner_captures_verify(
+    client, store, run_id, model, budget, cost_cap, max_tokens=None,
+    cancel_event=None, verify="auto",
+):
+    _fake_runner_captures_verify.calls.append({"verify": verify})
+    store.append(
+        ExperimentRecord(
+            run_id=run_id, model_name=model, latent_params={"chain_length": 2.0},
+            realized_dims={"chain_length": 2.0}, render_mode=RenderMode.TEMPLATE,
+            task_seed=0, trial_seed=0, verdict=Verdict.PASS,
+            verifier_detail="kind=state;campaign=1", tokens_in=1, tokens_out=1,
+            cost_usd=0.0, latency_ms=1.0,
+        )
+    )
+
+
+_fake_runner_captures_verify.calls = []
+
+
+def test_verify_failures_checked_dispatches_auto_mode(tmp_path):
+    _fake_runner_captures_verify.calls.clear()
+    deps = _deps(
+        tmp_path, client_factory=_FakeClient, runners={"state": _fake_runner_captures_verify}
+    )
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, deps)
+    token = page.split('name="token" value="')[1].split('"')[0]
+    started, run_id = handle_start(
+        {
+            "token": token, "model": "acme/Model-A", "campaign_type": "state",
+            "budget": "160", "cost_cap": "0.5", "verify_failures": "1",
+        },
+        deps,
+    )
+    assert started
+    _wait_for_idle()
+    assert _fake_runner_captures_verify.calls[0]["verify"] == "auto"
+
+
+def test_verify_failures_unchecked_dispatches_manual_mode(tmp_path):
+    """An unchecked HTML checkbox is simply absent from the POST body --
+    the form key must not appear in `form` at all in this case."""
+    _fake_runner_captures_verify.calls.clear()
+    deps = _deps(
+        tmp_path, client_factory=_FakeClient, runners={"state": _fake_runner_captures_verify}
+    )
+    page = handle_models_step({"provider": "nebius", "api_key": SENTINEL_KEY}, deps)
+    token = page.split('name="token" value="')[1].split('"')[0]
+    started, run_id = handle_start(
+        {
+            "token": token, "model": "acme/Model-A", "campaign_type": "state",
+            "budget": "160", "cost_cap": "0.5",
+            # "verify_failures" deliberately absent -- simulates an unchecked box.
+        },
+        deps,
+    )
+    assert started
+    _wait_for_idle()
+    assert _fake_runner_captures_verify.calls[0]["verify"] == "manual"
+
+
+def test_handle_verify_now_kicks_off_for_targeted_run(tmp_path):
+    db_path = str(tmp_path / "verify.sqlite")
+    store = ResultsStore(db_path)
+    store.append(
+        ExperimentRecord(
+            run_id="camp-state-model-a-001", model_name="acme/Model-A",
+            latent_params={}, realized_dims={}, render_mode=RenderMode.TEMPLATE,
+            task_seed=1, trial_seed=1, verdict=Verdict.FAIL,
+            prompt_text="what happened?",
+        )
+    )
+    store.close()
+
+    verify_calls = []
+
+    def fake_run_verify_failures(client, model, store, run_id, **kwargs):
+        verify_calls.append((run_id, model))
+
+    import cartographer.viewer.launch as launch_module
+
+    orig = launch_module.run_verify_failures
+    launch_module.run_verify_failures = fake_run_verify_failures
+    try:
+        deps = LaunchDeps(db_path=db_path, client_factory=_FakeClient, key_loader=lambda: {})
+        started, payload = handle_verify_now(
+            "camp-state-model-a-001", "nebius", SENTINEL_KEY, "acme/Model-A", deps
+        )
+        assert started
+        assert payload == "camp-state-model-a-001"
+        _wait_for_idle()
+        assert verify_calls == [("camp-state-model-a-001", "acme/Model-A")]
+    finally:
+        launch_module.run_verify_failures = orig
+
+
+def test_handle_verify_now_respects_one_campaign_at_a_time_guard(tmp_path):
+    db_path = str(tmp_path / "verify.sqlite")
+    store = ResultsStore(db_path)
+    store.append(
+        ExperimentRecord(
+            run_id="camp-state-model-a-001", model_name="acme/Model-A",
+            latent_params={}, realized_dims={}, render_mode=RenderMode.TEMPLATE,
+            task_seed=1, trial_seed=1, verdict=Verdict.FAIL, prompt_text="q",
+        )
+    )
+    store.close()
+
+    deps = LaunchDeps(db_path=db_path, client_factory=_FakeClient, key_loader=lambda: {})
+
+    release = []
+
+    def slow_runner(client, store, run_id, model, budget, cost_cap, **kwargs):
+        while not release:
+            time.sleep(0.005)
+
+    deps2 = _deps(tmp_path, client_factory=_FakeClient, runners={"state": slow_runner})
+    started1, run_id1, _ = _launch(tmp_path, deps=deps2, runner=slow_runner)
+    assert started1
+    try:
+        started2, payload2 = handle_verify_now(
+            "camp-state-model-a-001", "nebius", SENTINEL_KEY, "acme/Model-A", deps
+        )
+        assert not started2
+        assert "campaign in progress" in payload2.lower()
+    finally:
+        release.append(True)
+        _wait_for_idle()
+
+
+def test_handle_verify_now_missing_key_errors(tmp_path):
+    db_path = str(tmp_path / "verify.sqlite")
+    store = ResultsStore(db_path)
+    store.append(
+        ExperimentRecord(
+            run_id="run-x", model_name="acme/Model-A", latent_params={}, realized_dims={},
+            render_mode=RenderMode.TEMPLATE, task_seed=1, trial_seed=1, verdict=Verdict.FAIL,
+        )
+    )
+    store.close()
+    deps = LaunchDeps(db_path=db_path, client_factory=_FakeClient, key_loader=lambda: {})
+    started, payload = handle_verify_now("run-x", "nebius", "", "acme/Model-A", deps)
+    assert not started
+    assert "no api key" in payload.lower()
