@@ -69,286 +69,529 @@ _NAV_ITEMS = [item for _, items in _NAV_GROUPS for item in items]
 
 _CSS = """
 /* ---------------------------------------------------------------------
-   1. TOKENS -- spacing scale, 4-step type scale, 3 surface levels, and
-   ONE accent color used only for links/primary-action/active-nav (see
-   docs/design-notes.md principles 10-11).
+   1. TOKENS -- see docs/design-notes.md "Color world" + "Direction" for
+   the reasoning. Surfaces are achromatic (zero saturation, steel/
+   graphite, never navy/teal-tinted). Hue is reserved for what it MEANS
+   in this product's own vocabulary: ground truth is achromatic (never in
+   question), a belief-query claim is amber/phosphor (provisional,
+   witnessed, can be wrong in a specific way), a sprung trap is a
+   different red from an infra error (one is a finding, the other is
+   noise), salience is a real measured ramp. Every token name is read
+   aloud in the design-notes "token test" -- none of them could sit
+   unchanged in an unrelated project.
    ------------------------------------------------------------------- */
 :root {
-  --bg: #111418;
-  --surface-1: #161a20;
-  --surface-2: #1c2128;
-  --bg-raised: #161a20; /* back-compat alias for --surface-1 */
-  --border: #262c34;
-  --border-strong: #333a44;
+  --surface-instrument-0: #0c0d0e;  /* body -- near-black, not pure black */
+  --surface-instrument-1: #131415;  /* panel */
+  --surface-instrument-2: #1a1b1d;  /* raised: table header, active nav, hover */
+  --well: #08090a;                  /* inputs -- DARKER than surroundings, a well not a chip */
+  --line: rgba(255,255,255,0.08);
+  --line-strong: rgba(255,255,255,0.16);
 
-  --text: #E8EAED;
-  --text-secondary: #b7c0cc;
-  --text-muted: #7c8794;
+  --ink: #E7E5E2;
+  --ink-secondary: #A8A6A1;
+  --ink-muted: #6E6C68;
 
-  --accent: #2DD4BF;
-  --accent-dim: #1f9484;
-  --pass: #34D399;
-  --fail: #F87171;
-  --error: #FBBF24;
+  --ground-truth: #E7E5E2;          /* simulated fact -- achromatic, never tinted */
+
+  --claim-belief: #D9A441;          /* a belief-query claim: provisional, witnessed */
+  --claim-belief-dim: #8A6A2E;
+
+  --verdict-pass: #5C9E7C;          /* correct -- restrained, unremarkable on purpose */
+  --verdict-fail-trap: #C4544B;     /* a laid trap was sprung -- a FINDING, worth reading */
+  --verdict-error-infra: #86898f;   /* infra/timeout/cap -- noise, not a finding; no hue */
+
+  --salience-low: #6B5730;
+  --salience-mid: #B0812E;
+  --salience-high: #F0A93A;
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 
-  /* spacing scale */
-  --sp-1: 0.25rem; --sp-2: 0.5rem; --sp-3: 0.75rem; --sp-4: 1rem;
-  --sp-5: 1.5rem; --sp-6: 2rem; --sp-7: 3rem;
+  /* spacing scale -- workbench-tight, not SaaS-airy (design-notes
+     "Density tightens to workbench levels"). */
+  --sp-1: 0.2rem; --sp-2: 0.4rem; --sp-3: 0.6rem; --sp-4: 0.85rem;
+  --sp-5: 1.15rem; --sp-6: 1.6rem; --sp-7: 2.4rem;
 
-  /* type scale: 4 sizes only -- display / h2 / body / small */
+  /* type scale: real ~1.25 ratio, 4 sizes. */
   --fs-display: 1.75rem;
-  --fs-h2: 1.25rem;
-  --fs-body: 0.95rem;
-  --fs-small: 0.8125rem;
+  --fs-h2: 1.125rem;
+  --fs-body: 0.9rem;
+  --fs-small: 0.78rem;
+
+  /* back-compat aliases so every call site below this block (and any
+     future edit that reaches for the old names out of habit) resolves to
+     the new system instead of silently breaking -- see design-notes.md
+     "what's the same, deliberately." */
+  --bg: var(--surface-instrument-0);
+  --surface-1: var(--surface-instrument-1);
+  --surface-2: var(--surface-instrument-2);
+  --bg-raised: var(--surface-instrument-1);
+  --border: var(--line);
+  --border-strong: var(--line-strong);
+  --text: var(--ink);
+  --text-secondary: var(--ink-secondary);
+  --text-muted: var(--ink-muted);
+  --accent: var(--claim-belief);
+  --accent-dim: var(--claim-belief-dim);
+  --pass: var(--verdict-pass);
+  --fail: var(--verdict-fail-trap);
+  --error: var(--verdict-error-infra);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
   font-family: var(--sans);
-  background: var(--bg);
-  color: var(--text);
-  line-height: 1.55;
+  background: var(--surface-instrument-0);
+  color: var(--ink);
+  line-height: 1.5;
   font-size: var(--fs-body);
 }
-a { color: var(--accent); text-decoration: none; }
+a { color: var(--claim-belief); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* Numbers: tabular figures everywhere a number appears in a column or
-   stat, so digits line up instead of jittering (principle 19). */
-.num, td.num, .stat-num, .pill-num {
+.num, td.num, .stat-num {
   font-variant-numeric: tabular-nums;
 }
 
 /* ---------------------------------------------------------------------
-   2. SHELL -- header, grouped nav, breadcrumb slot.
+   2. SHELL -- fixed LEFT SIDEBAR for global nav, not a top bar. Every
+   real reference with this many nav items (7) uses a sidebar -- a
+   horizontal strip was a paint job away from the right container, never
+   the right container itself (see docs/design-notes.md's sidebar
+   addendum). Global nav (sidebar, never changes across pages) and
+   page-level context (.page-strip, page-specific) are two different
+   jobs in two different regions, not stacked in one header row.
    ------------------------------------------------------------------- */
-header.shell-header {
-  display: flex; align-items: center; gap: var(--sp-6);
-  padding: var(--sp-3) var(--sp-5);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-1);
-}
-header.shell-header .brand {
-  font-weight: 700; font-size: 1rem; color: var(--text);
-  letter-spacing: -0.01em;
-}
-header.shell-header .brand:hover { text-decoration: none; color: var(--accent); }
+html, body { height: 100%; }
+.app-shell { display: flex; min-height: 100vh; align-items: stretch; }
 
-nav.shell-nav { display: flex; gap: var(--sp-6); flex: 1; }
-nav.shell-nav .nav-group { display: flex; align-items: baseline; gap: var(--sp-3); }
-nav.shell-nav .nav-group-label {
-  color: var(--text-muted); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.06em; font-weight: 600; margin-right: var(--sp-1);
+.sidebar {
+  width: 248px; flex-shrink: 0;
+  background: var(--surface-instrument-1);
+  border-right: 1px solid var(--line-strong);
+  display: flex; flex-direction: column;
+  padding: var(--sp-5) 0;
 }
-nav.shell-nav a {
-  color: var(--text-secondary); font-size: var(--fs-small);
-  padding: 0.3rem 0; border-bottom: 2px solid transparent;
+
+.brand-block {
+  display: flex; align-items: center; gap: 0.65em;
+  padding: 0 var(--sp-4) var(--sp-5);
+  margin-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
 }
-nav.shell-nav a.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-nav.shell-nav a:hover { color: var(--text); text-decoration: none; }
+.brand-block:hover { text-decoration: none; }
+.brand-mark {
+  font-family: var(--mono); font-weight: 700; font-size: 12px;
+  color: var(--surface-instrument-0); background: var(--claim-belief);
+  width: 26px; height: 26px; border-radius: 3px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.brand-text { display: flex; flex-direction: column; gap: 0.15em; min-width: 0; }
+.brand-name {
+  font-weight: 650; font-size: 0.85rem; color: var(--ink);
+  letter-spacing: -0.005em; white-space: nowrap;
+}
+.brand-block .counter {
+  font-family: var(--mono); font-size: 10px; color: var(--ink-muted); font-weight: 500;
+}
 
-main.shell-main { padding: var(--sp-6) var(--sp-5) var(--sp-7); max-width: 1120px; margin: 0 auto; }
+.sidebar-nav { flex: 1; padding: 0 var(--sp-3); overflow-y: auto; }
+.nav-group { margin-bottom: var(--sp-5); }
+.nav-group:last-child { margin-bottom: 0; }
+.nav-group-label {
+  color: var(--ink-muted); font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: 0.08em; font-weight: 650; font-family: var(--mono);
+  padding: 0 var(--sp-2); margin-bottom: var(--sp-2);
+}
+.nav-row {
+  display: flex; align-items: center; gap: 0.65em;
+  color: var(--ink-secondary); font-size: var(--fs-small);
+  padding: 0.42rem var(--sp-3); border-radius: 6px; margin-bottom: 1px;
+}
+.nav-row:hover { color: var(--ink); text-decoration: none; background: var(--surface-instrument-2); }
+/* Active item: a full INVERTED-CONTRAST pill -- light fill, dark text --
+   not a subtle tint+bar. Confirmed against a real shipped dev-tool
+   sidebar (interface-design skill's own test-factory.png gallery
+   example): the active row is a solid light rounded-rect with dark text,
+   the strongest possible "this one is selected" signal, reserved for
+   exactly one row at a time so it stays meaningful. */
+.nav-row.active {
+  color: var(--surface-instrument-0); background: var(--ink);
+  font-weight: 650;
+}
+.nav-icon {
+  font-family: var(--mono); font-size: 12px; width: 1.1em; text-align: center;
+  flex-shrink: 0; color: var(--ink-muted);
+}
+.nav-row.active .nav-icon, .nav-row:hover .nav-icon { color: inherit; }
 
+main.shell-main {
+  flex: 1; min-width: 0;
+  padding: var(--sp-6) var(--sp-6) var(--sp-7);
+  max-width: 1040px;
+}
+
+/* Page strip: breadcrumb LEFT, page-specific actions RIGHT -- a real
+   shipped example (test-factory.png) puts "Test Suites / User API /
+   GET /users/:id" on the left and secondary+primary buttons on the
+   right of the SAME slim strip, distinct from the big page title below
+   it. `.page-strip .actions` is an optional right-aligned slot callers
+   populate for pages with a page-level action (currently unused by any
+   page here, wired for future use so the pattern exists when needed). */
+.page-strip {
+  margin-bottom: var(--sp-4);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
+}
+.page-strip .actions { display: flex; align-items: center; gap: var(--sp-2); flex-shrink: 0; }
 .breadcrumb {
-  color: var(--text-muted); font-size: var(--fs-small); margin: 0 0 var(--sp-4);
+  color: var(--ink-muted); font-size: var(--fs-small); margin: 0;
+  font-family: var(--mono);
 }
-.breadcrumb a { color: var(--text-secondary); }
-.breadcrumb a:hover { color: var(--accent); }
-.breadcrumb .sep { margin: 0 var(--sp-2); color: var(--border-strong); }
+.breadcrumb a { color: var(--ink-secondary); }
+.breadcrumb a:hover { color: var(--claim-belief); }
+.breadcrumb .sep { margin: 0 var(--sp-2); color: var(--line-strong); }
+
+/* h1-adjacent inline status pill -- a real shipped example
+   (test-factory.png) renders a trial/test's verdict as "H1 + small
+   pill" beside the title, not a big separate card below it. Used by
+   run_html/record_html's headline verdict; the FULL evidence (claim
+   strip with trap names, stability tag) stays in the body below --
+   this pill is just the at-a-glance "what happened" signal next to
+   the title itself. */
+.h1-row { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin: 0 0 var(--sp-1); }
+.h1-row h1 { margin: 0; }
+.title-pill {
+  display: inline-flex; align-items: center; gap: 0.35em;
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  letter-spacing: 0.03em; padding: 0.2em 0.55em; border-radius: 4px;
+  text-transform: uppercase;
+}
+.title-pill.tp-pass { background: rgba(92,158,124,0.15); color: var(--verdict-pass); }
+.title-pill.tp-fail { background: rgba(196,84,75,0.15); color: var(--verdict-fail-trap); }
+.title-pill.tp-mixed { background: rgba(217,164,65,0.15); color: var(--claim-belief); }
+.title-pill.tp-error { background: rgba(134,137,143,0.15); color: var(--verdict-error-infra); }
 
 /* ---------------------------------------------------------------------
-   3. TYPE SCALE -- 4 sizes, used consistently.
+   3. TYPE SCALE.
    ------------------------------------------------------------------- */
 h1 {
   font-size: var(--fs-display); font-weight: 650; margin: 0 0 var(--sp-1);
-  letter-spacing: -0.015em;
+  letter-spacing: -0.015em; color: var(--ink);
 }
-.subtitle { color: var(--text-secondary); font-size: var(--fs-body); margin: 0 0 var(--sp-5); }
+.subtitle { color: var(--ink-secondary); font-size: var(--fs-body); margin: 0 0 var(--sp-5); }
 h2 {
-  font-size: var(--fs-h2); font-weight: 600; margin: var(--sp-6) 0 var(--sp-3);
-  color: var(--text); letter-spacing: -0.005em;
+  font-size: var(--fs-h2); font-weight: 600; margin: var(--sp-6) 0 var(--sp-2);
+  color: var(--ink); letter-spacing: -0.005em;
 }
-h3 { font-size: var(--fs-body); font-weight: 650; margin: var(--sp-4) 0 var(--sp-2); color: var(--text); }
+h3 { font-size: var(--fs-body); font-weight: 650; margin: var(--sp-4) 0 var(--sp-1); color: var(--ink); }
 
-.meta { color: var(--text-muted); font-size: var(--fs-small); }
+.meta { color: var(--ink-muted); font-size: var(--fs-small); }
 .mono { font-family: var(--mono); }
 .eyebrow {
-  text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px;
-  font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.07em; font-size: 9.5px;
+  font-weight: 700; color: var(--ink-muted); font-family: var(--mono);
 }
 
 /* ---------------------------------------------------------------------
-   4. SURFACES -- elevation via background steps, not borders on
-   everything (principle 12). .panel is the ONE reusable card pattern.
+   4. SURFACES -- 3 elevation steps by background lightness. Sharp
+   corners (max 3px), not bubble-rounded cards (design-notes "Rejecting"
+   #1) -- an instrument panel has edges. .panel is the one reusable
+   surface pattern.
    ------------------------------------------------------------------- */
 .panel {
-  background: var(--surface-1);
-  border-radius: 10px;
-  padding: var(--sp-5);
+  background: var(--surface-instrument-1);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: var(--sp-4) var(--sp-5);
 }
-.panel + .panel { margin-top: var(--sp-4); }
+.panel + .panel { margin-top: var(--sp-3); }
 .panel-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--sp-4);
-  margin: var(--sp-4) 0 var(--sp-6);
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0 var(--sp-6);
 }
 .panel-grid .panel { padding: var(--sp-4); }
 
-.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--sp-3); margin: var(--sp-3) 0 var(--sp-5); }
-.stat-box { background: var(--surface-1); border-radius: 8px; padding: var(--sp-4); }
-.stat-box .stat-num { font-family: var(--sans); font-size: 1.6rem; font-weight: 650; }
-.stat-box .stat-label { color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-top: var(--sp-1); }
+/* Hero KPI stat card -- confirmed against a real shipped admin-dashboard
+   example: a big bold number (~32-36px, not 24px) + a small inline
+   context/delta badge on the SAME baseline immediately after it, muted
+   label below, near-invisible border, flat surface (no elevation
+   shadow). Applied to Overview's trials/spend cards -- `.stat-delta` is
+   optional (only rendered when a caller has a real delta to show). */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--sp-2); margin: var(--sp-3) 0 var(--sp-5); }
+.stat-box { background: var(--surface-instrument-1); border: 1px solid var(--line); border-radius: 4px; padding: var(--sp-4); }
+.stat-box .stat-num-row { display: flex; align-items: baseline; gap: 0.5em; }
+.stat-box .stat-num { font-family: var(--mono); font-size: 2rem; font-weight: 650; color: var(--ink); line-height: 1; }
+.stat-box .stat-delta { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--ink-muted); }
+.stat-box .stat-delta.up { color: var(--verdict-pass); }
+.stat-box .stat-label { color: var(--ink-muted); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; margin-top: var(--sp-2); font-family: var(--mono); }
 
 /* ---------------------------------------------------------------------
-   5. TABLES -- numeric columns right-aligned + tabular, headers
-   uppercase-tracking (used ONLY here and in pills/labels), rules
-   between rows instead of boxing the whole table.
+   12b. ASSERTION ROWS -- expected/actual mismatch, only the mismatch
+   colored. Confirmed against a real shipped API-test-runner example
+   (test-factory.png's "Assertions" card): a near-perfect structural fit
+   for this product's own core claim -- "expected: what entity X
+   BELIEVED" vs "actual: what the model ANSWERED." Reused anywhere a
+   model's wrong answer needs to sit directly beside the correct one
+   (claim-strip evidence, verdict-panel notable failures).
+   ------------------------------------------------------------------- */
+.assertion-row { font-family: var(--mono); font-size: 0.85em; }
+.assertion-row .aa-label { color: var(--ink-muted); }
+.assertion-row .aa-expected { color: var(--ink-secondary); }
+.assertion-row .aa-actual-mismatch { color: var(--verdict-fail-trap); font-weight: 600; }
+.assertion-row .aa-actual-match { color: var(--ink-secondary); }
+
+/* ---------------------------------------------------------------------
+   5. TABLES -- tight workbench density (row padding cut from pass 2's
+   0.6rem to ~7px), numeric columns right-aligned + tabular, header row
+   raised one surface step with a real rule beneath it.
    ------------------------------------------------------------------- */
 table { border-collapse: collapse; width: 100%; margin: var(--sp-3) 0 var(--sp-5); font-size: var(--fs-small); }
-th, td { padding: 0.6rem var(--sp-3); text-align: left; border-bottom: 1px solid var(--border); }
+th, td { padding: 0.44rem var(--sp-3); text-align: left; border-bottom: 1px solid var(--line); }
 th {
-  color: var(--text-muted); text-transform: uppercase; font-size: 10.5px;
-  letter-spacing: 0.05em; font-weight: 650; border-bottom: 1px solid var(--border-strong);
+  color: var(--ink-muted); text-transform: uppercase; font-size: 10px;
+  letter-spacing: 0.05em; font-weight: 650; border-bottom: 1px solid var(--line-strong);
+  background: var(--surface-instrument-2); font-family: var(--mono);
 }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.mono, td .mono { font-family: var(--mono); }
-tbody tr:hover { background: var(--surface-1); }
+tbody tr:hover { background: var(--surface-instrument-1); }
 
 /* ---------------------------------------------------------------------
-   6. VERDICT PILLS -- dot + label, not a solid saturated chip
-   (principle 17: keeps semantic color as accent, not a color block).
+   6. THE CLAIM STRIP -- the signature component (see design-notes.md
+   "The signature"). A verdict renders as [mark] verdict-word · one-line
+   evidence clause · stability tag, not a colored chip. The mark itself
+   (not just its color) carries meaning: check = matched, cross = a trap
+   was sprung and named, "?" = not yet resample-checked -- so it reads
+   correctly even without color. A trap-sprung FAIL (--verdict-fail-trap,
+   informative) is visually distinct from an infra ERROR
+   (--verdict-error-infra, flat, no hue -- just noise). "verified-stable"
+   uses ink-secondary + a small pass-green check, NOT fail-trap red --
+   evidence that held up under a resample check is a neutral audited
+   fact, not itself alarming (see design-notes.md's squint/token-test
+   log for the earlier draft that got this wrong). "noise" renders
+   struck-through and hatched: kept legible, not deleted, matching this
+   project's own practice of keeping retractions visible.
    ------------------------------------------------------------------- */
-.pill {
-  display: inline-flex; align-items: center; gap: 0.4em;
-  font-family: var(--sans); font-size: var(--fs-small); font-weight: 600;
-  color: var(--text-secondary);
+.claim {
+  display: flex; align-items: baseline; gap: 0.6em; flex-wrap: wrap;
+  font-size: var(--fs-small); padding: 0.4rem 0;
 }
-.pill::before {
-  content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 999px;
-  background: var(--text-muted);
+.claim .mark {
+  font-family: var(--mono); font-weight: 700; width: 1em; flex-shrink: 0;
+  text-align: center;
 }
-.pill-PASS::before { background: var(--pass); }
-.pill-PASS { color: var(--pass); }
-.pill-FAIL::before { background: var(--fail); }
-.pill-FAIL { color: var(--fail); }
-.pill-ERROR::before { background: var(--error); }
-.pill-ERROR { color: var(--error); }
-.pill-REJECTED_BY_FIDELITY_GATE::before { background: var(--text-muted); }
+.claim.v-pass .mark { color: var(--verdict-pass); }
+.claim.v-fail-trap .mark, .claim.v-fail-unverified .mark { color: var(--verdict-fail-trap); }
+.claim.v-error .mark { color: var(--verdict-error-infra); }
 
-/* Stage tracker for full_map runs on /live (principle 24). */
+.claim .verdict-word {
+  font-family: var(--mono); font-weight: 650; font-size: 0.85em;
+  letter-spacing: 0.03em; width: 3.6em; flex-shrink: 0;
+}
+.claim.v-pass .verdict-word { color: var(--verdict-pass); }
+.claim.v-fail-trap .verdict-word, .claim.v-fail-unverified .verdict-word { color: var(--verdict-fail-trap); }
+.claim.v-error .verdict-word { color: var(--verdict-error-infra); }
+
+.claim .evidence { color: var(--ink-secondary); flex: 1; min-width: 12em; }
+.claim .evidence b { color: var(--ink); font-weight: 600; }
+.claim .evidence .trap-name { color: var(--claim-belief); font-family: var(--mono); font-size: 0.95em; }
+.claim .sal-swatch { display: inline-block; width: 22px; height: 5px; border-radius: 1px; vertical-align: middle; margin-right: 0.35em; }
+
+.claim .stability {
+  font-family: var(--mono); font-size: 0.82em; letter-spacing: 0.03em;
+  flex-shrink: 0; white-space: nowrap; color: var(--ink-muted);
+}
+.claim .stability.stable { color: var(--ink-secondary); }
+.claim .stability.stable::before { content: "\\2713 "; color: var(--verdict-pass); }
+.claim .stability.noise {
+  color: var(--ink-muted);
+  background-image: repeating-linear-gradient(135deg, rgba(255,255,255,0.04) 0 3px, transparent 3px 7px);
+  text-decoration: line-through; text-decoration-color: var(--ink-muted); text-decoration-thickness: 1px;
+  padding: 0.05em 0.3em;
+}
+.claim .stability.unverified { opacity: 0.65; }
+.claim .stability.unverified::before { content: "\\25CB "; }
+
+/* Table-row variant: the claim strip collapsed into a single <td> so it
+   still works inside the existing per-trial tables. */
+td.claim-cell { padding-top: 0.3rem; padding-bottom: 0.3rem; }
+td.claim-cell .claim { padding: 0; }
+
+/* Stage tracker for full_map runs on /live. */
 .stage-track { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-3) 0 var(--sp-4); flex-wrap: wrap; }
 .stage-step {
   display: flex; align-items: center; gap: 0.4em; font-size: var(--fs-small);
-  color: var(--text-muted); padding: 0.3rem 0.65rem; border-radius: 999px;
-  background: var(--surface-1);
+  color: var(--ink-muted); padding: 0.25rem 0.6rem; border-radius: 3px;
+  background: var(--surface-instrument-1); border: 1px solid var(--line); font-family: var(--mono);
 }
-.stage-step .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--border-strong); }
-.stage-step.done { color: var(--pass); }
-.stage-step.done .dot { background: var(--pass); }
-.stage-step.active { color: var(--accent); background: var(--surface-2); font-weight: 650; }
-.stage-step.active .dot { background: var(--accent); }
-.stage-arrow { color: var(--border-strong); }
+.stage-step .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--line-strong); }
+.stage-step.done { color: var(--verdict-pass); }
+.stage-step.done .dot { background: var(--verdict-pass); }
+.stage-step.active { color: var(--claim-belief); background: var(--surface-instrument-2); font-weight: 650; border-color: var(--claim-belief-dim); }
+.stage-step.active .dot { background: var(--claim-belief); }
+.stage-arrow { color: var(--line-strong); }
 
 /* ---------------------------------------------------------------------
-   7. PROGRESS -- accent reserved for in-progress fill; complete state
-   switches to semantic pass-green so accent stays meaningful.
+   7. PROGRESS -- claim-belief amber reserved for in-progress fill;
+   complete state switches to verdict-pass so the amber stays meaningful
+   (it means "a claim is still provisional/running").
    ------------------------------------------------------------------- */
-.progress-track { background: var(--border); border-radius: 999px; height: 8px; width: 100%; overflow: hidden; }
-.progress-fill { background: var(--accent); height: 100%; border-radius: 999px; transition: width 0.3s ease; }
-.progress-fill.complete { background: var(--pass); }
-.progress-row { display: flex; align-items: center; gap: var(--sp-3); margin: var(--sp-2) 0 var(--sp-1); min-height: 8px; }
+.progress-track { background: var(--line-strong); border-radius: 2px; height: 6px; width: 100%; overflow: hidden; }
+.progress-fill { background: var(--claim-belief); height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+.progress-fill.complete { background: var(--verdict-pass); }
+.progress-row { display: flex; align-items: center; gap: var(--sp-3); margin: var(--sp-2) 0 var(--sp-1); min-height: 6px; }
 .progress-row .progress-track { flex: 1; }
-.progress-text { font-size: var(--fs-small); color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.progress-text { font-size: var(--fs-small); color: var(--ink-muted); white-space: nowrap; font-variant-numeric: tabular-nums; font-family: var(--mono); }
 
 /* ---------------------------------------------------------------------
-   8. CODE / DETAILS -- long mono blobs stay collapsed by default
-   (principle 7: progressive disclosure).
+   8. CODE / DETAILS -- long mono blobs stay collapsed (progressive
+   disclosure), rendered in the WELL (darker than surroundings, not a
+   raised panel) since a prompt/response blob is closer to an input than
+   a card.
    ------------------------------------------------------------------- */
 pre.block {
   white-space: pre-wrap; word-wrap: break-word;
-  background: var(--surface-1);
-  border-radius: 8px;
+  background: var(--well);
+  border: 1px solid var(--line);
+  border-radius: 3px;
   padding: var(--sp-4);
   font-family: var(--mono);
   font-size: var(--fs-small);
-  color: var(--text-secondary);
+  color: var(--ink-secondary);
 }
 details { margin: var(--sp-2) 0; }
 details summary {
-  cursor: pointer; font-weight: 600; margin: var(--sp-2) 0; color: var(--text-secondary);
+  cursor: pointer; font-weight: 600; margin: var(--sp-2) 0; color: var(--ink-secondary);
   font-size: var(--fs-small); list-style: none;
 }
 details summary::-webkit-details-marker { display: none; }
-details summary::before { content: "\\25b8  "; color: var(--text-muted); }
+details summary::before { content: "\\25b8  "; color: var(--ink-muted); }
 details[open] summary::before { content: "\\25be  "; }
-details[open] summary { color: var(--text); }
+details[open] summary { color: var(--ink); }
 
 /* ---------------------------------------------------------------------
-   9. FORMS -- radio-card preset pattern for /launch (principle 23).
+   9. FORMS -- radio-card preset pattern for /launch. Inputs render in
+   the WELL token -- darker than their surrounding panel, a well the eye
+   drops into, not a raised chip (design-notes "Direction": audited and
+   fixed from pass 2, which used a LIGHTER surface for inputs).
    ------------------------------------------------------------------- */
 form p { margin: var(--sp-3) 0; }
-label { font-size: var(--fs-small); color: var(--text-secondary); }
+label { font-size: var(--fs-small); color: var(--ink-secondary); }
 input, select, button, textarea {
   font-family: var(--sans);
-  background: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  padding: 0.45rem 0.6rem;
+  background: var(--well);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  padding: 0.4rem 0.55rem;
   font-size: var(--fs-body);
 }
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--claim-belief);
+}
+/* Primary action = NEUTRAL inverted-contrast (light fill, dark text),
+   not accent-filled -- confirmed against a real shipped dev-tool
+   (test-factory.png): "Run Test" is a solid light/white button with
+   dark text and a play glyph, not a colored-accent button. Reserves
+   claim-belief amber for what it actually MEANS in this product's
+   vocabulary (a belief-query claim / in-progress state) instead of
+   diluting it into "the color of every button," which is exactly the
+   decorative-accent failure mode design-notes.md's Rejecting section
+   already named once for teal. */
 button {
-  background: var(--accent);
-  color: #0b0d10;
+  background: var(--ink);
+  color: var(--surface-instrument-0);
   font-weight: 650;
   cursor: pointer;
   border: none;
-  padding: 0.6rem 1.1rem;
+  border-radius: 4px;
+  padding: 0.55rem 1rem;
 }
-button:hover { opacity: 0.9; }
+button:hover { opacity: 0.88; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
 button.btn-primary { font-size: var(--fs-body); }
+button.btn-secondary {
+  background: transparent; color: var(--ink-secondary);
+  border: 1px solid var(--line-strong);
+}
+button.btn-secondary:hover { color: var(--ink); border-color: var(--ink-muted); opacity: 1; }
 
 .preset-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-3); margin: var(--sp-3) 0; }
 .preset-card {
-  display: block; background: var(--surface-1); border: 1px solid var(--border);
-  border-radius: 10px; padding: var(--sp-4); cursor: pointer;
+  display: block; background: var(--surface-instrument-1); border: 1px solid var(--line);
+  border-radius: 3px; padding: var(--sp-4); cursor: pointer;
 }
-.preset-card:has(input:checked) { border-color: var(--accent); background: var(--surface-2); }
+.preset-card:has(input:checked) { border-color: var(--claim-belief); background: var(--surface-instrument-2); }
 .preset-card .preset-title { font-weight: 650; display: flex; align-items: center; gap: var(--sp-2); }
-.preset-card .preset-desc { color: var(--text-muted); font-size: var(--fs-small); margin-top: var(--sp-1); }
+.preset-card .preset-desc { color: var(--ink-muted); font-size: var(--fs-small); margin-top: var(--sp-1); }
 .badge {
-  font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
-  padding: 0.1rem 0.4rem; border-radius: 4px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 0.1rem 0.35rem; border-radius: 2px; font-family: var(--mono);
 }
-.badge-recommended { background: var(--accent); color: #0b0d10; }
-.badge-new { background: var(--surface-2); color: var(--accent); border: 1px solid var(--accent-dim); }
+.badge-recommended { background: var(--claim-belief); color: #0b0d10; }
+.badge-new { background: var(--surface-instrument-2); color: var(--claim-belief); border: 1px solid var(--claim-belief-dim); }
 
 /* ---------------------------------------------------------------------
-   10. EMPTY STATES (principle 6) -- helpful pointer, not a bare box.
+   10. EMPTY STATES -- helpful pointer, not a bare box.
    ------------------------------------------------------------------- */
 .empty-state {
-  background: var(--surface-1); border-radius: 10px; padding: var(--sp-6);
-  text-align: center; color: var(--text-secondary);
+  background: var(--surface-instrument-1); border: 1px solid var(--line); border-radius: 3px; padding: var(--sp-6);
+  text-align: center; color: var(--ink-secondary);
 }
 .empty-state .meta { margin-top: var(--sp-2); }
 
 /* ---------------------------------------------------------------------
-   11. CTA -- the one primary action on / (principle 22).
+   11. CTA -- the one primary action on /. Same neutral inverted-contrast
+   treatment as button (see above) for the same reason -- a CTA link
+   styled as a button should look like the same primary-action language,
+   not a second, differently-colored button system.
    ------------------------------------------------------------------- */
 .cta-row { margin: var(--sp-4) 0 var(--sp-6); }
 .cta-primary {
-  display: inline-block; background: var(--accent); color: #0b0d10;
-  font-weight: 650; font-size: var(--fs-body); padding: 0.75rem 1.4rem;
-  border-radius: 8px;
+  display: inline-block; background: var(--ink); color: var(--surface-instrument-0);
+  font-weight: 650; font-size: var(--fs-body); padding: 0.7rem 1.3rem;
+  border-radius: 4px;
 }
-.cta-primary:hover { text-decoration: none; opacity: 0.92; }
+.cta-primary:hover { text-decoration: none; opacity: 0.88; }
+
+/* ---------------------------------------------------------------------
+   12. STATUS TAGS -- confirmed / needs-replication / retracted, the
+   trust-level of a FINDING (distinct concept from a trial verdict --
+   see cartographer/viewer/findings.py). Text-label + weight, not a
+   colored chip, since these need to be distinguishable at a glance
+   while reading dense prose, not scanned as isolated table cells.
+   ------------------------------------------------------------------- */
+.status-tag {
+  font-family: var(--mono); font-size: 0.78rem; font-weight: 650;
+  letter-spacing: 0.02em; padding: 0.08em 0.4em; border-radius: 2px;
+}
+.status-tag.confirmed { color: var(--verdict-pass); border: 1px solid var(--verdict-pass); }
+.status-tag.needs-replication { color: var(--claim-belief); border: 1px solid var(--claim-belief-dim); }
+.status-tag.retracted {
+  color: var(--ink-muted); border: 1px solid var(--line-strong);
+  text-decoration: line-through; text-decoration-color: var(--ink-muted);
+}
 """
 
-_VERDICT_CLASS_FALLBACK = "meta"
+
+# One restrained mono glyph per nav item -- not an imported icon set (a
+# generic Feather/Lucide icon row would just be a different flavor of the
+# same "any AI's sidebar" problem), single characters/brackets already at
+# home in an instrument's own vocabulary (readouts, brackets, marks).
+_NAV_ICONS = {
+    "overview": "▣",
+    "findings": "✓",
+    "runs": "≡",
+    "atlas": "∿",
+    "coverage": "▦",
+    "launch": "▶",
+    "live": "●",
+}
 
 
 def _shell(
@@ -357,38 +600,73 @@ def _shell(
     body: str,
     refresh: bool = False,
     breadcrumb: str | None = None,
+    trial_count: int | None = None,
 ) -> str:
-    """Render `body` inside the shared header/nav/style shell.
+    """Render `body` inside the shared sidebar shell.
+
+    Global navigation lives in a fixed-width LEFT SIDEBAR, not a top bar
+    (docs/design-notes.md's original top-bar skeleton was itself never
+    questioned across three passes -- every real SaaS/instrument reference
+    with this many nav items -- Linear, Grafana, Datadog, the interface-
+    design skill's own showcase examples -- uses a sidebar; a horizontal
+    strip with 7 items was always going to feel cramped/generic, a paint
+    job away from a sidebar rather than the right container). Global nav
+    (this sidebar) and page-level context (breadcrumb/title) are two
+    different jobs and now live in two different regions: the sidebar
+    never changes across pages, the slim `.page-strip` inside main is
+    page-specific.
 
     `active_nav` is one of the keys in `_NAV_ITEMS` ("runs", "live",
     "atlas", "launch") or "" for none highlighted. Nav is grouped into
-    Results / Explore / Act (see docs/design-notes.md principle 2).
-    `breadcrumb`, if given, is raw HTML rendered just above the page body
-    (principle 3: recognition over recall on detail pages).
+    Results / Explore / Act under real vertical whitespace + uppercase
+    mono group labels -- now something a sidebar can actually show AS
+    groups, not just as ordering. The active item gets a filled
+    background on its whole row (selected sidebar item), not a bottom-
+    border underline (that reads as "browser tab," which is exactly the
+    top-bar tell being removed here).
+    `breadcrumb`, if given, renders in the page strip.
+    `trial_count`, if given, renders a live mono counter in the sidebar's
+    identity block ("this is a running instrument," visible before
+    scrolling). Optional and additive: pages without a store in scope
+    (coverage/findings, the 404 handler, launch error pages) simply
+    render no counter.
     """
     refresh_tag = '<meta http-equiv="refresh" content="5">' if refresh else ""
     groups_html = []
     for group_label, items in _NAV_GROUPS:
-        links = "".join(
-            f'<a href="{href}"{" class=\"active\"" if key == active_nav else ""}>{label}</a>'
+        rows = "".join(
+            f'<a class="nav-row{" active" if key == active_nav else ""}" href="{href}">'
+            f'<span class="nav-icon">{_NAV_ICONS.get(key, "·")}</span>'
+            f"<span class=\"nav-label\">{label}</span></a>"
             for key, href, label in items
         )
         groups_html.append(
-            f'<span class="nav-group"><span class="nav-group-label">{group_label}</span>{links}</span>'
+            f'<div class="nav-group"><div class="nav-group-label">{group_label}</div>{rows}</div>'
         )
-    nav_links = "".join(groups_html)
-    header = (
-        '<header class="shell-header">'
-        '<a class="brand" href="/">Model Cartographer</a>'
-        f'<nav class="shell-nav">{nav_links}</nav>'
-        "</header>"
+    nav_groups_html = "".join(groups_html)
+    counter_html = (
+        f'<span class="counter">{trial_count:,} trials recorded</span>'
+        if trial_count is not None
+        else ""
     )
-    breadcrumb_html = f'<p class="breadcrumb">{breadcrumb}</p>' if breadcrumb else ""
+    sidebar = (
+        '<aside class="sidebar">'
+        '<a class="brand-block" href="/">'
+        '<span class="brand-mark">MC</span>'
+        '<span class="brand-text"><span class="brand-name">Model Cartographer</span>'
+        f"{counter_html}</span>"
+        "</a>"
+        f'<nav class="sidebar-nav">{nav_groups_html}</nav>'
+        "</aside>"
+    )
+    breadcrumb_html = f'<div class="page-strip"><p class="breadcrumb">{breadcrumb}</p></div>' if breadcrumb else ""
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         f"{refresh_tag}"
         f"<title>{html.escape(title)}</title><style>{_CSS}</style></head>"
-        f"<body>{header}<main class=\"shell-main\">{breadcrumb_html}{body}</main></body></html>"
+        f'<body><div class="app-shell">{sidebar}'
+        f'<main class="shell-main">{breadcrumb_html}{body}</main>'
+        "</div></body></html>"
     )
 
 
@@ -398,9 +676,118 @@ def _page(title: str, body: str, refresh: bool = False, active_nav: str = "") ->
     return _shell(title, active_nav, body, refresh=refresh)
 
 
+# mark, css-state-class per verdict name -- the glyph itself carries
+# meaning (not just its color), so the claim strip reads correctly even
+# without color: check = matched, cross = a trap was sprung, "?" is
+# reserved for the FAIL-but-not-yet-resample-checked case (set by callers
+# that pass stability="unverified"; see _claim_strip).
+_VERDICT_MARK = {"PASS": "✓", "FAIL": "✕", "ERROR": "✕"}
+_VERDICT_STATE_CLASS = {"PASS": "v-pass", "FAIL": "v-fail-trap", "ERROR": "v-error"}
+
+
+def _title_pill_html(records: list[ExperimentRecord]) -> str:
+    """An inline pill beside an h1 summarizing a set of records' verdicts
+    at a glance -- confirmed against a real shipped API-test-runner
+    example (test-factory.png: "Get User by ID  [PASSED]", a small pill
+    directly beside the title, not a big separate card). The FULL
+    evidence still lives in the verdict panel / per-trial table below;
+    this is only the "what happened" glance. Returns "" for an empty
+    record set (nothing to summarize)."""
+    scored = [r for r in records if r.verdict.name in ("PASS", "FAIL")]
+    if not scored:
+        return ""
+    passn = sum(1 for r in scored if r.verdict.name == "PASS")
+    total = len(scored)
+    if passn == total:
+        return '<span class="title-pill tp-pass">PASSED</span>'
+    if passn == 0:
+        return '<span class="title-pill tp-fail">FAILED</span>'
+    rate = passn / total * 100.0
+    return f'<span class="title-pill tp-mixed">{rate:.0f}% PASS</span>'
+
+
+def _short_answer(response_text: str | None, max_chars: int = 60) -> str:
+    """A claim strip's evidence clause needs a SHORT quote of what the
+    model actually answered -- but some models (observed live: MiniMax-M3
+    on adversarial_belief runs) write their full chain-of-thought directly
+    into `response_text`, with the stated final answer at the very END,
+    not the start. Naively slicing the first `max_chars` characters lands
+    on a truncated reasoning fragment ("Looking at this problem, I need to
+    track what Hakim has p...") instead of an answer -- misleading, not
+    just ugly. Mirrors `verdict.py::_notable_failures`'s own pattern for
+    extracting the QUESTION from a multi-line prompt (`.splitlines()[-1]`):
+    take the LAST non-empty line, which is far more likely to be the
+    stated answer for a verbose response, and is a no-op for a terse
+    single-line answer (its only line IS its last line).
+    """
+    text = (response_text or "").strip()
+    if not text:
+        return ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    tail = lines[-1] if lines else text
+    return tail if len(tail) <= max_chars else tail[: max_chars - 3] + "..."
+
+
+def _claim_strip(
+    verdict_name: str,
+    evidence: str | None = None,
+    stability: str | None = None,
+    salience: float | None = None,
+) -> str:
+    """The signature verdict component (see docs/design-notes.md "The
+    signature"): [mark] VERDICT  evidence clause  stability tag -- not a
+    colored chip. Degrades gracefully to bare mark+word when no evidence
+    is available (state/order records, or a plain PASS with nothing
+    notable to say), so it never renders dangling punctuation.
+
+    `stability`, if given, is one of "stable"/"noise"/"unverified" (see
+    `_VERIFY_STATUS_LABEL`) -- FAIL rows only. A FAIL that hasn't been
+    resample-checked yet renders with a "?" mark instead of a cross, since
+    a not-yet-checked failure is a different epistemic state from a
+    resample-confirmed one, not just a visual variant.
+    `salience`, if given (adversarial belief records only), renders a
+    small color-ramp swatch ahead of the evidence clause.
+    """
+    safe_verdict = html.escape(verdict_name)
+    state_cls = _VERDICT_STATE_CLASS.get(verdict_name, "v-error")
+    mark = _VERDICT_MARK.get(verdict_name, "?")
+    row_cls = f"claim {state_cls}"
+    if verdict_name == "FAIL" and stability == "unverified":
+        mark = "?"
+        row_cls = "claim v-fail-unverified"
+
+    evidence_html = f'<span class="evidence">{evidence}</span>' if evidence else ""
+    if salience is not None and evidence:
+        if salience >= 0.66:
+            sal_color = "var(--salience-high)"
+        elif salience >= 0.33:
+            sal_color = "var(--salience-mid)"
+        else:
+            sal_color = "var(--salience-low)"
+        evidence_html = (
+            f'<span class="evidence"><span class="sal-swatch" '
+            f'style="background:{sal_color}"></span>{evidence}</span>'
+        )
+
+    stability_html = ""
+    if stability and verdict_name == "FAIL":
+        label = html.escape(_VERIFY_STATUS_LABEL.get(stability, stability))
+        stability_html = f'<span class="stability {html.escape(stability)}">{label}</span>'
+
+    return (
+        f'<span class="{row_cls}">'
+        f'<span class="mark">{mark}</span>'
+        f'<span class="verdict-word">{safe_verdict}</span>'
+        f"{evidence_html}{stability_html}"
+        "</span>"
+    )
+
+
 def _verdict_pill(verdict_name: str) -> str:
-    safe = html.escape(verdict_name)
-    return f'<span class="pill pill-{safe}">{safe}</span>'
+    """Bare claim strip with no evidence clause -- used at call sites that
+    only have a verdict name in hand (no evidence context available).
+    Prefer `_claim_strip` directly when evidence/stability data exists."""
+    return _claim_strip(verdict_name)
 
 
 # Kept as an alias: some call sites/tests refer to the old name.
@@ -461,25 +848,42 @@ def verdict_panel_html(store: ResultsStore, run_id: str) -> str:
 
     paragraphs_html = "".join(f"<p>{html.escape(p)}</p>" for p in verdict.paragraphs)
 
+    # Assertion-row pattern (docs/design-notes.md, sidebar/showcase
+    # addendum): expected/actual side by side, mismatch colored, "actual:"
+    # label stays muted -- a near-exact structural fit confirmed against a
+    # real shipped API-test-runner's "Assertions" card, reused here for
+    # "expected: what entity X believed" vs "actual: what the model said."
     failures_html = ""
     if verdict.notable_failures:
         items = []
         for f in verdict.notable_failures:
+            # `f.model_answer` is `verdict.py`'s raw response_text, full
+            # length (that module is off-limits territory for this pass
+            # -- cartographer/report/** -- so the short-answer fix stays a
+            # display-time transform here, same _short_answer used for
+            # every other response_text render in this file, rather than
+            # a change to NotableFailure's own data model).
+            model_answer_short = _short_answer(f.model_answer, max_chars=100)
             items.append(
-                "<li>"
-                f'<a href="/record/{html.escape(f.record_id)}">record {html.escape(f.record_id[:8])}</a>: '
-                f'<span class="meta">asked</span> "{html.escape(f.question)}" &middot; '
-                f'<span class="meta">model said</span> "{html.escape(f.model_answer)}" &middot; '
-                f'<span class="meta">correct</span> "{html.escape(f.correct_answer)}" &mdash; '
-                f"{html.escape(f.why_wrong)}"
+                "<li style=\"margin-bottom:0.6rem;\">"
+                f'<a href="/record/{html.escape(f.record_id)}">record {html.escape(f.record_id[:8])}</a> '
+                f'<span class="meta">&mdash; asked "{html.escape(f.question)}"</span>'
+                '<div class="assertion-row" style="margin:0.2rem 0 0.15rem;">'
+                f'<span class="aa-label">expected:</span> <span class="aa-expected">{html.escape(f.correct_answer)}</span>'
+                "</div>"
+                '<div class="assertion-row">'
+                f'<span class="aa-label">actual:</span> <span class="aa-actual-mismatch">{html.escape(model_answer_short)}</span>'
+                "</div>"
+                f'<p class="meta" style="margin:0.2rem 0 0;">{html.escape(f.why_wrong)}</p>'
                 "</li>"
             )
         failures_html = (
-            "<h3>Notable failures</h3><ul>" + "".join(items) + "</ul>"
+            "<h3>Notable failures</h3><ul style=\"list-style:none; padding-left:0;\">"
+            + "".join(items) + "</ul>"
         )
 
     return (
-        '<div class="stat-box" style="grid-column: 1 / -1;" data-testid="verdict-panel">'
+        '<div class="panel" data-testid="verdict-panel">'
         f'<h2 style="margin-top:0;">{html.escape(verdict.headline)}</h2>'
         f"{paragraphs_html}"
         f"{failures_html}"
@@ -570,6 +974,14 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
     return rows_html, by_run
 
 
+def _trial_count(store: ResultsStore) -> int:
+    """Total recorded trials -- feeds the header's live mono counter. A
+    cheap COUNT(*), not a full row fetch."""
+    cur = store._conn.execute("SELECT COUNT(*) AS n FROM experiments")
+    row = cur.fetchone()
+    return int(row["n"]) if row is not None else 0
+
+
 def runs_html(store: ResultsStore) -> str:
     """The raw per-run table (formerly the home page)."""
     rows_html, by_run = _runs_table_rows(store)
@@ -580,7 +992,7 @@ def runs_html(store: ResultsStore) -> str:
             '<div class="empty-state"><p>No runs yet.</p>'
             '<p class="meta"><a href="/launch">Launch your first campaign &rarr;</a></p></div>'
         )
-        return _shell("Runs", "runs", body)
+        return _shell("Runs", "runs", body, trial_count=_trial_count(store))
     table = (
         "<table><thead><tr><th>run_id</th><th>model</th><th class=\"num\">records</th>"
         "<th class=\"num\">pass rate</th><th class=\"num\">cost</th><th>started</th><th>status</th>"
@@ -593,7 +1005,7 @@ def runs_html(store: ResultsStore) -> str:
         "report and per-trial table.</p>"
         f"{table}"
     )
-    return _shell("Runs", "runs", body)
+    return _shell("Runs", "runs", body, trial_count=_trial_count(store))
 
 
 _QUICK_LINKS = [
@@ -693,8 +1105,8 @@ def index_html(store: ResultsStore) -> str:
     {model_kind_table}
 
     <div class="stat-grid">
-      <div class="stat-box"><div class="stat-num">{total_trials}</div><div class="stat-label">Total trials</div></div>
-      <div class="stat-box"><div class="stat-num">${total_spend:.4f}</div><div class="stat-label">Total spend</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{total_trials:,}</div></div><div class="stat-label">Total trials</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">${total_spend:.4f}</div></div><div class="stat-label">Total spend</div></div>
     </div>
 
     <h2>What recent runs revealed</h2>
@@ -710,7 +1122,7 @@ def index_html(store: ResultsStore) -> str:
       )}
     </div>
     """
-    return _shell("Model Cartographer", "overview", body)
+    return _shell("Model Cartographer", "overview", body, trial_count=_trial_count(store))
 
 
 def _query_kind_from_detail(detail: str | None) -> str:
@@ -914,7 +1326,7 @@ def live_html(store: ResultsStore) -> str:
                 '<div class="empty-state"><p>No records found.</p>'
                 '<p class="meta"><a href="/launch">Launch your first campaign &rarr;</a></p></div>'
             )
-            return _shell("Live campaign monitor", "live", body, refresh=True)
+            return _shell("Live campaign monitor", "live", body, refresh=True, trial_count=_trial_count(store))
         run_id = row["run_id"]
 
     safe_run_id = html.escape(run_id)
@@ -947,7 +1359,7 @@ def live_html(store: ResultsStore) -> str:
         {_stop_button_html(active is not None, stopping)}
         {verifying_html}
         """
-        return _shell(f"Live: {run_id}", "live", body, refresh=True)
+        return _shell(f"Live: {run_id}", "live", body, refresh=True, trial_count=_trial_count(store))
 
     total = len(records)
     passn = sum(1 for r in records if r.verdict.name == "PASS")
@@ -1011,10 +1423,17 @@ def live_html(store: ResultsStore) -> str:
     recent = list(reversed(records))[:15]
     rows_html = []
     for r in recent:
+        r_answer_short = _short_answer(r.response_text, max_chars=50)
+        if r.verdict.name == "PASS":
+            r_evidence = "matched ground truth" if not r_answer_short else f'answered <b>"{html.escape(r_answer_short)}"</b>'
+        elif r.verdict.name == "FAIL":
+            r_evidence = f'answered <b>"{html.escape(r_answer_short)}"</b>' if r_answer_short else None
+        else:
+            r_evidence = None
         rows_html.append(
             "<tr>"
             f'<td class="mono">{html.escape(r.created_at or "-")}</td>'
-            f"<td>{_verdict_pill(r.verdict.name)}</td>"
+            f'<td class="claim-cell">{_claim_strip(r.verdict.name, r_evidence)}</td>'
             f'<td class="mono">{html.escape(_config_summary(r.realized_dims))}</td>'
             "</tr>"
         )
@@ -1038,7 +1457,7 @@ def live_html(store: ResultsStore) -> str:
     <h2>Last 15 records (newest first)</h2>
     {recent_table}
     """
-    return _shell(f"Live: {run_id}", "live", body, refresh=not complete)
+    return _shell(f"Live: {run_id}", "live", body, refresh=not complete, trial_count=_trial_count(store))
 
 
 def _stage_track_html(run_id: str, records: list[ExperimentRecord]) -> str:
@@ -1101,7 +1520,7 @@ def run_html(store: ResultsStore, run_id: str) -> str:
             f"{verdict_panel_html(store, run_id)}"
             '<div class="empty-state"><p>No records found.</p></div>'
         )
-        return _shell(f"Run {run_id}", "runs", body, breadcrumb=breadcrumb)
+        return _shell(f"Run {run_id}", "runs", body, breadcrumb=breadcrumb, trial_count=_trial_count(store))
 
     # Verification status per FAIL record_id, keyed by the run_id its
     # verify trials actually live under (f"{run_id}/verify" for a plain
@@ -1124,24 +1543,58 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         # difficulty is not always encoded in verifier_detail; fall back to "-".
         difficulty = detail.get("difficulty", "-")
         traps = detail.get("traps", "")
-        traps_html = f' <span class="meta mono">traps={html.escape(traps)}</span>' if traps else ""
+        foil_score_raw = detail.get("foil_score", "")
         stage_html = ""
         if is_full_map_parent:
             stage = _stage_from_run_id_local(r.run_id)
             if stage:
                 stage_html = f'<td class="mono">{html.escape(stage)}</td>'
-        if r.verdict.name == "FAIL":
-            status = verify_status_by_record.get(r.record_id, "unverified")
-            verify_html = f'<td class="meta">{html.escape(_VERIFY_STATUS_LABEL[status])}</td>'
-        else:
-            verify_html = '<td class="meta">-</td>'
+
+        # Evidence clause for the claim strip: what was answered, and (for
+        # an adversarial record) which traps this world was SEEDED for --
+        # `traps` is `FoilProfile.trap_kinds`, a world-level property
+        # (which plausible-but-wrong answers this story plants) computed
+        # before the model ever answers, not "which trap the model's
+        # answer happened to match" -- the data this table used to leave
+        # in a separate raw "traps=..." span, now folded into the verdict
+        # itself since that's the whole point of the claim strip
+        # (design-notes.md "The signature"). Every planted trap is shown,
+        # not just one, since a world can plant several at once and which
+        # one(s) the model actually fell for is exactly the open question
+        # a reader clicking into the full transcript wants to answer.
+        answer_short = _short_answer(r.response_text, max_chars=60)
+        stability = None
+        evidence = None
+        if r.verdict.name == "PASS":
+            evidence = "matched ground truth" if not answer_short else f'answered <b>"{html.escape(answer_short)}"</b>'
+        elif r.verdict.name == "FAIL":
+            stability = verify_status_by_record.get(r.record_id, "unverified")
+            if traps:
+                trap_names_html = ", ".join(
+                    f'<span class="trap-name">{html.escape(t.strip())}</span>' for t in traps.split(",") if t.strip()
+                )
+                evidence = (
+                    (f'answered <b>"{html.escape(answer_short)}"</b> ' if answer_short else "")
+                    + f"(world seeded for: {trap_names_html})"
+                )
+            elif answer_short:
+                evidence = f'answered <b>"{html.escape(answer_short)}"</b>'
+        else:  # ERROR
+            evidence = html.escape(detail.get("error", "") or r.finish_reason or "infra failure")
+
+        salience = None
+        if foil_score_raw:
+            try:
+                salience = float(foil_score_raw)
+            except ValueError:
+                salience = None
+
         rows_html.append(
             "<tr>"
             f'<td class="mono">{html.escape(r.model_name)}</td>'
             f"{stage_html}"
-            f"<td>{_verdict_pill(r.verdict.name)}</td>"
-            f"{verify_html}"
-            f"<td>{html.escape(kind)}{traps_html}</td>"
+            f'<td class="claim-cell">{_claim_strip(r.verdict.name, evidence, stability, salience)}</td>'
+            f"<td>{html.escape(kind)}</td>"
             f"<td>{html.escape(difficulty)}</td>"
             f'<td class="mono">{r.cost_usd:.6f}</td>'
             f'<td class="mono">{r.tokens_in}/{r.tokens_out}</td>'
@@ -1153,7 +1606,7 @@ def run_html(store: ResultsStore, run_id: str) -> str:
     table = (
         "<table><thead><tr><th>model</th>"
         f"{stage_header}"
-        "<th>verdict</th><th>verified</th><th>kind</th>"
+        "<th>verdict</th><th>kind</th>"
         "<th>difficulty</th><th class=\"num\">cost ($)</th><th class=\"num\">tokens in/out</th><th></th>"
         "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
@@ -1187,7 +1640,7 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         """
 
     body = (
-        f"<h1>Run {safe_run_id}</h1>"
+        f'<div class="h1-row"><h1>Run {safe_run_id}</h1>{_title_pill_html(records)}</div>'
         '<p class="subtitle">What this run revealed, then every individual trial as evidence.</p>'
         f"{verdict_panel_html(store, run_id)}"
         f'<p class="meta" style="margin-top:1.25rem;"><a href="/live?run={safe_run_id}">watch live &rarr;</a> &middot; '
@@ -1197,7 +1650,7 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         f'<span class="meta">({len(records)} trials -- prompt, reasoning, verdict, answer key)</span></summary>'
         f"{table}</details>"
     )
-    return _shell(f"Run {run_id}", "runs", body, breadcrumb=breadcrumb)
+    return _shell(f"Run {run_id}", "runs", body, breadcrumb=breadcrumb, trial_count=_trial_count(store))
 
 
 def _stage_from_run_id_local(run_id: str) -> str | None:
@@ -1213,7 +1666,7 @@ def record_html(store: ResultsStore, record_id: str) -> str:
 
     if row is None:
         body = f'<h1>Record {safe_record_id}</h1><div class="empty-state"><p>Not found.</p></div>'
-        return _shell(f"Record {record_id}", "runs", body)
+        return _shell(f"Record {record_id}", "runs", body, trial_count=_trial_count(store))
 
     from ..store.store import _row_to_record
 
@@ -1280,13 +1733,22 @@ def record_html(store: ResultsStore, record_id: str) -> str:
         f'<span class="sep">/</span>{safe_record_id[:8]}'
     )
 
+    _r_answer_short = _short_answer(record.response_text, max_chars=80)
+    if record.verdict.name == "PASS":
+        _r_evidence = "matched ground truth" if not _r_answer_short else f'answered <b>"{html.escape(_r_answer_short)}"</b>'
+    elif record.verdict.name == "FAIL":
+        _r_evidence = f'answered <b>"{html.escape(_r_answer_short)}"</b>' if _r_answer_short else None
+    else:
+        _r_evidence = html.escape(detail.get("error", "") or record.finish_reason or "infra failure")
+
+    _r_pill_cls = {"PASS": "tp-pass", "FAIL": "tp-fail", "ERROR": "tp-error"}.get(record.verdict.name, "tp-error")
     body = f"""
-    <h1>Record {safe_record_id}</h1>
+    <div class="h1-row"><h1>Record {safe_record_id}</h1><span class="title-pill {_r_pill_cls}">{html.escape(record.verdict.name)}</span></div>
     <p class="subtitle">Verdict and provenance first; raw prompt/response/reasoning below, collapsed.</p>
 
     <div class="panel">
       <p style="margin:0 0 0.5rem;">
-        {_verdict_pill(record.verdict.name)}
+        {_claim_strip(record.verdict.name, _r_evidence)}
         <span class="meta">&middot; model <span class="mono">{html.escape(record.model_name)}</span></span>
       </p>
       <p class="meta" style="margin:0;">
@@ -1318,7 +1780,7 @@ def record_html(store: ResultsStore, record_id: str) -> str:
     <h3>Latent params</h3>
     <table><thead><tr><th>param</th><th>value</th></tr></thead><tbody>{latent_rows}</tbody></table>
     """
-    return _shell(f"Record {record_id}", "runs", body, breadcrumb=breadcrumb)
+    return _shell(f"Record {record_id}", "runs", body, breadcrumb=breadcrumb, trial_count=_trial_count(store))
 
 
 class _ViewerHandler(BaseHTTPRequestHandler):
@@ -1358,7 +1820,7 @@ class _ViewerHandler(BaseHTTPRequestHandler):
 
         if path == "/launch":
             body = launch_mod.handle_launch_get(self.launch_deps)
-            self._send_html(_shell("Launch a campaign", "launch", body))
+            self._send_html(_shell("Launch a campaign", "launch", body, trial_count=_trial_count(self.store)))
             return
 
         if path == "/atlas":

@@ -7,6 +7,132 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-19 — BUILD (confirmed) — viewer: third redesign pass — domain-derived signature system, then a sidebar/showcase-evidence correction, same session
+
+**Why a third pass.** Two earlier redesign passes on the same day had each
+reskinned the SAME inherited page skeleton (a research-cited type
+scale/spacing/pill system, then a nav-IA reorganization) without either
+touching visual identity in a way that stopped reading as generic. The
+user's verbatim reaction to pass 2: "It looks like AI Slop and the UX
+sucks... search online for some of the best UI skills." They pointed at a
+specific design methodology (github.com/Dammyjay93/interface-design)
+whose own thesis names the failure directly: generic research into "what
+good dashboards look like" (Nielsen, Linear, Grafana — pass 2's actual
+citations) produces the median output any AI would generate from the same
+prompt, which is still slop by the skill's own definition even when
+competently executed.
+
+**What this pass did differently.** Domain exploration FIRST, from this
+project's own source (`cartographer/world/foils.py`, `cartographer/
+report/verdict.py`, `cartographer/confirm/confirmation.py`, `cartographer/
+schedule/escalate.py`, `cartographer/ablate/attribute.py`) rather than
+generic UI research — mined real vocabulary (witness/belief/foil/
+salience/verdict/stable-vs-noise/boundary/ablation/fresh-seed) and wrote
+it up as this product's actual design brief in `docs/design-notes.md`
+(replacing the prior research-citations version) BEFORE writing any CSS.
+Full brief — Intent / Domain vocabulary / Color world / Signature /
+Rejecting / Direction — is in that file verbatim; summary:
+
+- **Color world**: achromatic ground truth (simulated fact is never
+  tinted), amber/phosphor for belief-query CLAIMS (provisional, can be
+  wrong in a specific way), a trap-sprung FAIL split from an infra ERROR
+  by hue (one's a finding, one's noise — the single highest-value color
+  decision), a real salience color ramp.
+- **Signature**: the "claim strip" — `[mark] VERDICT  evidence clause
+  (trap names, salience swatch)  stability tag` — replacing the old
+  dot-plus-label pill everywhere a trial verdict renders (`/run/<id>`'s
+  per-trial table, `/live`'s recent-records feed, `/record/<id>`'s
+  verdict block). Degrades gracefully to bare mark+word when there's no
+  evidence to show (state/order records). Two other candidates
+  (a literal chain-of-custody diagram, a bigger always-on salience heat
+  strip) were considered and rejected in the design-notes writeup with
+  reasons, not just listed.
+- **Token system rebuilt from scratch**, not recolored: `--verdict-fail-
+  trap` / `--verdict-error-infra` / `--salience-low/mid/high` / `--claim-
+  belief` / `--ground-truth` / `--surface-instrument-0/1/2` replace
+  `--accent` / `--pass` / `--fail` / `--error` / `--bg` / `--surface-1/2`.
+
+**Real bug found by actually rendering the signature component against
+`results/campaign.sqlite` before building the rest of the app** (the
+task's own highest-risk-first process step, not skipped): the claim
+strip's evidence clause naively sliced the first N characters of
+`response_text` to show what a model answered. `MiniMaxAI/MiniMax-M3`'s
+adversarial_belief records write their FULL chain-of-thought into that
+field with the stated answer only at the very end ("Looking at this
+problem, I need to track what Hakim has p..." instead of "**Answer:
+lobby**") — a real, misleading defect, not a cosmetic one. Fixed with
+`_short_answer()`: take the LAST non-empty line (mirrors `verdict.py::
+_notable_failures`'s own existing pattern for extracting a QUESTION from
+a multi-line prompt), which is a no-op for terse single-line answers and
+correctly lands on the stated answer for verbose ones. Applied at all
+four `response_text`-rendering call sites in `cartographer/viewer/
+serve.py` (this pass's territory) — `verdict.py`'s own `NotableFailure.
+model_answer` field itself was NOT touched (`cartographer/report/**` is
+off-limits territory this pass), the fix is a display-time transform
+only where this pass renders that field.
+
+**Mid-pass correction 1 — top nav bar was itself never questioned.**
+After the signature/token work landed, direct feedback backed by the
+interface-design skill's own showcase gallery (Synchro, Numra Analytics,
+Apex Capital — all left-sidebar layouts): "no saas has it like that
+except for some decades-old government websites." Correct: all three
+passes today, including this one, had inherited a horizontal
+`header`+`nav` top bar and only ever reskinned its tokens, never asked
+whether it was the right CONTAINER for 7 nav items grouped into 3
+sections. Restructured `_shell()` to a fixed 248px left sidebar (brand
+identity block + live trial counter at top, the same `_NAV_GROUPS` data
+grouped as vertical rows below) beside a `<main>` content area, with
+global nav and page-level context (breadcrumb) now in two visually
+distinct regions instead of stacked in one header row.
+
+**Mid-pass correction 2 — verify against actual shipped pixels, not a
+description of them.** Further feedback: "it's not just the left side
+menu bar.. IT's everything." The user pulled full-resolution preview PNGs
+from the interface-design skill's OWN gallery and extracted concrete
+facts this pass's generic instincts had gotten wrong on their own:
+primary buttons are neutral inverted-contrast (light fill/dark text), not
+accent-filled — this pass had every button amber-filled, which was
+exactly the "decorative accent" failure mode design-notes.md's Rejecting
+section had already argued against once, just recommitted with a
+different hex value; a verdict renders as a small pill directly beside
+the h1, not only inside a big card below; an "assertions" pattern
+(expected/actual side by side, only the mismatch colored) is a near-exact
+structural fit for this project's own "what entity X believed" vs "what
+the model answered" and was applied to the verdict panel's notable-
+failures list (this is also where the `_short_answer` bug above resurfaced
+a second time, via `verdict.py`'s full-length `model_answer` field, and
+got the same fix applied at the display layer); hero KPI stat cards (big
+bold number, muted label, near-invisible border); focal-point coloring
+(color the ONE thing that's the point) — adapted, not copied verbatim,
+for `/atlas`'s multi-model comparison chart: a model/dimension line
+renders neutral by default and switches to amber exactly when a REAL
+fitted boundary was found for it, verified post-fix against real data
+(43 neutral lines vs. 15 amber, amber clustering on `belief`-kind charts
+where this project's actual findings live, `state`-kind charts rendering
+entirely neutral since they're uniformly clean per this log). Full
+addendum with per-item before/after reasoning is in `docs/design-notes.md`
+("Addendum: two mid-pass structural corrections").
+
+**Verification.** `/tmp/mc_venv/bin/python -m pytest -q` — 320/320 green
+throughout every step of this pass (signature build, sidebar restructure,
+showcase corrections) — no markup-structure test broke because content
+tests assert on plain-English substrings (`_NAV_LABELS`, `data-testid=
+"verdict-panel"`, literal preset-card strings) rather than DOM shape.
+Served `results/campaign.sqlite` on a live port and curled all 9 routes
+(`/`, `/findings`, `/coverage`, `/runs`, `/live`, `/atlas`, `/launch`, one
+real `/run/<id>`, one real `/record/<id>`) after the FINAL state — all
+200, every `_NAV_LABELS` string and the verdict-panel testid confirmed
+present via grep on the raw curl output, not just pytest. Also visually
+inspected every page live via the preview tool against real adversarial-
+belief data with actual trap names, salience scores, and verified-stable/
+unverified FAILs rendering correctly end-to-end, not just in isolated
+component mockups.
+
+Files: `cartographer/viewer/serve.py`, `cartographer/viewer/atlas.py`,
+`cartographer/viewer/findings.py`, `docs/design-notes.md`.
+
+---
+
 ## 2026-09-19 — BUG (fixed) — /live showed "starting... 0 records" for the entire duration of full_map and verify-now runs
 
 User report, verbatim: "The launch screen is stuck and even though the runs

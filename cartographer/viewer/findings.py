@@ -161,17 +161,16 @@ RETRACTED: tuple[Finding, ...] = (
 )
 
 
-_STATUS_PILL_CLASS = {
-    "confirmed": "PASS",
-    "needs-replication": "ERROR",
-    "retracted": "FAIL",
-}
-
-
 def _status_pill(status: str) -> str:
-    pill_cls = _STATUS_PILL_CLASS.get(status, "REJECTED_BY_FIDELITY_GATE")
+    """A finding's trust level -- confirmed / needs-replication / retracted
+    -- is a DISTINCT concept from a trial verdict (PASS/FAIL/ERROR), so it
+    gets its own `.status-tag` treatment rather than reusing the claim
+    strip's verdict marks: this is a statement about how much to trust a
+    written claim while reading dense prose, not a per-trial outcome to
+    scan in a table column (see docs/design-notes.md "The signature" for
+    why the two are kept visually distinct)."""
     label = status.replace("-", " ")
-    return f'<span class="pill pill-{pill_cls}">{html.escape(label)}</span>'
+    return f'<span class="status-tag {html.escape(status)}">{html.escape(label)}</span>'
 
 
 def _finding_card(f: Finding) -> str:

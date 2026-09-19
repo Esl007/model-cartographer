@@ -30,13 +30,26 @@ _CHART_W = 520
 _CHART_H = 300
 _MARGIN = 48
 
-_LINE_COLORS = [
-    "#2DD4BF", "#F87171", "#34D399", "#FBBF24", "#A78BFA", "#60A5FA", "#F472B6",
-]
-_CHART_BG = "#171b21"
-_CHART_BORDER = "#2A2F36"
-_CHART_AXIS = "#9aa4b2"
-_CHART_TEXT = "#E8EAED"
+# Focal-point coloring (docs/design-notes.md sidebar/showcase addendum,
+# confirmed against a real shipped admin-dashboard example: every bar is
+# identical neutral gray EXCEPT the one that's the point, which is solid
+# black -- focus comes from color/weight applied to ONE element, not from
+# decorating everything). Adapted for a multi-model COMPARISON chart
+# (unlike the single-series bar chart the example shows, collapsing every
+# line to one color here would destroy the chart's actual job of telling
+# models apart) -- so the axis this chart applies focal-point coloring
+# along is "does this model actually have a finding" rather than
+# "most recent": a model with NO fitted boundary (clean pass, nothing
+# discovered) renders muted/neutral; a model where a boundary WAS found
+# (a real result) renders in claim-belief amber with a bolder stroke, so
+# the reader's eye lands on the model that actually broke, not just
+# whichever line happens to be red vs. teal vs. purple in a legend.
+_LINE_COLOR_NEUTRAL = "#6E6C68"  # --ink-muted -- clean pass, no boundary found
+_LINE_COLOR_BOUNDARY = "#D9A441"  # --claim-belief -- a real fitted boundary
+_CHART_BG = "#131415"  # --surface-instrument-1
+_CHART_BORDER = "rgba(255,255,255,0.16)"  # --line-strong
+_CHART_AXIS = "#6E6C68"  # --ink-muted
+_CHART_TEXT = "#E7E5E2"  # --ink
 
 
 def _short_model_name(model_name: str) -> str:
@@ -149,11 +162,13 @@ def _svg_chart(
 
     legend_y = 34
     for i, (model, pts) in enumerate(sorted(series.items())):
-        color = _LINE_COLORS[i % len(_LINE_COLORS)]
+        has_boundary = boundaries.get(model) is not None
+        color = _LINE_COLOR_BOUNDARY if has_boundary else _LINE_COLOR_NEUTRAL
+        stroke_width = "2.5" if has_boundary else "1.5"
         poly_points = " ".join(f"{sx(x):.1f},{sy(rate):.1f}" for x, rate, _ in pts)
         parts.append(
             f'<polyline points="{poly_points}" fill="none" stroke="{color}" '
-            'stroke-width="2"/>'
+            f'stroke-width="{stroke_width}"/>'
         )
         for x, rate, n in pts:
             parts.append(
