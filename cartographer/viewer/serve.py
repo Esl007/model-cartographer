@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import html
 import sys
+import threading
+import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from ..store.schema import ExperimentRecord
@@ -27,8 +30,9 @@ from .atlas import atlas_html
 from .coverage import coverage_html
 from .findings import findings_html
 
-_DEFAULT_DB_PATH = "results/pilot.sqlite"
+_DEFAULT_DB_PATH = "results/campaign.sqlite"
 _DEFAULT_PORT = 8788
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # run_id prefix -> known campaign budget (total scheduler trial budget),
 # used only to render a progress bar on /live. Unknown prefixes fall back
@@ -933,6 +937,18 @@ def serve(db_path: str = _DEFAULT_DB_PATH, port: int = _DEFAULT_PORT) -> None:
 def main() -> None:
     db_path = sys.argv[1] if len(sys.argv) > 1 else _DEFAULT_DB_PATH
     port = int(sys.argv[2]) if len(sys.argv) > 2 else _DEFAULT_PORT
+
+    # Resolve relative paths against the repo root, not the caller's cwd,
+    # so `modelcart` works the same from anywhere on disk.
+    resolved = Path(db_path)
+    if not resolved.is_absolute() and not resolved.exists():
+        candidate = _REPO_ROOT / db_path
+        if candidate.exists():
+            resolved = candidate
+    db_path = str(resolved)
+
+    url = f"http://127.0.0.1:{port}/"
+    threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     serve(db_path, port)
 
 

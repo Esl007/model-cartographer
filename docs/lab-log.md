@@ -359,6 +359,30 @@ Files: `cartographer/ablate/__init__.py`, `cartographer/ablate/resample.py`,
 
 ---
 
+## 2026-09-18 — CHANGE — `modelcart` launcher command
+
+Added a launcher script at `~/.local/bin/modelcart` (already on PATH) so
+the viewer starts with a single word from any directory: `modelcart` (or
+`modelcart <db_path> <port>` to override). It `cd`s into the repo root
+and runs `python3 -m cartographer.viewer.serve`.
+
+Two supporting fixes in `cartographer/viewer/serve.py`, both real bugs
+independent of the launcher:
+- Default db path was `results/pilot.sqlite` (stale dress-rehearsal data)
+  — now `results/campaign.sqlite`, the real store every campaign in this
+  log has been writing to since the Nebius switch.
+- Relative db paths are now resolved against the repo root
+  (`Path(__file__).resolve().parents[2]`), not the caller's cwd, and the
+  server auto-opens a browser tab on `http://127.0.0.1:<port>/` after a
+  short delay. Verified by launching from `/tmp` (unrelated cwd) and
+  confirming the real Overview page served correctly.
+
+Not committed to the repo itself (`~/.local/bin/modelcart` lives outside
+the tree, machine-local) — noting here so the convenience isn't a
+mystery later.
+
+---
+
 ## 2026-09-17 — FINDING (confirmed) — adversarial (foil-driven) selection breaks Ultra where magnitude-escalation could not; new failure mode found
 
 First live run of `run_adversarial_belief_campaign` against Nemotron Ultra
