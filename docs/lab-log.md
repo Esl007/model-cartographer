@@ -7,6 +7,107 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-19 — BUILD (confirmed) — adversarial proposer: Nemotron proposes questions, never answers
+
+**What we built:** `cartographer/propose/` — the "not rigid generators"
+engine. Non-negotiable design rule: the proposer LLM proposes generator
+CONFIGS (questions), never answers; ground truth always stays
+simulation-only (`cartographer.world.simulate`), so a hallucinating
+proposer wastes budget but can never corrupt a finding.
+
+- `digest.py`: deterministic plain-text summary of a subject model's prior
+  results from the store (per-query-kind pass rates, per-dim pass rates by
+  tercile, confirmed trap signatures parsed from `verifier_detail`, recent
+  FAIL/PASS configs). Byte-identical on repeat calls against an unchanged
+  store.
+- `proposer.py`: `PROPOSAL_PROMPT` gives the digest + the exact `DimParams`
+  schema (ranges read straight from `world/generate.py` and the validated
+  ceilings in `exec/evaluator.py`) plus the foil vocabulary from
+  `world/foils.py`, and asks for N JSON proposals, each with a
+  `hypothesis`. `propose_configs` parses robustly (fence-stripping,
+  reasoning-preamble tolerance, one JSON-only retry, else `[]` — never
+  raises).
+- `gauntlet.py`: zero-API validation. Clamps/rejects out-of-range values,
+  builds+validates the `World`, runs `search_adversarial_seeds` with
+  `require_kinds=require_traps`, and rejects any proposal whose best world
+  scores below the MEDIAN of a same-size random-seed control batch — the
+  proposer has to beat random chance before a single subject-model dollar
+  is spent on it. Every rejection carries a reason string.
+- `loop.py`: `run_proposer_loop` — digest → propose → gauntlet → k real
+  trials per survivor (via `PipelineEvaluator`, run_id
+  `f"{run_id}/round{r}"`) → Wilson-interval fitness; survivors at failure
+  rate ≥0.3 join a `trap_library`; both hits AND duds get fed back into the
+  next round's digest. Round 1 also runs a same-size RANDOM control arm
+  (tagged `f"{run_id}/control"`) — the required honesty check, since ~half
+  of round-1 subject budget goes to it. Contamination guard
+  (`proposer_model != subject_model`) checked eagerly, same pattern as
+  `llmrender/gate.py`'s renderer/subject guard. Hard `cost_cap` shared
+  across proposer + subject + control spend; stops cleanly on exhaustion.
+
+**Tests:** `tests/test_propose.py`, 18 new tests, zero network calls
+(scripted fake clients matching the `ScriptedClient` pattern in
+`tests/test_evaluator.py`). Covers: digest determinism/no-evidence/max_chars,
+valid/fence-wrapped/garbage-then-retry/garbage-twice JSON parsing, gauntlet
+clamping + invalid-config rejection + below-random-median rejection +
+batch seed-distinctness, loop contamination guard, hit-finding +
+dud-feedback, cost-cap clean stop. Full suite: 298/298 green (259 baseline
++ 18 new + concurrent work from another agent already landed on
+`evaluator.py`/viewer).
+
+**Live smoke test** (`scripts/run_proposer_loop.py`, run once, hard-capped
+at $0.40, actual spend **$0.0229**): proposer = `nvidia/nemotron-3-super-
+120b-a12b`, subject = `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`, 2 rounds x 4
+proposals x k_trials=5, run_id `propose-super-vs-nano-001`.
+
+```
+round 0: proposed=4 rejected_at_gauntlet=1 measured=15 hits=2 control_measured=15 control_hits=2 spend=$0.0127
+round 1: proposed=4 rejected_at_gauntlet=0 measured=20 hits=2 control_measured=0 control_hits=0 spend=$0.0101
+
+trap library (4 entries, all belief queries):
+  round=0 failure_rate=0.60 (CI [0.23,0.88], n=5) chain_length=18 scramble=0.5 coref=2 distractors=15 filler=10 witness_cutoff=0.3
+    hyp: "Long chain with heavy scrambling and many distractors overloads memory, causing reliance on the most frequent location trap."
+  round=0 failure_rate=0.40 (CI [0.12,0.77], n=5) chain_length=12 scramble=0.1 coref=0 distractors=0 filler=0 witness_cutoff=0.5
+    hyp: "Slight scrambling disrupts precise order recall, leading the model to fall back on the last mentioned location as a heuristic."
+  round=1 failure_rate=0.80 (CI [0.38,0.96], n=5) chain_length=20 scramble=0.4 coref=4 distractors=12 filler=6 witness_cutoff=0.2
+    hyp: "High coref pressure with many distractors causes pronoun resolution errors, leading the agent to rely on the last mentioned location despite witnessing most of the chain."
+  round=1 failure_rate=0.80 (CI [0.38,0.96], n=5) chain_length=15 scramble=0.6 coref=2 distractors=5 filler=20 witness_cutoff=0.4
+    hyp: "Heavy scrambling with moderate coref pressure and many filler events creates temporal confusion, causing the agent to misremember the final true state."
+
+proposer mean failure rate: 0.457
+control (random) mean failure rate: 0.533
+beat_random: FALSE
+total spend: $0.0229
+```
+
+**Honest reading:** the proposer clearly found real, reproducible failure
+modes (4 configs at 40-80% measured failure, well above the α=0.3 hit bar,
+with sensible hypotheses about coref/scramble/witness-cutoff interactions
+— largely consistent with the confirmed Nano failure modes already logged
+on 2026-09-17/18). But it did NOT beat its own random control arm in this
+single small run (n=15 each side, means 0.457 vs 0.533, well within noise
+at this sample size — Wilson CIs on the individual configs are wide,
+[0.12,0.96]). This is a real negative result at this budget, not a bug:
+Nano's belief-query failure surface at these difficulty levels is
+apparently dense enough that RANDOM sampling in the same explored region
+finds failures about as often as Nemotron Super's targeted guesses do. A
+fair follow-up (out of scope for this budget) would run more rounds/larger
+k to shrink the CIs before concluding the proposer adds no value — one
+round's control comparison is exactly the kind of noisy read the
+`beat_random` honesty check exists to surface rather than hide.
+
+**Judgment calls:** proposer-call spend is approximated at $0 against the
+shared `cost_cap` (real API cost was ~$0.0003/call, immaterial at this
+budget, and Nemotron Super isn't always in the static pricing table);
+`query_kind` in a proposed config is accepted/clamped but the evaluator's
+`base` DimParams still fixes `query_kind="belief"` for actual measurement
+(consistent with how every other belief-focused campaign in this repo
+works — a proposer suggesting `query_kind: "order"` gets a valid, scored
+gauntlet result but is measured as a belief-query trial); control-arm
+budget is capped at half of whatever's left after round-1 proposer calls,
+not a fixed dollar amount, so it scales with `cost_cap`.
+
+---
+
 ## 2026-09-19 — BUILD (confirmed) — one-button `full_map` campaign + plain-English verdict panels
 
 **User feedback driving this (verbatim):** (1) "there are 5 different types
