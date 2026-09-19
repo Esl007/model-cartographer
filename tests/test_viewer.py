@@ -433,6 +433,89 @@ def test_live_html_prefers_active_run_with_zero_records(tmp_path):
     assert "0 records" in page
 
 
+def _append_records(store, run_id, age_s, verdicts=(Verdict.PASS, Verdict.FAIL, Verdict.PASS)):
+    """Like `_seed_live_store` but appends into an EXISTING store instead
+    of creating its own -- `_seed_live_store` always targets the same
+    "live_test.sqlite" filename under `tmp_path`, so calling it twice for
+    one test double-connects to (and, if records are re-appended, double-
+    inserts into) the same physical file. Building fresh `ExperimentRecord`
+    objects directly avoids that."""
+    records = []
+    for i, (t, v) in enumerate(zip(_live_times(age_s), verdicts)):
+        r = ExperimentRecord(
+            run_id=run_id,
+            model_name="model-x",
+            latent_params={"chain_length": 4.0},
+            realized_dims={"chain_length": float(2 + i)},
+            render_mode=RenderMode.TEMPLATE,
+            task_seed=i,
+            trial_seed=i,
+            verdict=v,
+            verifier_detail="kind=belief;campaign=1",
+            tokens_in=10,
+            tokens_out=5,
+            cost_usd=0.001,
+            latency_ms=100.0,
+            finish_reason="stop",
+            created_at=t,
+        )
+        store.append(r)
+        records.append(r)
+    return records
+
+
+def test_live_html_full_map_parent_aggregates_stage_children(tmp_path):
+    """Regression: a full_map PARENT run_id has no records of its own --
+    every trial lives under f"{run_id}/{stage}" child run_ids. Before the
+    fix, `live_html` queried the parent id verbatim and showed
+    "starting... 0 records" for the campaign's entire real duration even
+    though it was actively running and spending money (user report:
+    "the launch screen is stuck ... even though the runs are finished").
+    """
+    parent = "camp-full_map-model-x-001"
+    store, _ = _seed_live_store(tmp_path, run_id=f"{parent}/state", newest_age_s=10.0)
+    _append_records(store, f"{parent}/belief", age_s=5.0)
+
+    launch_mod._CURRENT_RUN = {"run_id": parent, "thread": None}
+    try:
+        page = live_html(store)
+    finally:
+        launch_mod._reset_for_tests()
+
+    assert not ("starting" in page.lower() and "0 records" in page)
+    assert 'class="stage-track"' in page
+    assert f'/run/{parent}' in page
+
+
+def test_live_html_shows_verify_in_progress_panel(tmp_path):
+    """Regression: "Verify failures now" writes resample trials under
+    f"{run_id}/verify" -- never under the original run_id -- so watching
+    /live during a verify-now pass showed the OLD, static, already-complete
+    campaign numbers with no sign anything was happening (user report:
+    "verifying also shows the same screen but the actual process are
+    working. The UI is not").
+    """
+    from cartographer.exec.evaluator import VERIFY_SUFFIX
+
+    run_id = "camp-belief-model-x-001"
+    store, _ = _seed_live_store(tmp_path, run_id=run_id, newest_age_s=600.0)
+    _append_records(
+        store,
+        f"{run_id}{VERIFY_SUFFIX}",
+        age_s=2.0,
+        verdicts=(Verdict.PASS, Verdict.FAIL),
+    )
+
+    launch_mod._CURRENT_RUN = {"run_id": run_id, "thread": None}
+    try:
+        page = live_html(store)
+    finally:
+        launch_mod._reset_for_tests()
+
+    assert "Verifying failures" in page
+    assert "resamples so far" in page or "resample so far" in page
+
+
 def test_live_html_falls_back_to_newest_record_when_no_active_run(tmp_path):
     store, _ = _seed_live_store(tmp_path, run_id="camp-belief-test-001", newest_age_s=10.0)
     assert launch_mod.current_run() is None

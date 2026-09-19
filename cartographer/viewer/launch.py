@@ -335,11 +335,13 @@ def launch_form_html() -> str:
 
 
 def busy_html(run_id: str) -> str:
+    safe_run_id = html.escape(run_id)
     return (
         "<h1>Campaign in progress</h1>"
-        f"<p>Run <strong>{html.escape(run_id)}</strong> is currently running. "
+        f"<p>Run <strong>{safe_run_id}</strong> is currently running. "
         "Only one campaign can run at a time.</p>"
-        '<p><a href="/live">Watch it on the live monitor &rarr;</a></p>'
+        f'<p><a href="/live">Watch it on the live monitor &rarr;</a> &middot; '
+        f'<a href="/run/{safe_run_id}">jump straight to this run\'s page &rarr;</a></p>'
     )
 
 

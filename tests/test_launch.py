@@ -193,6 +193,12 @@ def test_busy_state_page_while_campaign_running(tmp_path):
         assert "campaign in progress" in busy_page.lower()
         assert run_id in busy_page
         assert "/live" in busy_page
+        # Regression: the busy screen used to link ONLY to /live, so a
+        # full_map run whose /live view was itself broken (see
+        # test_live_html_full_map_parent_aggregates_stage_children) left no
+        # way to reach the run except navigating to /runs by hand (user
+        # report: "no way to access it without going to runs").
+        assert f'href="/run/{run_id}"' in busy_page
 
         # A second start attempt is refused.
         page2 = handle_models_step({"provider": "nebius", "api_key": "k2"}, deps)

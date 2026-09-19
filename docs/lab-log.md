@@ -7,6 +7,53 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-19 — BUG (fixed) — /live showed "starting... 0 records" for the entire duration of full_map and verify-now runs
+
+User report, verbatim: "The launch screen is stuck and even though the runs
+are finished. it's still showing that some run is there but no way to access
+it without going to runs. And verifying also shows the same screen but the
+actual process are working. The UI is not."
+
+**Root cause:** `live_html()` looked up records with `store.by_run(run_id)`
+-- an EXACT match. Two real campaign shapes never write under the exact
+run_id they're registered under as the active run:
+- `full_map` campaigns write every trial under child run_ids
+  (`f"{run_id}/{stage}"` for state/order/belief/adversarial_belief/
+  breaking_point) -- the parent run_id itself never gets a single direct
+  record.
+- A "Verify failures now" pass writes its resample trials under
+  `f"{run_id}/verify"` (or per-stage `f"{run_id}/{stage}/verify"` for a
+  full_map parent) -- never under the original run_id, whose own records
+  are already complete and static.
+
+So `/live`, watching the exact registered run_id, saw zero matching rows
+for the campaign's ENTIRE real duration in both cases -- not a rendering
+glitch, a query that structurally could never match. Confirmed against the
+live store: `camp-full_map-nemotron-3-super-120b-a12b-001` has 366 real
+trial records and 18 verify resamples, all invisible to the old `/live`
+query the whole time it ran.
+
+The run detail page (`/run/<id>`) already had the correct fallback logic
+(probe `f"{run_id}/{stage}"` children when the exact id has none) -- `/live`
+just never used it, which is why "going to runs" worked as a manual
+workaround and matches the user's exact description of the bug.
+
+**Fix** (`cartographer/viewer/serve.py`): new `_collect_run_records(store,
+run_id)` shared by `/live`, mirroring `run_html`'s aggregation and adding
+verify-record collection on top. `/live` now shows the real stage tracker
+and tallies for an in-progress full_map run, and a new "Verifying failures"
+panel surfaces resample counts (incl. how many flipped to PASS, i.e. were
+noise) when a verify-now pass is running against an otherwise-static run.
+`busy_html()` (`cartographer/viewer/launch.py`) also now links directly to
+`/run/<id>`, not just `/live`, closing the "no way to access it without
+going to runs" gap even independent of the live-page fix.
+
+2 new regression tests in `tests/test_viewer.py` reconstruct both exact
+scenarios; `test_launch.py`'s existing busy-page test extended to assert
+the direct run link. 320/320 passing.
+
+---
+
 ## 2026-09-19 — BUILD (confirmed) — viewer: ground-up UX/IA redesign (research-driven)
 
 **What we saw:** direct user feedback after two prior presentation passes

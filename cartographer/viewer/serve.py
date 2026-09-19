@@ -846,6 +846,51 @@ def _stop_button_html(is_active: bool, stopping: bool) -> str:
     )
 
 
+def _collect_run_records(
+    store: ResultsStore, run_id: str
+) -> tuple[list[ExperimentRecord], bool, list[ExperimentRecord]]:
+    """Aggregate every record actually associated with `run_id`.
+
+    A plain campaign's trials live directly under `run_id`. But two cases
+    write elsewhere, and any caller that only does `store.by_run(run_id)`
+    (as `live_html` used to) silently sees zero records for the entire
+    life of the run even though it's actively spending money:
+
+    - A `full_map` parent run_id has NO records of its own -- every trial
+      lives under `f"{run_id}/{stage}"` child run_ids (mirrors the same
+      fallback `run_html` already uses, kept in sync with it here).
+    - A "Verify failures now" pass against an already-recorded run writes
+      its resample trials under `f"{run_id}/verify"` (or, for a full_map
+      parent, `f"{run_id}/{stage}/verify"` per stage) -- never under
+      `run_id` itself, so a campaign's own (already-complete, unchanging)
+      records never reflect an in-flight verification pass layered on
+      top of it.
+
+    Returns (records, is_full_map_parent, verify_records).
+    """
+    from ..exec.evaluator import VERIFY_SUFFIX
+
+    records = store.by_run(run_id)
+    is_full_map_parent = False
+    if not records:
+        for stage in _FULL_MAP_RUN_STAGES:
+            child = store.by_run(f"{run_id}/{stage}")
+            if child:
+                is_full_map_parent = True
+                records.extend(child)
+        records.sort(key=lambda r: (r.created_at or "", r.record_id))
+
+    if is_full_map_parent:
+        verify_records = [
+            r
+            for stage in _FULL_MAP_RUN_STAGES
+            for r in store.by_run(f"{run_id}/{stage}{VERIFY_SUFFIX}")
+        ]
+    else:
+        verify_records = store.by_run(f"{run_id}{VERIFY_SUFFIX}")
+    return records, is_full_map_parent, verify_records
+
+
 def live_html(store: ResultsStore) -> str:
     """Live monitor. Prefers the ACTIVE registered campaign run_id (from
     `launch_mod.current_run()`) even if it has zero records yet -- a
@@ -873,7 +918,26 @@ def live_html(store: ResultsStore) -> str:
         run_id = row["run_id"]
 
     safe_run_id = html.escape(run_id)
-    records = store.by_run(run_id)
+    records, _is_full_map_parent, verify_records = _collect_run_records(store, run_id)
+
+    # A "Verify failures now" pass on an already-complete run is real,
+    # billed activity with nothing to show in `records` (those are all
+    # old and static) -- surface it explicitly so watching /live doesn't
+    # look inert while it's happening.
+    verifying_html = ""
+    if verify_records:
+        v_total = len(verify_records)
+        v_pass = sum(1 for r in verify_records if r.verdict.name == "PASS")
+        v_latest = max(
+            (r.created_at for r in verify_records if r.created_at), default=None
+        )
+        verifying_html = f"""
+        <h2>Verifying failures</h2>
+        <p class="meta">A verification pass is re-testing prior failures against this
+        run &mdash; {v_total} resample{"s" if v_total != 1 else ""} so far
+        ({v_pass} passed on retest, i.e. noise), latest at
+        {html.escape(v_latest or "-")}.</p>
+        """
 
     if not records:
         body = f"""
@@ -881,6 +945,7 @@ def live_html(store: ResultsStore) -> str:
         <p class="meta">starting&hellip; 0 records</p>
         <div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>
         {_stop_button_html(active is not None, stopping)}
+        {verifying_html}
         """
         return _shell(f"Live: {run_id}", "live", body, refresh=True)
 
@@ -967,6 +1032,7 @@ def live_html(store: ResultsStore) -> str:
     {stage_html}
     {bar_html}
     {_stop_button_html(is_active_run, stopping)}
+    {verifying_html}
     <h2>Tallies</h2>
     {stat_grid}
     <h2>Last 15 records (newest first)</h2>
