@@ -181,7 +181,7 @@ def _finding_card(f: Finding) -> str:
         else "-"
     )
     return f"""
-    <div class="stat-box" style="grid-column: 1 / -1;">
+    <div class="panel">
       <p style="margin:0 0 0.35rem;"><strong>{html.escape(f.name)}</strong> {_status_pill(f.status)}</p>
       <p class="meta" style="margin:0 0 0.4rem;">{html.escape(f.mechanism)}</p>
       <p class="meta" style="margin:0;">evidence: {html.escape(f.evidence)}</p>
@@ -203,14 +203,18 @@ def findings_html() -> str:
 
     body = f"""
     <h1>Findings</h1>
-    <p class="meta">The capability map: every confirmed (or still-open)
+    <p class="subtitle">The capability map: every confirmed (or still-open)
     result this instrument has produced so far, sourced from
     <span class="mono">docs/lab-log.md</span>. Each card names its
     run_id(s) so you can go verify it in the results store yourself.</p>
+    <p class="meta">Note (2026-09-19): campaigns now auto-verify failures by
+    default (resampling each FAIL 3x against the exact stored prompt before
+    trusting it) -- see run detail pages for per-failure verified-stable /
+    noise / unverified status. This page's curated findings above predate
+    that change and are unaffected (each was already resample-confirmed by
+    hand at the time, per its own evidence line).</p>
 
-    <div class="stat-grid" style="grid-template-columns: 1fr;">
-      {cards}
-    </div>
+    {cards}
 
     <details>
       <summary>Retractions ({len(RETRACTED)})</summary>
@@ -218,9 +222,7 @@ def findings_html() -> str:
       a feature of this instrument, not a blemish. A retracted finding
       means the audit trail caught its own mistake before it shipped as a
       public claim.</p>
-      <div class="stat-grid" style="grid-template-columns: 1fr;">
-        {retracted_cards}
-      </div>
+      {retracted_cards}
     </details>
     """
     return _shell("Findings", "findings", body)

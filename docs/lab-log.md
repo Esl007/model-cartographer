@@ -7,6 +7,66 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-19 — BUILD (confirmed) — viewer: ground-up UX/IA redesign (research-driven)
+
+**What we saw:** direct user feedback after two prior presentation passes
+-- the viewer still read as generic dark-dashboard "AI slop," and the
+nav/IA "totally sucks." Two earlier passes had added pages and copy but
+never done a real design pass on hierarchy, IA, or visual restraint.
+
+**What we did:** research first (Nielsen's 10 heuristics, Shneiderman's
+"overview first, zoom/filter, details on demand" mantra, and the
+restraint-driven visual language of Linear/Vercel/Grafana/Datadog-class
+dev tools), written up as 25 sourced principles in `docs/design-notes.md`
+-- then applied them:
+
+- New design system in `cartographer/viewer/serve.py`'s `_CSS`: a real
+  4-step type scale, a spacing scale, 3 surface-elevation steps
+  (replacing "border around every box"), ONE accent color reserved for
+  links/primary-CTA/active-nav, semantic color (pass/fail/error) reserved
+  exclusively for verdict pills (now a dot+label pattern, not a solid
+  chip), tabular numerals + right-aligned numeric table columns
+  throughout.
+- Nav regrouped into Results (Overview, Findings, Runs) / Explore (Atlas,
+  Coverage) / Act (Launch, Live) instead of a flat list in build order.
+- `/` rewritten task-first: what-is-this -> what-did-we-find -> one
+  primary CTA ("Map a model" -> `/launch`), above the fold; raw stat
+  counts and the quick-links grid demoted below.
+- `/run/<id>`: verdict panel promoted above an now-collapsed
+  (`<details>`) raw per-trial table; breadcrumb added.
+- `/record/<id>`: verdict/provenance panel first, prompt/response/
+  reasoning blocks below (reasoning already collapsed pre-existing);
+  breadcrumb (`Runs -> run -> record`) and prev/next-trial lateral nav
+  added so the page is never a dead end.
+- `/live`: added a `full_map` stage tracker (state -> order -> belief ->
+  adversarial_belief -> breaking_point) so progress reads at a glance;
+  empty state now points at `/launch`.
+- `/launch`: presets rendered as radio-cards, `full_map` shown
+  prominently with a RECOMMENDED badge, the other five presets collapsed
+  under "Advanced"; added a cost/duration expectation line above submit;
+  submit copy changed to "Start mapping."
+- `/runs`, `/atlas`: empty states now point at `/launch` instead of a
+  bare "no data" table; numeric columns right-aligned.
+- `/findings`, `/coverage`: cards switched from `.stat-box` to the new
+  `.panel` elevation pattern for consistency with the rest of the site.
+
+**Verification:** `/tmp/mc_venv/bin/python -m pytest -q` -- 298/298
+green throughout (no markup-structure test broke; content-only tests
+already asserted on plain-English substrings, not styling). Also
+served `results/campaign.sqlite` locally, curled every route (200 on
+`/`, `/findings`, `/coverage`, `/runs`, `/live`, `/atlas`, `/launch`,
+one real `/run/<id>`, and one real `/record/<id>`), and checked open/
+close tag balance (`div`/`details`/`table`/`form`) on every rendered
+page -- all balanced.
+
+**Note:** a concurrent agent made content-only edits to evaluator/
+verdict/run-detail copy and to `launch.py` (added a `verify_failures`
+checkbox + cost note) during this same window; both edits merged
+additively with no conflicts, confirmed by rereading the diff and
+rerunning the full suite after the merge.
+
+---
+
 ## 2026-09-19 — BUILD (confirmed) — adversarial proposer: Nemotron proposes questions, never answers
 
 **What we built:** `cartographer/propose/` — the "not rigid generators"

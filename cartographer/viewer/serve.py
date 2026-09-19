@@ -49,29 +49,60 @@ _KNOWN_RUN_BUDGETS = {
 # Shared shell: design system + nav.
 # ---------------------------------------------------------------------------
 
-_NAV_ITEMS = [
-    ("overview", "/", "Overview"),
-    ("findings", "/findings", "Findings"),
-    ("coverage", "/coverage", "Coverage"),
-    ("runs", "/runs", "Runs"),
-    ("live", "/live", "Live"),
-    ("atlas", "/atlas", "Atlas"),
-    ("launch", "/launch", "Launch"),
+_NAV_GROUPS = [
+    ("Results", [
+        ("overview", "/", "Overview"),
+        ("findings", "/findings", "Findings"),
+        ("runs", "/runs", "Runs"),
+    ]),
+    ("Explore", [
+        ("atlas", "/atlas", "Atlas"),
+        ("coverage", "/coverage", "Coverage"),
+    ]),
+    ("Act", [
+        ("launch", "/launch", "Launch"),
+        ("live", "/live", "Live"),
+    ]),
 ]
+# Flat lookup kept for call sites that only need "is this key active".
+_NAV_ITEMS = [item for _, items in _NAV_GROUPS for item in items]
 
 _CSS = """
+/* ---------------------------------------------------------------------
+   1. TOKENS -- spacing scale, 4-step type scale, 3 surface levels, and
+   ONE accent color used only for links/primary-action/active-nav (see
+   docs/design-notes.md principles 10-11).
+   ------------------------------------------------------------------- */
 :root {
   --bg: #111418;
-  --bg-raised: #171b21;
+  --surface-1: #161a20;
+  --surface-2: #1c2128;
+  --bg-raised: #161a20; /* back-compat alias for --surface-1 */
+  --border: #262c34;
+  --border-strong: #333a44;
+
   --text: #E8EAED;
-  --text-muted: #9aa4b2;
-  --border: #2A2F36;
+  --text-secondary: #b7c0cc;
+  --text-muted: #7c8794;
+
   --accent: #2DD4BF;
+  --accent-dim: #1f9484;
   --pass: #34D399;
   --fail: #F87171;
   --error: #FBBF24;
+
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+
+  /* spacing scale */
+  --sp-1: 0.25rem; --sp-2: 0.5rem; --sp-3: 0.75rem; --sp-4: 1rem;
+  --sp-5: 1.5rem; --sp-6: 2rem; --sp-7: 3rem;
+
+  /* type scale: 4 sizes only -- display / h2 / body / small */
+  --fs-display: 1.75rem;
+  --fs-h2: 1.25rem;
+  --fs-body: 0.95rem;
+  --fs-small: 0.8125rem;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -79,148 +110,285 @@ body {
   font-family: var(--sans);
   background: var(--bg);
   color: var(--text);
-  line-height: 1.5;
+  line-height: 1.55;
+  font-size: var(--fs-body);
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+/* Numbers: tabular figures everywhere a number appears in a column or
+   stat, so digits line up instead of jittering (principle 19). */
+.num, td.num, .stat-num, .pill-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------
+   2. SHELL -- header, grouped nav, breadcrumb slot.
+   ------------------------------------------------------------------- */
 header.shell-header {
-  display: flex; align-items: center; gap: 1.5rem;
-  padding: 0.9rem 1.5rem;
+  display: flex; align-items: center; gap: var(--sp-6);
+  padding: var(--sp-3) var(--sp-5);
   border-bottom: 1px solid var(--border);
-  background: var(--bg-raised);
+  background: var(--surface-1);
 }
 header.shell-header .brand {
-  font-weight: 700; font-size: 1.05rem; color: var(--text);
+  font-weight: 700; font-size: 1rem; color: var(--text);
+  letter-spacing: -0.01em;
 }
 header.shell-header .brand:hover { text-decoration: none; color: var(--accent); }
-nav.shell-nav { display: flex; gap: 1.1rem; }
-nav.shell-nav a { color: var(--text-muted); font-size: 0.92rem; padding: 0.2rem 0; }
-nav.shell-nav a.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
 
-main.shell-main { padding: 1.5rem 1.75rem 3rem; max-width: 1100px; margin: 0 auto; }
-h1 { font-size: 1.4rem; margin: 0 0 1rem; }
-h2 { font-size: 1.05rem; margin: 1.75rem 0 0.75rem; color: var(--text); }
+nav.shell-nav { display: flex; gap: var(--sp-6); flex: 1; }
+nav.shell-nav .nav-group { display: flex; align-items: baseline; gap: var(--sp-3); }
+nav.shell-nav .nav-group-label {
+  color: var(--text-muted); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.06em; font-weight: 600; margin-right: var(--sp-1);
+}
+nav.shell-nav a {
+  color: var(--text-secondary); font-size: var(--fs-small);
+  padding: 0.3rem 0; border-bottom: 2px solid transparent;
+}
+nav.shell-nav a.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+nav.shell-nav a:hover { color: var(--text); text-decoration: none; }
 
-.meta { color: var(--text-muted); font-size: 0.88rem; }
+main.shell-main { padding: var(--sp-6) var(--sp-5) var(--sp-7); max-width: 1120px; margin: 0 auto; }
+
+.breadcrumb {
+  color: var(--text-muted); font-size: var(--fs-small); margin: 0 0 var(--sp-4);
+}
+.breadcrumb a { color: var(--text-secondary); }
+.breadcrumb a:hover { color: var(--accent); }
+.breadcrumb .sep { margin: 0 var(--sp-2); color: var(--border-strong); }
+
+/* ---------------------------------------------------------------------
+   3. TYPE SCALE -- 4 sizes, used consistently.
+   ------------------------------------------------------------------- */
+h1 {
+  font-size: var(--fs-display); font-weight: 650; margin: 0 0 var(--sp-1);
+  letter-spacing: -0.015em;
+}
+.subtitle { color: var(--text-secondary); font-size: var(--fs-body); margin: 0 0 var(--sp-5); }
+h2 {
+  font-size: var(--fs-h2); font-weight: 600; margin: var(--sp-6) 0 var(--sp-3);
+  color: var(--text); letter-spacing: -0.005em;
+}
+h3 { font-size: var(--fs-body); font-weight: 650; margin: var(--sp-4) 0 var(--sp-2); color: var(--text); }
+
+.meta { color: var(--text-muted); font-size: var(--fs-small); }
 .mono { font-family: var(--mono); }
-
-table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 0.75rem 0 1.25rem;
-  font-size: 13px;
+.eyebrow {
+  text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px;
+  font-weight: 700; color: var(--text-muted);
 }
-th, td { padding: 0.55rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
-th {
-  color: var(--text-muted);
-  text-transform: uppercase;
-  font-size: 11px;
-  letter-spacing: 0.03em;
-  font-weight: 600;
-  border-bottom: 1px solid var(--border);
-}
-td.mono, td .mono { font-family: var(--mono); }
 
-.pill {
-  display: inline-block;
-  font-family: var(--sans);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  padding: 0.15rem 0.55rem;
-  border-radius: 999px;
-  color: #0b0d10;
+/* ---------------------------------------------------------------------
+   4. SURFACES -- elevation via background steps, not borders on
+   everything (principle 12). .panel is the ONE reusable card pattern.
+   ------------------------------------------------------------------- */
+.panel {
+  background: var(--surface-1);
+  border-radius: 10px;
+  padding: var(--sp-5);
 }
-.pill-PASS { background: var(--pass); }
-.pill-FAIL { background: var(--fail); }
-.pill-ERROR { background: var(--error); }
-.pill-REJECTED_BY_FIDELITY_GATE { background: var(--text-muted); }
-
-.stat-grid {
+.panel + .panel { margin-top: var(--sp-4); }
+.panel-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 0.75rem;
-  margin: 0.75rem 0 1.25rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--sp-4);
+  margin: var(--sp-4) 0 var(--sp-6);
 }
-.stat-box {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.9rem 1rem;
-}
-.stat-box .stat-num { font-family: var(--mono); font-size: 1.5rem; font-weight: 600; }
-.stat-box .stat-label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.2rem; }
+.panel-grid .panel { padding: var(--sp-4); }
 
-.progress-track {
-  background: var(--border);
-  border-radius: 999px;
-  height: 8px;
-  width: 100%;
-  overflow: hidden;
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--sp-3); margin: var(--sp-3) 0 var(--sp-5); }
+.stat-box { background: var(--surface-1); border-radius: 8px; padding: var(--sp-4); }
+.stat-box .stat-num { font-family: var(--sans); font-size: 1.6rem; font-weight: 650; }
+.stat-box .stat-label { color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-top: var(--sp-1); }
+
+/* ---------------------------------------------------------------------
+   5. TABLES -- numeric columns right-aligned + tabular, headers
+   uppercase-tracking (used ONLY here and in pills/labels), rules
+   between rows instead of boxing the whole table.
+   ------------------------------------------------------------------- */
+table { border-collapse: collapse; width: 100%; margin: var(--sp-3) 0 var(--sp-5); font-size: var(--fs-small); }
+th, td { padding: 0.6rem var(--sp-3); text-align: left; border-bottom: 1px solid var(--border); }
+th {
+  color: var(--text-muted); text-transform: uppercase; font-size: 10.5px;
+  letter-spacing: 0.05em; font-weight: 650; border-bottom: 1px solid var(--border-strong);
 }
-.progress-fill { background: var(--accent); height: 100%; border-radius: 999px; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.mono, td .mono { font-family: var(--mono); }
+tbody tr:hover { background: var(--surface-1); }
+
+/* ---------------------------------------------------------------------
+   6. VERDICT PILLS -- dot + label, not a solid saturated chip
+   (principle 17: keeps semantic color as accent, not a color block).
+   ------------------------------------------------------------------- */
+.pill {
+  display: inline-flex; align-items: center; gap: 0.4em;
+  font-family: var(--sans); font-size: var(--fs-small); font-weight: 600;
+  color: var(--text-secondary);
+}
+.pill::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 999px;
+  background: var(--text-muted);
+}
+.pill-PASS::before { background: var(--pass); }
+.pill-PASS { color: var(--pass); }
+.pill-FAIL::before { background: var(--fail); }
+.pill-FAIL { color: var(--fail); }
+.pill-ERROR::before { background: var(--error); }
+.pill-ERROR { color: var(--error); }
+.pill-REJECTED_BY_FIDELITY_GATE::before { background: var(--text-muted); }
+
+/* Stage tracker for full_map runs on /live (principle 24). */
+.stage-track { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-3) 0 var(--sp-4); flex-wrap: wrap; }
+.stage-step {
+  display: flex; align-items: center; gap: 0.4em; font-size: var(--fs-small);
+  color: var(--text-muted); padding: 0.3rem 0.65rem; border-radius: 999px;
+  background: var(--surface-1);
+}
+.stage-step .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--border-strong); }
+.stage-step.done { color: var(--pass); }
+.stage-step.done .dot { background: var(--pass); }
+.stage-step.active { color: var(--accent); background: var(--surface-2); font-weight: 650; }
+.stage-step.active .dot { background: var(--accent); }
+.stage-arrow { color: var(--border-strong); }
+
+/* ---------------------------------------------------------------------
+   7. PROGRESS -- accent reserved for in-progress fill; complete state
+   switches to semantic pass-green so accent stays meaningful.
+   ------------------------------------------------------------------- */
+.progress-track { background: var(--border); border-radius: 999px; height: 8px; width: 100%; overflow: hidden; }
+.progress-fill { background: var(--accent); height: 100%; border-radius: 999px; transition: width 0.3s ease; }
 .progress-fill.complete { background: var(--pass); }
-.progress-row { display: flex; align-items: center; gap: 0.9rem; margin: 0.4rem 0 0.25rem; }
+.progress-row { display: flex; align-items: center; gap: var(--sp-3); margin: var(--sp-2) 0 var(--sp-1); min-height: 8px; }
 .progress-row .progress-track { flex: 1; }
-.progress-text { font-size: 0.85rem; color: var(--text-muted); white-space: nowrap; }
+.progress-text { font-size: var(--fs-small); color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
+/* ---------------------------------------------------------------------
+   8. CODE / DETAILS -- long mono blobs stay collapsed by default
+   (principle 7: progressive disclosure).
+   ------------------------------------------------------------------- */
 pre.block {
   white-space: pre-wrap; word-wrap: break-word;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.85rem;
+  background: var(--surface-1);
+  border-radius: 8px;
+  padding: var(--sp-4);
   font-family: var(--mono);
-  font-size: 0.85rem;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
 }
-details summary { cursor: pointer; font-weight: 600; margin: 0.5rem 0; color: var(--text); }
-details[open] summary { color: var(--accent); }
+details { margin: var(--sp-2) 0; }
+details summary {
+  cursor: pointer; font-weight: 600; margin: var(--sp-2) 0; color: var(--text-secondary);
+  font-size: var(--fs-small); list-style: none;
+}
+details summary::-webkit-details-marker { display: none; }
+details summary::before { content: "\\25b8  "; color: var(--text-muted); }
+details[open] summary::before { content: "\\25be  "; }
+details[open] summary { color: var(--text); }
 
-form p { margin: 0.6rem 0; }
-input, select, button {
+/* ---------------------------------------------------------------------
+   9. FORMS -- radio-card preset pattern for /launch (principle 23).
+   ------------------------------------------------------------------- */
+form p { margin: var(--sp-3) 0; }
+label { font-size: var(--fs-small); color: var(--text-secondary); }
+input, select, button, textarea {
   font-family: var(--sans);
-  background: var(--bg-raised);
+  background: var(--surface-2);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  padding: 0.4rem 0.55rem;
+  padding: 0.45rem 0.6rem;
+  font-size: var(--fs-body);
 }
 button {
   background: var(--accent);
   color: #0b0d10;
-  font-weight: 600;
+  font-weight: 650;
   cursor: pointer;
   border: none;
+  padding: 0.6rem 1.1rem;
 }
 button:hover { opacity: 0.9; }
+button.btn-primary { font-size: var(--fs-body); }
+
+.preset-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-3); margin: var(--sp-3) 0; }
+.preset-card {
+  display: block; background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 10px; padding: var(--sp-4); cursor: pointer;
+}
+.preset-card:has(input:checked) { border-color: var(--accent); background: var(--surface-2); }
+.preset-card .preset-title { font-weight: 650; display: flex; align-items: center; gap: var(--sp-2); }
+.preset-card .preset-desc { color: var(--text-muted); font-size: var(--fs-small); margin-top: var(--sp-1); }
+.badge {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 0.1rem 0.4rem; border-radius: 4px;
+}
+.badge-recommended { background: var(--accent); color: #0b0d10; }
+.badge-new { background: var(--surface-2); color: var(--accent); border: 1px solid var(--accent-dim); }
+
+/* ---------------------------------------------------------------------
+   10. EMPTY STATES (principle 6) -- helpful pointer, not a bare box.
+   ------------------------------------------------------------------- */
+.empty-state {
+  background: var(--surface-1); border-radius: 10px; padding: var(--sp-6);
+  text-align: center; color: var(--text-secondary);
+}
+.empty-state .meta { margin-top: var(--sp-2); }
+
+/* ---------------------------------------------------------------------
+   11. CTA -- the one primary action on / (principle 22).
+   ------------------------------------------------------------------- */
+.cta-row { margin: var(--sp-4) 0 var(--sp-6); }
+.cta-primary {
+  display: inline-block; background: var(--accent); color: #0b0d10;
+  font-weight: 650; font-size: var(--fs-body); padding: 0.75rem 1.4rem;
+  border-radius: 8px;
+}
+.cta-primary:hover { text-decoration: none; opacity: 0.92; }
 """
 
 _VERDICT_CLASS_FALLBACK = "meta"
 
 
-def _shell(title: str, active_nav: str, body: str, refresh: bool = False) -> str:
+def _shell(
+    title: str,
+    active_nav: str,
+    body: str,
+    refresh: bool = False,
+    breadcrumb: str | None = None,
+) -> str:
     """Render `body` inside the shared header/nav/style shell.
 
     `active_nav` is one of the keys in `_NAV_ITEMS` ("runs", "live",
-    "atlas", "launch") or "" for none highlighted.
+    "atlas", "launch") or "" for none highlighted. Nav is grouped into
+    Results / Explore / Act (see docs/design-notes.md principle 2).
+    `breadcrumb`, if given, is raw HTML rendered just above the page body
+    (principle 3: recognition over recall on detail pages).
     """
     refresh_tag = '<meta http-equiv="refresh" content="5">' if refresh else ""
-    nav_links = "".join(
-        f'<a href="{href}"{" class=\"active\"" if key == active_nav else ""}>{label}</a>'
-        for key, href, label in _NAV_ITEMS
-    )
+    groups_html = []
+    for group_label, items in _NAV_GROUPS:
+        links = "".join(
+            f'<a href="{href}"{" class=\"active\"" if key == active_nav else ""}>{label}</a>'
+            for key, href, label in items
+        )
+        groups_html.append(
+            f'<span class="nav-group"><span class="nav-group-label">{group_label}</span>{links}</span>'
+        )
+    nav_links = "".join(groups_html)
     header = (
         '<header class="shell-header">'
         '<a class="brand" href="/">Model Cartographer</a>'
         f'<nav class="shell-nav">{nav_links}</nav>'
         "</header>"
     )
+    breadcrumb_html = f'<p class="breadcrumb">{breadcrumb}</p>' if breadcrumb else ""
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         f"{refresh_tag}"
         f"<title>{html.escape(title)}</title><style>{_CSS}</style></head>"
-        f"<body>{header}<main class=\"shell-main\">{body}</main></body></html>"
+        f"<body>{header}<main class=\"shell-main\">{breadcrumb_html}{body}</main></body></html>"
     )
 
 
@@ -392,9 +560,9 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
             "<tr>"
             f'<td class="mono"><a href="/run/{safe_run_id}">{safe_run_id}</a>{headline_html}</td>'
             f'<td class="mono">{model_short}</td>'
-            f"<td>{total}</td>"
-            f'<td><span class="pill pill-PASS">{pass_rate:.0f}%</span></td>'
-            f'<td class="mono">${agg["cost"]:.4f}</td>'
+            f'<td class="num">{total}</td>'
+            f'<td class="num"><span class="pill pill-PASS">{pass_rate:.0f}%</span></td>'
+            f'<td class="mono num">${agg["cost"]:.4f}</td>'
             f"<td>{html.escape(_relative_time(newest))}</td>"
             f"<td>{status}</td>"
             "</tr>"
@@ -404,17 +572,25 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
 
 def runs_html(store: ResultsStore) -> str:
     """The raw per-run table (formerly the home page)."""
-    rows_html, _ = _runs_table_rows(store)
+    rows_html, by_run = _runs_table_rows(store)
+    if not rows_html:
+        body = (
+            "<h1>Runs</h1>"
+            '<p class="subtitle">Every campaign or pilot run recorded in this store.</p>'
+            '<div class="empty-state"><p>No runs yet.</p>'
+            '<p class="meta"><a href="/launch">Launch your first campaign &rarr;</a></p></div>'
+        )
+        return _shell("Runs", "runs", body)
     table = (
-        "<table><thead><tr><th>run_id</th><th>model</th><th>records</th>"
-        "<th>pass rate</th><th>cost</th><th>started</th><th>status</th>"
+        "<table><thead><tr><th>run_id</th><th>model</th><th class=\"num\">records</th>"
+        "<th class=\"num\">pass rate</th><th class=\"num\">cost</th><th>started</th><th>status</th>"
         "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
     body = (
         "<h1>Runs</h1>"
-        '<p class="meta">Every campaign/pilot run recorded in this store, one row each '
-        '(full_map runs are grouped under their parent run_id). Each run_id shows a '
-        "one-line verdict; click through for the full report and per-trial table.</p>"
+        '<p class="subtitle">Every campaign/pilot run recorded in this store, one row each '
+        '(full_map runs are grouped under their parent run_id). Click a run_id for the full '
+        "report and per-trial table.</p>"
         f"{table}"
     )
     return _shell("Runs", "runs", body)
@@ -491,27 +667,30 @@ def index_html(store: ResultsStore) -> str:
         else '<li class="meta">no runs yet</li>'
     )
 
+    # Task-first overview (docs/design-notes.md principle 22): a first-time
+    # visitor's 3 jobs, in order, above the fold -- (a) what is this,
+    # (b) what did it find, (c) one primary CTA to run a test. Everything
+    # else (raw stat counts, per-model matrix, quick links) is demoted
+    # below as "see evidence" / "where to go" material.
     body = f"""
-    <h1>Overview</h1>
-    <p class="meta">This is the home page: what the instrument does, what
-    it has found so far, and where to go next.</p>
+    <h1>Model Cartographer</h1>
+    <p class="subtitle">A synthetic story world with a known ground truth
+    is used to probe a model's grasp of object state, belief, and event
+    order -- so capability boundaries and failure modes can be mapped and
+    audited, not just guessed at.</p>
 
-    <p>Model Cartographer generates synthetic story worlds with a known
-    ground truth, asks a model questions about object state, belief, and
-    event order at controlled difficulty, and records every trial so
-    capability boundaries and failure modes can be mapped and audited.</p>
-
-    <div class="stat-grid">
-      <div class="stat-box" style="grid-column: span 2;">
-        <p style="margin:0 0 0.4rem;"><strong>Models tested &middot; pass rates by query kind</strong></p>
-        {model_kind_table}
-      </div>
-      <div class="stat-box" style="grid-column: span 1;">
-        <p style="margin:0 0 0.4rem;"><strong>Confirmed failure modes</strong></p>
-        <ul style="margin:0; padding-left: 1.1rem;">{findings_summary or '<li class="meta">none yet</li>'}</ul>
-        <p class="meta" style="margin-top:0.5rem;"><a href="/findings">full capability map &rarr;</a></p>
-      </div>
+    <div class="panel">
+      <p class="eyebrow">What we've found so far</p>
+      <ul style="margin:0.5rem 0 0; padding-left: 1.1rem;">{findings_summary or '<li class="meta">No confirmed findings yet -- launch a campaign to start mapping.</li>'}</ul>
+      <p class="meta" style="margin-top:0.75rem;"><a href="/findings">see the full capability map &rarr;</a></p>
     </div>
+
+    <div class="cta-row">
+      <a class="cta-primary" href="/launch">Map a model &rarr;</a>
+    </div>
+
+    <h2>Models tested &middot; pass rates by query kind</h2>
+    {model_kind_table}
 
     <div class="stat-grid">
       <div class="stat-box"><div class="stat-num">{total_trials}</div><div class="stat-label">Total trials</div></div>
@@ -523,9 +702,9 @@ def index_html(store: ResultsStore) -> str:
     <p class="meta" style="margin-top:0.5rem;"><a href="/runs">all runs &rarr;</a></p>
 
     <h2>Where to go</h2>
-    <div class="stat-grid">
+    <div class="panel-grid">
       {"".join(
-          f'<div class="stat-box"><p style="margin:0 0 0.3rem;"><a href="{href}"><strong>{html.escape(label)}</strong></a></p>'
+          f'<div class="panel"><p style="margin:0 0 0.3rem;"><a href="{href}"><strong>{html.escape(label)}</strong></a></p>'
           f'<p class="meta" style="margin:0;">{html.escape(desc)}</p></div>'
           for href, label, desc in _QUICK_LINKS
       )}
@@ -685,7 +864,11 @@ def live_html(store: ResultsStore) -> str:
         )
         row = cur.fetchone()
         if row is None:
-            body = "<h1>Live campaign monitor</h1><p>No records found.</p>"
+            body = (
+                "<h1>Live campaign monitor</h1>"
+                '<div class="empty-state"><p>No records found.</p>'
+                '<p class="meta"><a href="/launch">Launch your first campaign &rarr;</a></p></div>'
+            )
             return _shell("Live campaign monitor", "live", body, refresh=True)
         run_id = row["run_id"]
 
@@ -776,10 +959,12 @@ def live_html(store: ResultsStore) -> str:
     )
 
     is_active_run = active is not None and run_id == active["run_id"]
+    stage_html = _stage_track_html(run_id, records)
     body = f"""
     <h1>Live: {safe_run_id}</h1>
-    <p class="meta">Auto-refreshing monitor for an in-progress (or just-finished) campaign run.</p>
-    <p><a href="/run/{safe_run_id}">full run detail &rarr;</a></p>
+    <p class="subtitle">Auto-refreshing monitor for an in-progress (or just-finished) campaign run.</p>
+    <p class="meta"><a href="/run/{safe_run_id}">full run detail &rarr;</a></p>
+    {stage_html}
     {bar_html}
     {_stop_button_html(is_active_run, stopping)}
     <h2>Tallies</h2>
@@ -790,7 +975,41 @@ def live_html(store: ResultsStore) -> str:
     return _shell(f"Live: {run_id}", "live", body, refresh=not complete)
 
 
+def _stage_track_html(run_id: str, records: list[ExperimentRecord]) -> str:
+    """For a full_map campaign (run_id or its records' run_id carries a
+    "/<stage>" suffix), render a fixed step tracker: state (done) ->
+    order -> belief -> ... so progress reads at a glance without parsing
+    numbers (design-notes principle 24). Returns "" for non-full_map runs
+    so it never appears for a plain state/belief/order campaign.
+    """
+    seen_stages = {
+        _stage_from_run_id_local(r.run_id) for r in records if "/" in r.run_id
+    }
+    seen_stages.discard(None)
+    if not seen_stages:
+        return ""
+    steps = []
+    # the CURRENT stage is the last one with any records; everything
+    # before it is "done", everything after is upcoming.
+    reached = [s for s in _FULL_MAP_RUN_STAGES if s in seen_stages]
+    current = reached[-1] if reached else None
+    for i, stage in enumerate(_FULL_MAP_RUN_STAGES):
+        cls = "done" if stage in seen_stages and stage != current else ""
+        cls = "active" if stage == current else cls
+        steps.append(f'<span class="stage-step {cls}"><span class="dot"></span>{html.escape(stage)}</span>')
+        if i < len(_FULL_MAP_RUN_STAGES) - 1:
+            steps.append('<span class="stage-arrow">&rarr;</span>')
+    return f'<div class="stage-track">{"".join(steps)}</div>'
+
+
 _FULL_MAP_RUN_STAGES = ["state", "order", "belief", "adversarial_belief", "breaking_point"]
+
+
+_VERIFY_STATUS_LABEL = {
+    "stable": "verified-stable",
+    "noise": "noise",
+    "unverified": "unverified",
+}
 
 
 def run_html(store: ResultsStore, run_id: str) -> str:
@@ -808,13 +1027,29 @@ def run_html(store: ResultsStore, run_id: str) -> str:
                 is_full_map_parent = True
                 records.extend(child)
 
+    breadcrumb = f'<a href="/runs">Runs</a><span class="sep">/</span>{safe_run_id}'
+
     if not records:
         body = (
             f"<h1>Run {safe_run_id}</h1>"
             f"{verdict_panel_html(store, run_id)}"
-            "<p>No records found.</p>"
+            '<div class="empty-state"><p>No records found.</p></div>'
         )
-        return _shell(f"Run {run_id}", "runs", body)
+        return _shell(f"Run {run_id}", "runs", body, breadcrumb=breadcrumb)
+
+    # Verification status per FAIL record_id, keyed by the run_id its
+    # verify trials actually live under (f"{run_id}/verify" for a plain
+    # run, or f"{run_id}/{stage}/verify" per stage for a full_map parent --
+    # breaking_point is never auto-verified, see run_full_map_campaign).
+    from ..exec.evaluator import classify_all_verified_failures
+
+    verify_status_by_record: dict[str, str] = {}
+    verify_source_run_ids = (
+        [f"{run_id}/{s}" for s in _FULL_MAP_RUN_STAGES] if is_full_map_parent else [run_id]
+    )
+    for src in verify_source_run_ids:
+        for record_id, fv in classify_all_verified_failures(store, src).items():
+            verify_status_by_record[record_id] = fv.status
 
     rows_html = []
     for r in records:
@@ -829,11 +1064,17 @@ def run_html(store: ResultsStore, run_id: str) -> str:
             stage = _stage_from_run_id_local(r.run_id)
             if stage:
                 stage_html = f'<td class="mono">{html.escape(stage)}</td>'
+        if r.verdict.name == "FAIL":
+            status = verify_status_by_record.get(r.record_id, "unverified")
+            verify_html = f'<td class="meta">{html.escape(_VERIFY_STATUS_LABEL[status])}</td>'
+        else:
+            verify_html = '<td class="meta">-</td>'
         rows_html.append(
             "<tr>"
             f'<td class="mono">{html.escape(r.model_name)}</td>'
             f"{stage_html}"
             f"<td>{_verdict_pill(r.verdict.name)}</td>"
+            f"{verify_html}"
             f"<td>{html.escape(kind)}{traps_html}</td>"
             f"<td>{html.escape(difficulty)}</td>"
             f'<td class="mono">{r.cost_usd:.6f}</td>'
@@ -846,21 +1087,51 @@ def run_html(store: ResultsStore, run_id: str) -> str:
     table = (
         "<table><thead><tr><th>model</th>"
         f"{stage_header}"
-        "<th>verdict</th><th>kind</th>"
-        "<th>difficulty</th><th>cost ($)</th><th>tokens in/out</th><th></th>"
+        "<th>verdict</th><th>verified</th><th>kind</th>"
+        "<th>difficulty</th><th class=\"num\">cost ($)</th><th class=\"num\">tokens in/out</th><th></th>"
         "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
+
+    n_unverified_fails = sum(
+        1
+        for r in records
+        if r.verdict.name == "FAIL"
+        and verify_status_by_record.get(r.record_id, "unverified") == "unverified"
+        and (not is_full_map_parent or _stage_from_run_id_local(r.run_id) != "breaking_point")
+    )
+    verify_now_html = ""
+    if n_unverified_fails:
+        verify_now_html = f"""
+        <details style="margin-top:1rem;">
+          <summary>Verify {n_unverified_fails} failure(s) now
+            <span class="meta">(re-tests each ~3x against the model; est. a few percent of the original run's cost)</span>
+          </summary>
+          <form method="post" action="/verify">
+            <input type="hidden" name="run_id" value="{safe_run_id}">
+            <p><label>Provider:
+              <select name="provider">{launch_mod._provider_options()}</select></label></p>
+            <p><label>API key:
+              <input type="password" name="api_key" value="" autocomplete="off"></label>
+              <span class="meta">leave empty to use env/ key file</span></p>
+            <p><label>Model:
+              <input name="model" value="{html.escape(records[0].model_name)}"></label></p>
+            <p><button type="submit">Verify failures now</button></p>
+          </form>
+        </details>
+        """
+
     body = (
         f"<h1>Run {safe_run_id}</h1>"
+        '<p class="subtitle">What this run revealed, then every individual trial as evidence.</p>'
         f"{verdict_panel_html(store, run_id)}"
-        '<p class="meta">Every trial recorded for this run. Click "full transcript" '
-        "for the prompt, model reasoning, response, verdict, answer key, and "
-        "(for adversarial runs) the trap kind(s) the world was seeded to test.</p>"
-        f'<p><a href="/live?run={safe_run_id}">watch live &rarr;</a> &middot; '
+        f'<p class="meta" style="margin-top:1.25rem;"><a href="/live?run={safe_run_id}">watch live &rarr;</a> &middot; '
         f'<a href="/atlas">compare across models &rarr;</a></p>'
-        f"{table}"
+        f"{verify_now_html}"
+        "<details><summary>Per-trial table "
+        f'<span class="meta">({len(records)} trials -- prompt, reasoning, verdict, answer key)</span></summary>'
+        f"{table}</details>"
     )
-    return _shell(f"Run {run_id}", "runs", body)
+    return _shell(f"Run {run_id}", "runs", body, breadcrumb=breadcrumb)
 
 
 def _stage_from_run_id_local(run_id: str) -> str | None:
@@ -875,7 +1146,7 @@ def record_html(store: ResultsStore, record_id: str) -> str:
     safe_record_id = html.escape(record_id)
 
     if row is None:
-        body = f"<h1>Record {safe_record_id}</h1><p>Not found.</p>"
+        body = f'<h1>Record {safe_record_id}</h1><div class="empty-state"><p>Not found.</p></div>'
         return _shell(f"Record {record_id}", "runs", body)
 
     from ..store.store import _row_to_record
@@ -920,21 +1191,50 @@ def record_html(store: ResultsStore, record_id: str) -> str:
         else ""
     )
 
+    # prev/next trial within the same run -- lateral navigation so a
+    # dead-end detail page never strands the reader (design-notes principle 4).
+    siblings = store.by_run(record.run_id)
+    sib_ids = [s.record_id for s in siblings]
+    prev_next_html = ""
+    if record.record_id in sib_ids and len(sib_ids) > 1:
+        idx = sib_ids.index(record.record_id)
+        prev_id = sib_ids[idx - 1] if idx > 0 else None
+        next_id = sib_ids[idx + 1] if idx < len(sib_ids) - 1 else None
+        parts = []
+        if prev_id:
+            parts.append(f'<a href="/record/{html.escape(prev_id)}">&larr; prev trial</a>')
+        parts.append(f'<span class="meta">trial {idx + 1} of {len(sib_ids)}</span>')
+        if next_id:
+            parts.append(f'<a href="/record/{html.escape(next_id)}">next trial &rarr;</a>')
+        prev_next_html = f'<p class="meta" style="display:flex; gap:1rem; align-items:center;">{" &middot; ".join(parts)}</p>'
+
+    breadcrumb = (
+        f'<a href="/runs">Runs</a><span class="sep">/</span>'
+        f'<a href="/run/{html.escape(record.run_id)}">{html.escape(record.run_id)}</a>'
+        f'<span class="sep">/</span>{safe_record_id[:8]}'
+    )
+
     body = f"""
-    <p><a href="/run/{html.escape(record.run_id)}">&larr; run {html.escape(record.run_id)}</a></p>
     <h1>Record {safe_record_id}</h1>
-    <p class="meta">Full transcript for one trial: prompt, model reasoning, response, verdict, and provenance.</p>
-    <p class="meta">
-      model: <span class="mono">{html.escape(record.model_name)}</span> &middot;
-      verdict: {_verdict_pill(record.verdict.name)} &middot;
-      finish_reason: {html.escape(record.finish_reason or "-")} &middot;
-      tokens in/out: <span class="mono">{record.tokens_in}/{record.tokens_out}</span> &middot;
-      cost: <span class="mono">${record.cost_usd:.6f}</span> &middot;
-      latency: <span class="mono">{record.latency_ms:.1f} ms</span>
-    </p>
-    <p class="meta">verifier_detail: <span class="mono">{html.escape(record.verifier_detail or "-")}</span></p>
-    {trap_line}
-    <p class="meta">lineage: {lineage_links}</p>
+    <p class="subtitle">Verdict and provenance first; raw prompt/response/reasoning below, collapsed.</p>
+
+    <div class="panel">
+      <p style="margin:0 0 0.5rem;">
+        {_verdict_pill(record.verdict.name)}
+        <span class="meta">&middot; model <span class="mono">{html.escape(record.model_name)}</span></span>
+      </p>
+      <p class="meta" style="margin:0;">
+        finish_reason: <span class="mono">{html.escape(record.finish_reason or "-")}</span> &middot;
+        tokens in/out: <span class="mono num">{record.tokens_in}/{record.tokens_out}</span> &middot;
+        cost: <span class="mono num">${record.cost_usd:.6f}</span> &middot;
+        latency: <span class="mono num">{record.latency_ms:.1f} ms</span>
+      </p>
+      <p class="meta">verifier_detail: <span class="mono">{html.escape(record.verifier_detail or "-")}</span></p>
+      {trap_line}
+      <p class="meta">lineage: {lineage_links}</p>
+    </div>
+
+    {prev_next_html}
 
     <h2>Prompt</h2>
     <pre class="block">{prompt_block}</pre>
@@ -945,13 +1245,14 @@ def record_html(store: ResultsStore, record_id: str) -> str:
     <h2>Reasoning</h2>
     {reasoning_html}
 
-    <h2>Realized dims</h2>
+    <h2>Realized dims &amp; latent params</h2>
+    <h3>Realized dims</h3>
     <table><thead><tr><th>dim</th><th>value</th></tr></thead><tbody>{realized_rows}</tbody></table>
 
-    <h2>Latent params</h2>
+    <h3>Latent params</h3>
     <table><thead><tr><th>param</th><th>value</th></tr></thead><tbody>{latent_rows}</tbody></table>
     """
-    return _shell(f"Record {record_id}", "runs", body)
+    return _shell(f"Record {record_id}", "runs", body, breadcrumb=breadcrumb)
 
 
 class _ViewerHandler(BaseHTTPRequestHandler):
@@ -1021,6 +1322,29 @@ class _ViewerHandler(BaseHTTPRequestHandler):
             self.send_header("Location", "/live")
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+
+        if path == "/verify":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length else b""
+            form = {
+                k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()
+            }
+            run_id = form.get("run_id", "")
+            started, payload = launch_mod.handle_verify_now(
+                run_id,
+                form.get("provider", ""),
+                form.get("api_key", ""),
+                form.get("model", ""),
+                self.launch_deps,
+            )
+            if started:
+                self.send_response(303)
+                self.send_header("Location", f"/run/{run_id}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self._send_html(_shell("Verify failures", "runs", payload))
             return
 
         if path != "/launch":

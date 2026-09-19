@@ -50,9 +50,18 @@ from ..exec.evaluator import (
     run_full_map_campaign,
     run_order_campaign,
     run_state_campaign,
+    run_verify_failures,
 )
 from ..exec.keys import load_keys
 from ..store.store import ResultsStore
+
+# One-line cost note shown next to the /launch "Verify failures" control --
+# see run_state_campaign et al.'s `verify` param and
+# cartographer.exec.evaluator.run_verify_failures.
+VERIFY_FAILURES_COST_NOTE = (
+    "re-tests each failure 3x -- typically adds a few percent to cost; "
+    "uncheck to skip and verify later by hand"
+)
 
 _PROVIDERS: dict[str, Provider] = {"groq": GROQ, "nebius": NEBIUS}
 
@@ -241,35 +250,62 @@ def _provider_options(selected: str = "nebius") -> str:
     )
 
 
-def _preset_cards_html(campaign_types: list[str] | None = None) -> str:
-    """Plain-English description card per campaign preset, in
-    CAMPAIGN_PRESETS iteration order (alphabetical) unless a caller
-    supplies an explicit order. Each card names its query kind, a
-    one-sentence description of what it tests, typical cost, and typical
-    duration -- and a NEW badge for recently added presets."""
+def _preset_card(t: str, checked: bool, radio_name: str | None = None) -> str:
+    """One preset as a radio-card (design-notes principle 23): the whole
+    card is a <label>, selectable, with cost/duration expectations visible
+    before submit. If `radio_name` is given the card includes an actual
+    <input type="radio"> (used on the models step, where a real selection
+    is made); otherwise it's a read-only description card (used on the
+    provider step, before campaign_type even exists as a field yet)."""
+    desc = CAMPAIGN_DESCRIPTIONS.get(t, {})
+    preset = CAMPAIGN_PRESETS[t]
+    badge = ""
+    if desc.get("recommended"):
+        badge += ' <span class="badge badge-recommended">RECOMMENDED</span>'
+    if desc.get("new"):
+        badge += ' <span class="badge badge-new">NEW</span>'
+    radio = (
+        f'<input type="radio" name="{radio_name}" value="{html.escape(t)}"'
+        f'{" checked" if checked else ""} style="display:none;">'
+        if radio_name
+        else ""
+    )
+    return (
+        f'<label class="preset-card">{radio}'
+        f'<span class="preset-title"><span class="mono">{html.escape(t)}</span>{badge}</span>'
+        f'<span class="preset-desc">{html.escape(str(desc.get("summary", "")))}</span>'
+        f'<span class="preset-desc mono" style="display:block; margin-top:0.4rem;">'
+        f'budget {int(preset["budget"])} trials &middot; cap ${preset["cost_cap"]} &middot; '
+        f'{html.escape(str(desc.get("typical_cost", "-")))} &middot; '
+        f'{html.escape(str(desc.get("typical_duration", "-")))}</span>'
+        "</label>"
+    )
+
+
+def _preset_cards_html(campaign_types: list[str] | None = None, radio_name: str | None = None) -> str:
+    """Plain-English description card per campaign preset. full_map (the
+    recommended default) is shown first and prominently; the rest are
+    grouped under an "Advanced" <details> so the primary path isn't
+    competing visually with five equal-weight options (principle 23)."""
     types = campaign_types or sorted(
         CAMPAIGN_PRESETS, key=lambda t: (t != DEFAULT_CAMPAIGN_TYPE, t)
     )
-    cards = []
-    for t in types:
-        desc = CAMPAIGN_DESCRIPTIONS.get(t, {})
-        preset = CAMPAIGN_PRESETS[t]
-        badge = ""
-        if desc.get("recommended"):
-            badge += ' <span class="pill pill-PASS">RECOMMENDED</span>'
-        if desc.get("new"):
-            badge += ' <span class="pill pill-PASS">NEW</span>'
-        cards.append(
-            '<div class="stat-box">'
-            f'<p style="margin:0 0 0.3rem;"><strong class="mono">{html.escape(t)}</strong>{badge}'
-            f' <span class="meta">&middot; query kind: {html.escape(str(desc.get("query_kind", "-")))}</span></p>'
-            f'<p class="meta" style="margin:0 0 0.4rem;">{html.escape(str(desc.get("summary", "")))}</p>'
-            f'<p class="meta" style="margin:0;">budget {int(preset["budget"])} trials &middot; '
-            f'cap ${preset["cost_cap"]} &middot; typical cost {html.escape(str(desc.get("typical_cost", "-")))} '
-            f'&middot; typical duration {html.escape(str(desc.get("typical_duration", "-")))}</p>'
-            "</div>"
-        )
-    return f'<div class="stat-grid" style="grid-template-columns: 1fr;">{"".join(cards)}</div>'
+    primary = [t for t in types if t == DEFAULT_CAMPAIGN_TYPE]
+    rest = [t for t in types if t != DEFAULT_CAMPAIGN_TYPE]
+
+    primary_html = "".join(
+        _preset_card(t, checked=(t == DEFAULT_CAMPAIGN_TYPE), radio_name=radio_name) for t in primary
+    )
+    rest_html = "".join(
+        _preset_card(t, checked=False, radio_name=radio_name) for t in rest
+    )
+    advanced = (
+        f'<details><summary>Advanced: other campaign presets ({len(rest)})</summary>'
+        f'<div class="preset-cards">{rest_html}</div></details>'
+        if rest_html
+        else ""
+    )
+    return f'<div class="preset-cards">{primary_html}</div>{advanced}'
 
 
 def launch_form_html() -> str:
@@ -279,17 +315,20 @@ def launch_form_html() -> str:
     models."""
     return f"""
     <h1>Launch a campaign</h1>
-    <p class="meta">Pick a provider, load its models, then choose one of the
-    campaign presets described below.</p>
-    <form method="post" action="/launch">
-      <input type="hidden" name="step" value="models">
-      <p><label>Provider:
-        <select name="provider">{_provider_options()}</select></label></p>
-      <p><label>API key:
-        <input type="password" name="api_key" value="" autocomplete="off"></label><br>
-        <span class="meta">leave empty to use env/ key file</span></p>
-      <p><button type="submit">Load models</button></p>
-    </form>
+    <p class="subtitle">Pick a provider, load its models, then choose one of the
+    campaign presets described below. full_map is the recommended default --
+    one budget, one report on everything this model can and can't do.</p>
+    <div class="panel">
+      <form method="post" action="/launch">
+        <input type="hidden" name="step" value="models">
+        <p><label>Provider:
+          <select name="provider">{_provider_options()}</select></label></p>
+        <p><label>API key:
+          <input type="password" name="api_key" value="" autocomplete="off"></label><br>
+          <span class="meta">leave empty to use env/ key file</span></p>
+        <p><button type="submit" class="btn-primary">Load models</button></p>
+      </form>
+    </div>
     <h2>Campaign presets</h2>
     {_preset_cards_html()}
     """
@@ -323,22 +362,30 @@ def models_step_html(provider_name: str, token: str, models: list[str]) -> str:
         for t in sorted(CAMPAIGN_PRESETS)
     )
     default = CAMPAIGN_PRESETS[DEFAULT_CAMPAIGN_TYPE]
+    default_desc = CAMPAIGN_DESCRIPTIONS.get(DEFAULT_CAMPAIGN_TYPE, {})
     return f"""
-    <p><a href="/launch">&larr; start over</a></p>
+    <p class="breadcrumb"><a href="/launch">&larr; start over</a></p>
     <h1>Launch a campaign &mdash; {html.escape(provider_name)}</h1>
-    <p class="meta">{len(models)} chat-capable models found. Pick a model and a campaign type below.</p>
-    <form method="post" action="/launch">
-      <input type="hidden" name="step" value="start">
-      <input type="hidden" name="token" value="{html.escape(token)}">
-      <p><label>Model: <select name="model">{model_opts}</select></label></p>
-      <p><label>Campaign type: <select name="campaign_type">{type_opts}</select></label></p>
-      <p><label>Budget (trials): <input name="budget" value="{int(default['budget'])}"></label></p>
-      <p><label>Cost cap (USD): <input name="cost_cap" value="{default['cost_cap']}"></label></p>
-      <p><label>Advanced: max tokens <input name="max_tokens" value=""></label><br>
-         <span class="meta">blank = auto (model-aware default; "ultra"-class reasoning
-         models get a bigger budget automatically)</span></p>
-      <p><button type="submit">Launch</button></p>
-    </form>
+    <p class="subtitle">{len(models)} chat-capable models found. Pick a model and a campaign
+    type below -- cost/duration expectations are shown before you submit.</p>
+    <div class="panel">
+      <form method="post" action="/launch">
+        <input type="hidden" name="step" value="start">
+        <input type="hidden" name="token" value="{html.escape(token)}">
+        <p><label>Model: <select name="model">{model_opts}</select></label></p>
+        <p><label>Campaign type: <select name="campaign_type">{type_opts}</select></label></p>
+        <p><label>Budget (trials): <input name="budget" value="{int(default['budget'])}"></label></p>
+        <p><label>Cost cap (USD): <input name="cost_cap" value="{default['cost_cap']}"></label></p>
+        <p class="meta">Expect {html.escape(str(default_desc.get("typical_cost", "-")))},
+           {html.escape(str(default_desc.get("typical_duration", "-")))} at the defaults above.</p>
+        <p><label>Advanced: max tokens <input name="max_tokens" value=""></label><br>
+           <span class="meta">blank = auto (model-aware default; "ultra"-class reasoning
+           models get a bigger budget automatically)</span></p>
+        <p><label><input type="checkbox" name="verify_failures" value="1" checked> Verify failures</label><br>
+           <span class="meta">{html.escape(VERIFY_FAILURES_COST_NOTE)}</span></p>
+        <p><button type="submit" class="btn-primary">Start mapping</button></p>
+      </form>
+    </div>
     <h2>What each campaign type tests</h2>
     {_preset_cards_html()}
     """
@@ -445,6 +492,14 @@ def handle_start(
     except ValueError:
         return False, error_html("budget, cost cap, and max tokens must be numeric")
 
+    # Checkbox semantics: present (any truthy value) -> "auto", absent
+    # (unchecked boxes aren't submitted at all in an HTML form POST) ->
+    # "manual". Defaults to "auto" (checked) to match the form's default
+    # `checked` attribute when the field is simply missing from `form`
+    # entirely (e.g. a caller building the dict directly rather than via
+    # an actual browser form submit).
+    verify = "auto" if form.get("verify_failures", "1") else "manual"
+
     run_id = next_run_id(deps.db_path, campaign_type, model)
     provider = _PROVIDERS[provider_name]
     cancel_event = threading.Event()
@@ -454,7 +509,7 @@ def handle_start(
             return False, busy_html(_CURRENT_RUN["run_id"])
         thread = threading.Thread(
             target=_campaign_thread,
-            args=(deps, provider, key, model, runner, run_id, budget, cost_cap, max_tokens, cancel_event),
+            args=(deps, provider, key, model, runner, run_id, budget, cost_cap, max_tokens, cancel_event, verify),
             name=f"campaign-{run_id}",
             daemon=True,
         )
@@ -474,6 +529,7 @@ def _campaign_thread(
     cost_cap: float,
     max_tokens: int | None,
     cancel_event: threading.Event,
+    verify: str = "auto",
 ) -> None:
     global _CURRENT_RUN
     try:
@@ -498,6 +554,8 @@ def _campaign_thread(
                 kwargs["max_tokens"] = max_tokens
             if "cancel_event" in params:
                 kwargs["cancel_event"] = cancel_event
+            if "verify" in params:
+                kwargs["verify"] = verify
             runner(campaign_client, store, **kwargs)
         finally:
             store.close()
@@ -507,6 +565,92 @@ def _campaign_thread(
         import sys
 
         sys.stderr.write(f"[launch] campaign {run_id} failed: {exc!r}\n")
+    finally:
+        with _lock:
+            _CURRENT_RUN = None
+
+
+# ---------------------------------------------------------------------------
+# "Verify failures now" -- manual-mode escape hatch for an existing run.
+#
+# A run launched with verify="manual" (or an old run from before this
+# feature existed) has FAILs with no verify trials. This lets a human
+# trigger `run_verify_failures` for that one run_id on demand, from the run
+# detail page, WITHOUT re-running the whole campaign. It reuses the exact
+# same one-campaign-at-a-time thread + cancel_event machinery as
+# `handle_start`/`_campaign_thread` above (verification against a live
+# model is itself a small campaign -- same concurrency hazards, same
+# guard), and `scripts/verify_past_failures.py --live` calls this same
+# `handle_verify_now` function rather than duplicating the thread-launch
+# logic.
+# ---------------------------------------------------------------------------
+
+
+def handle_verify_now(
+    run_id: str, provider_name: str, api_key: str, model: str, deps: LaunchDeps
+) -> tuple[bool, str]:
+    """Kick off `run_verify_failures` for an already-recorded run_id.
+    Returns (started, message_or_run_id) mirroring `handle_start`'s
+    contract; on success the second element is `run_id` (so callers can
+    redirect the same way /launch does), on failure it's an HTML error/busy
+    page.
+    """
+    global _CURRENT_RUN
+
+    provider = _PROVIDERS.get(provider_name)
+    if provider is None:
+        return False, error_html(f"unknown provider: {provider_name}")
+
+    key = _resolve_key(provider_name, api_key.strip(), deps)
+    if not key:
+        return False, error_html(
+            f"no API key provided and none found in the env/ key file for {provider_name}"
+        )
+
+    if not model.strip():
+        return False, error_html("missing model")
+
+    cancel_event = threading.Event()
+    with _lock:
+        if _CURRENT_RUN is not None:
+            return False, busy_html(_CURRENT_RUN["run_id"])
+        thread = threading.Thread(
+            target=_verify_now_thread,
+            args=(deps, provider, key, model.strip(), run_id, cancel_event),
+            name=f"verify-{run_id}",
+            daemon=True,
+        )
+        _CURRENT_RUN = {"run_id": run_id, "thread": thread, "cancel_event": cancel_event}
+    thread.start()
+    return True, run_id
+
+
+def _verify_now_thread(
+    deps: LaunchDeps,
+    provider: Provider,
+    key: str,
+    model: str,
+    run_id: str,
+    cancel_event: threading.Event,
+) -> None:
+    global _CURRENT_RUN
+    try:
+        store = ResultsStore(deps.db_path)
+        try:
+            campaign_client = deps.client_factory(provider, key)
+            run_verify_failures(
+                client=campaign_client,
+                model=model,
+                store=store,
+                run_id=run_id,
+                cancel_event=cancel_event,
+            )
+        finally:
+            store.close()
+    except Exception as exc:  # never let this crash kill silently
+        import sys
+
+        sys.stderr.write(f"[launch] verify-now for {run_id} failed: {exc!r}\n")
     finally:
         with _lock:
             _CURRENT_RUN = None

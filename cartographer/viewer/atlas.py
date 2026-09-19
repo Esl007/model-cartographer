@@ -205,8 +205,9 @@ def atlas_html(store: ResultsStore) -> str:
     if not records:
         body = (
             "<h1>Cross-model atlas</h1>"
-            '<p class="meta">Pass rate vs. difficulty, compared across models.</p>'
-            "<p>No campaign data.</p>"
+            '<p class="subtitle">Pass rate vs. difficulty, compared across models.</p>'
+            '<div class="empty-state"><p>No campaign data.</p>'
+            '<p class="meta"><a href="/launch">Launch a campaign to populate this page &rarr;</a></p></div>'
         )
         return _shell("Cross-model atlas", "atlas", body)
 
@@ -277,23 +278,23 @@ def atlas_html(store: ResultsStore) -> str:
         rate = (agg["pass"] / agg["n"] * 100.0) if agg["n"] else 0.0
         table_rows.append(
             "<tr>"
-            f"<td>{html.escape(model)}</td>"
+            f'<td class="mono">{html.escape(model)}</td>'
             f"<td>{html.escape(kind)}</td>"
-            f"<td>{rate:.1f}%</td>"
-            f'<td>{agg["n"]}</td>'
-            f'<td>${agg["cost"]:.6f}</td>'
+            f'<td class="num">{rate:.1f}%</td>'
+            f'<td class="num">{agg["n"]}</td>'
+            f'<td class="mono num">${agg["cost"]:.6f}</td>'
             "</tr>"
         )
     summary_table = (
-        "<table><thead><tr><th>model</th><th>query_kind</th><th>pass rate</th>"
-        "<th>n</th><th>total cost</th></tr></thead><tbody>"
+        "<table><thead><tr><th>model</th><th>query_kind</th><th class=\"num\">pass rate</th>"
+        "<th class=\"num\">n</th><th class=\"num\">total cost</th></tr></thead><tbody>"
         + "".join(table_rows)
         + "</tbody></table>"
     )
 
     body = (
         "<h1>Cross-model atlas</h1>"
-        '<p class="meta">Pass rate vs. difficulty, per query kind and dimension, '
+        '<p class="subtitle">Pass rate vs. difficulty, per query kind and dimension, '
         "compared across every model with campaign data in this store.</p>"
         + "".join(chart_sections)
         + "<h2>Summary</h2>"

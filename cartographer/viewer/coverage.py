@@ -71,7 +71,7 @@ def coverage_html() -> str:
 
     body = f"""
     <h1>Coverage</h1>
-    <p class="meta">What this instrument tests, and what it honestly
+    <p class="subtitle">What this instrument tests, and what it honestly
     doesn't yet -- the full inventory of query kinds, difficulty
     dimensions, foil traps, and analysis machinery, plus a roadmap of
     gaps.</p>
