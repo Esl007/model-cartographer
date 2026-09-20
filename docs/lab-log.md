@@ -187,6 +187,41 @@ credibility.
 
 ---
 
+## 2026-09-20 — FINDING (confirmed) — the full_map rebuild: three-tier summary, and token-cap exhaustion confirmed on a third tier
+
+User-approved rebuild after the data-loss incident: `full_map` run on
+all three Nemotron tiers, $1.31 total spend, 1572 real trials written to
+the live store.
+
+| tier | records | spend | state | order | belief | adversarial_belief | breaking_point |
+|---|---|---|---|---|---|---|---|
+| Nano | 651 | $0.1377 | 100% (30/30) | 97.5% (78/80) | 89.2% (166/186 scored) | 85.6% (137/160) | 91.3% (42/46 scored) |
+| Super | 495 | $0.1731 | 93.3% (28/30) | 98.75% (79/80) | 98.5% (128/130) | 95.0% (152/160) | 96.4% (54/56) |
+| Ultra | 426 | $1.0014 | 100% (30/30) | 100% (80/80) | 97.7% (127/130 scored) | 97.7% (127/130 scored) | 98.2% (54/55 scored) |
+
+Clean tier ordering on belief/adversarial_belief (Ultra > Super > Nano),
+consistent with every prior campaign. Super's state result (28/30, 2
+FAILs) is the first time state tracking has failed at all on ANY tier in
+this project's history -- worth a look in its own right, not investigated
+here (not the ask this session).
+
+**Nano's breaking_point stage hit 10/56 (~18%) ERROR, all
+`cap_hit=1;retry_exhausted=1`, `finish_reason=length`** -- the escalation
+ray pushes every dim toward the generator ceiling (long chains, high
+scramble), and at that difficulty even Nano's reasoning can exceed the
+default 1500/4000 token budget. Correctly routed to ERROR, not
+mis-scored as FAIL -- the 2026-09-17 fix holding as designed. This is
+the SAME mechanism just characterized on Ultra earlier today (see the
+retraction entry above), now confirmed on a non-"ultra" tier too: token
+exhaustion under escalation/adversarial difficulty is not "ultra"-model-
+specific, it's a property of the difficulty regime. `default_token_budget`
+in `cartographer/exec/evaluator.py` likely needs a distinct, higher floor
+for `breaking_point` and `adversarial_belief` campaigns specifically
+(regular state/order/belief trials have not shown this need on any
+tier) -- flagged for a decision, not changed here.
+
+---
+
 ## 2026-09-19 — DESIGN (pass 6) — the pass-5 composition system applied to the remaining eight pages
 
 Pass 5 proved the composition fix on the overview only and closed with a
