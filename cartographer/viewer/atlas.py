@@ -1,22 +1,60 @@
 """Phase 8: cross-model atlas -- pure-function HTML builder over a
 `ResultsStore`, same pattern as `cartographer.viewer.serve`'s other pages.
 
-Builds, per query_kind x dimension, an inline SVG line chart of pass rate
-vs. dimension value for each model, plus a summary table. No JS libraries;
-SVG is built directly as strings. Every db-sourced string is html.escape'd
-before being placed in the page (SVG text nodes too).
+WHAT THIS PLOTS, AND WHY IT CHANGED
+-----------------------------------
+The first version of this page drew one polyline per model of pass rate
+vs. dimension value, restricted to records that varied exactly ONE dim
+away from a per-model baseline (the `resume_from_records` idiom). That
+filter is correct for a grid sweep and wrong for this store's data: the
+adaptive campaign scheduler moves several dims at once, so on the real
+779-record store the filter admitted 3-8 records per (model, dim) and
+binned them into ONE x value. A polyline with a single point renders
+nothing at all. Six charts of empty axes is what "just raw projections"
+meant -- the page was not under-styled, it was plotting almost no data.
 
-Boundary detection: campaign runs only persist `ExperimentRecord`s, not the
-scheduler's `CampaignState` (so no access to stored `boundaries`/`notes`).
-Instead this module re-fits a logistic frontier per (model, dim) from the
-binned records directly via `cartographer.schedule.estimate.fit_logistic`,
-and draws a vertical dashed line at the crossing when a fit exists.
+This version bins by QUANTILE BUCKETS over every record of the selected
+query kind instead, which puts all 779 records on screen with 5-250
+trials behind each cell, and makes the primary visualization a
+MODELS x DIFFICULTY-BUCKET HEATMAP:
+
+  * A heatmap is the natural shape of the question. "Where does each
+    model break" is a lookup over a model/difficulty grid; a heatmap is
+    that grid, so the answer is a position rather than an inference from
+    three overlapping polylines.
+  * It degrades honestly at this data's real resolution. Bucket counts
+    per cell vary 5..250; a line implies an interpolatable function
+    between points that these adaptive, unevenly-sampled x values do not
+    support. A cell claims only what it measured.
+  * It scales with the store. Six models on shared axes is spaghetti; six
+    heatmap rows is still six rows.
+  * It is the same object as the "capability map" mental model the rest
+    of the app is built around.
+
+The response CURVE is kept as the secondary view, because a heatmap is
+poor at the one job lines are good at -- reading two models' degradation
+slopes against each other -- and "model vs model" is the page's other
+job. It is now driven by the same buckets, so the two views can never
+disagree, and it carries the per-model toggles.
+
+Boundary detection: campaign runs only persist `ExperimentRecord`s, not
+the scheduler's `CampaignState` (so no access to stored
+`boundaries`/`notes`). This module re-fits a logistic frontier per
+(model, kind, dim) from the raw (x, passed) points via
+`cartographer.schedule.estimate.fit_logistic`, and marks the bucket the
+crossing falls in -- but only when the crossing is inside the observed
+range, since an extrapolated midpoint is a fit artifact, not a finding.
+
+Every db-sourced string is html.escape'd before it is placed in the page
+(SVG text nodes and data-* attributes too).
 """
 
 from __future__ import annotations
 
+import bisect
 import html
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 from ..schedule.estimate import fit_logistic
 from ..store.store import ResultsStore
@@ -26,30 +64,44 @@ from ..store.store import ResultsStore
 # run_state_campaign/run_belief_campaign's run_id conventions).
 _CAMPAIGN_RUN_PREFIX = "camp-"
 
-_CHART_W = 520
-_CHART_H = 300
-_MARGIN = 48
+# Target number of difficulty buckets per dimension. Dimensions with this
+# many distinct values or fewer are bucketed by exact value instead (a
+# 2-value dim should show 2 columns, not 6 mostly-empty ones).
+_TARGET_BUCKETS = 6
 
-# Focal-point coloring (docs/design-notes.md sidebar/showcase addendum,
-# confirmed against a real shipped admin-dashboard example: every bar is
-# identical neutral gray EXCEPT the one that's the point, which is solid
-# black -- focus comes from color/weight applied to ONE element, not from
-# decorating everything). Adapted for a multi-model COMPARISON chart
-# (unlike the single-series bar chart the example shows, collapsing every
-# line to one color here would destroy the chart's actual job of telling
-# models apart) -- so the axis this chart applies focal-point coloring
-# along is "does this model actually have a finding" rather than
-# "most recent": a model with NO fitted boundary (clean pass, nothing
-# discovered) renders muted/neutral; a model where a boundary WAS found
-# (a real result) renders in claim-belief amber with a bolder stroke, so
-# the reader's eye lands on the model that actually broke, not just
-# whichever line happens to be red vs. teal vs. purple in a legend.
-_LINE_COLOR_NEUTRAL = "#6E6C68"  # --ink-muted -- clean pass, no boundary found
-_LINE_COLOR_BOUNDARY = "#D9A441"  # --claim-belief -- a real fitted boundary
-_CHART_BG = "#131415"  # --surface-instrument-1
-_CHART_BORDER = "rgba(255,255,255,0.16)"  # --line-strong
-_CHART_AXIS = "#6E6C68"  # --ink-muted
-_CHART_TEXT = "#E7E5E2"  # --ink
+# Below this scored pass rate a heatmap cell stops being achromatic and
+# takes the trap color -- the same threshold the shared `_rate_bar` uses,
+# so a cell and a table row never disagree about what counts as broken.
+_BREAK_THRESHOLD = 0.60
+
+_CELL_W = 96
+_CELL_H = 46
+_LABEL_W = 196
+_HEAT_TOP = 30
+
+_CURVE_W = 620
+_CURVE_H = 300
+_CURVE_M_L = 52
+_CURVE_M_R = 148  # room for direct end-of-line labels
+_CURVE_M_T = 22
+_CURVE_M_B = 54
+
+# Tokens, mirrored from _CSS's :root (SVG presentation attributes can't
+# read CSS custom properties in every renderer, so they are duplicated
+# here deliberately and named after the same concepts).
+_INK = "#E7E5E2"
+_INK_SECONDARY = "#A8A6A1"
+_INK_MUTED = "#6E6C68"
+_LINE = "rgba(255,255,255,0.08)"
+_LINE_STRONG = "rgba(255,255,255,0.16)"
+_SURFACE_1 = "#131415"
+_SURFACE_2 = "#1a1b1d"
+_CLAIM_BELIEF = "#D9A441"
+_TRAP = "#C4544B"
+
+# Neutral series get weight/dash to stay distinguishable without spending
+# hue on them; hue is reserved for the focal series (see `_focal_model`).
+_NEUTRAL_DASHES = ["", "5 3", "1 3", "7 2 2 2", "3 2"]
 
 
 def _short_model_name(model_name: str) -> str:
@@ -69,303 +121,754 @@ def _query_kind_of(record) -> str:
     return "unknown"
 
 
+def _fmt_num(v: float) -> str:
+    """Compact axis/label formatting: integers stay integers, fractions
+    get two places. Dimension values in this store range from 0.26 to 34."""
+    if v == int(v):
+        return str(int(v))
+    return f"{v:.2f}"
+
+
 @dataclass(frozen=True)
 class _Point:
     x: float
     passed: bool
 
 
-def _one_dim_varied_points(
-    records: list, dim: str, baseline: dict[str, float]
-) -> list[_Point]:
-    """Records whose realized_dims differ from `baseline` in at most `dim`.
+@dataclass(frozen=True)
+class _Bucket:
+    """One difficulty column. `exact` buckets match a single value;
+    range buckets are half-open (lo, hi] except the first, which is
+    closed on both ends so the minimum observed value has a home."""
 
-    Mirrors the `resume_from_records` idiom: a record counts toward this
-    dim's curve if every OTHER known dim sits at (or very near) its
-    baseline value. Baseline is approximated per-dim as the minimum
-    observed value across all records passed in (the caller computes this
-    once per model x dim group before calling).
+    lo: float
+    hi: float
+    exact: bool
+
+    @property
+    def label(self) -> str:
+        if self.exact or self.lo == self.hi:
+            return _fmt_num(self.lo)
+        return f"{_fmt_num(self.lo)}–{_fmt_num(self.hi)}"
+
+    @property
+    def mid(self) -> float:
+        return (self.lo + self.hi) / 2.0
+
+
+@dataclass
+class _Cell:
+    n_scored: int = 0
+    n_pass: int = 0
+    n_error: int = 0
+
+    @property
+    def rate(self) -> float | None:
+        return (self.n_pass / self.n_scored) if self.n_scored else None
+
+
+def _build_buckets(values: list[float], target: int = _TARGET_BUCKETS) -> list[_Bucket]:
+    """Quantile buckets over the observed value POPULATION (not its
+    range), so every column carries a comparable number of trials rather
+    than a comparable slice of the x axis -- which matters because the
+    adaptive scheduler samples difficulty very unevenly.
+
+    Falls back to exact-value buckets when a dim has few distinct values.
+    Returns [] for empty input.
     """
-    out: list[_Point] = []
-    for r in records:
-        rd = r.realized_dims
-        if dim not in rd:
-            continue
-        ok = True
-        for other_dim, base_val in baseline.items():
-            if other_dim == dim:
-                continue
-            val = rd.get(other_dim)
-            if val is None:
-                continue
-            if abs(val - base_val) > 1e-9:
-                ok = False
-                break
-        if ok:
-            out.append(_Point(x=float(rd[dim]), passed=(r.verdict.name == "PASS")))
+    if not values:
+        return []
+    distinct = sorted(set(values))
+    if len(distinct) <= target:
+        return [_Bucket(v, v, True) for v in distinct]
+
+    ordered = sorted(values)
+    n = len(ordered)
+    edges: list[float] = []
+    for i in range(1, target):
+        e = ordered[int(i * n / target)]
+        if e > ordered[0] and (not edges or e > edges[-1]):
+            edges.append(e)
+    if not edges:
+        return [_Bucket(distinct[0], distinct[-1], False)]
+
+    out: list[_Bucket] = []
+    lo = ordered[0]
+    for e in edges:
+        out.append(_Bucket(lo, e, False))
+        lo = e
+    out.append(_Bucket(lo, ordered[-1], False))
     return out
 
 
-def _bin_points(points: list[_Point]) -> list[tuple[float, float, int]]:
-    """Group points by exact x value -> (x, pass_rate, n)."""
-    by_x: dict[float, list[bool]] = {}
-    for p in points:
-        by_x.setdefault(p.x, []).append(p.passed)
-    out = []
-    for x in sorted(by_x):
-        vals = by_x[x]
-        out.append((x, sum(vals) / len(vals), len(vals)))
-    return out
+def _bucket_index(buckets: list[_Bucket], v: float) -> int | None:
+    """Which column `v` belongs to, or None if it falls outside every
+    bucket (only possible for exact-mode buckets)."""
+    if not buckets:
+        return None
+    if buckets[0].exact:
+        for i, b in enumerate(buckets):
+            if b.lo == v:
+                return i
+        return None
+    # Range mode: bisect on the upper edges.
+    uppers = [b.hi for b in buckets]
+    i = bisect.bisect_left(uppers, v)
+    if i >= len(buckets):
+        i = len(buckets) - 1
+    return i
 
 
-def _svg_chart(
-    title: str,
-    series: dict[str, list[tuple[float, float, int]]],
-    boundaries: dict[str, float],
-    draw_title: bool = True,
-) -> str:
-    """Build one inline SVG line chart: pass rate (y, 0..1) vs dim value (x).
+def _bucket_fraction(buckets: list[_Bucket], v: float) -> float | None:
+    """Continuous column position of `v` (e.g. 2.4 = 40% into column 2),
+    used to place a fitted boundary between columns rather than snapping
+    it to one. None when `v` sits outside the plotted range."""
+    if not buckets:
+        return None
+    if v < buckets[0].lo or v > buckets[-1].hi:
+        return None
+    i = _bucket_index(buckets, v)
+    if i is None:
+        return None
+    b = buckets[i]
+    span = b.hi - b.lo
+    if span <= 0:
+        return float(i)
+    return i - 0.5 + (v - b.lo) / span
 
-    `series`: model_short_name -> [(x, pass_rate, n), ...] sorted by x.
-    `boundaries`: model_short_name -> logistic-fit midpoint x (if any),
-    drawn as a vertical dashed line labeled with the value.
-    """
-    all_xs = [x for pts in series.values() for x, _, _ in pts]
-    if not all_xs:
-        return f"<p>{html.escape(title)}: no data.</p>"
 
-    x_lo, x_hi = min(all_xs), max(all_xs)
-    x_span = (x_hi - x_lo) or 1.0
+# ---------------------------------------------------------------------------
+# Data assembly
+# ---------------------------------------------------------------------------
 
-    def sx(x: float) -> float:
-        return _MARGIN + (x - x_lo) / x_span * (_CHART_W - 2 * _MARGIN)
 
-    def sy(rate: float) -> float:
-        return _CHART_H - _MARGIN - rate * (_CHART_H - 2 * _MARGIN)
+@dataclass
+class _Pane:
+    """Everything needed to draw both views of one (kind, dim) selection."""
 
-    parts = [
-        f'<svg viewBox="0 0 {_CHART_W} {_CHART_H}" xmlns="http://www.w3.org/2000/svg" '
-        f'width="{_CHART_W}" height="{_CHART_H}">',
-        f'<rect x="0" y="0" width="{_CHART_W}" height="{_CHART_H}" fill="{_CHART_BG}" '
-        f'stroke="{_CHART_BORDER}"/>',
-        # axes
-        f'<line x1="{_MARGIN}" y1="{_CHART_H - _MARGIN}" x2="{_CHART_W - _MARGIN}" '
-        f'y2="{_CHART_H - _MARGIN}" stroke="{_CHART_AXIS}"/>',
-        f'<line x1="{_MARGIN}" y1="{_MARGIN}" x2="{_MARGIN}" '
-        f'y2="{_CHART_H - _MARGIN}" stroke="{_CHART_AXIS}"/>',
-        (
-            f'<text x="{_MARGIN}" y="20" font-size="14" fill="{_CHART_TEXT}" '
-            f'font-family="sans-serif">{html.escape(title)}</text>'
-            if draw_title
-            else ""
-        ),
-        f'<text x="{_MARGIN - 10}" y="{_MARGIN - 5}" font-size="10" fill="{_CHART_AXIS}" '
-        'text-anchor="start" font-family="sans-serif">1.0</text>',
-        f'<text x="{_MARGIN - 10}" y="{_CHART_H - _MARGIN + 5}" font-size="10" fill="{_CHART_AXIS}" '
-        'text-anchor="start" font-family="sans-serif">0.0</text>',
+    kind: str
+    dim: str
+    models: list[str]
+    buckets: list[_Bucket]
+    cells: dict[tuple[str, int], _Cell]
+    fits: dict[str, float]          # model -> midpoint, observed-range only
+    raw_fits: dict[str, float]      # model -> midpoint, including extrapolated
+    n_records: int
+
+
+def _campaign_records(store: ResultsStore) -> list:
+    from ..store.store import _row_to_record
+
+    cur = store._conn.execute("SELECT * FROM experiments")
+    return [
+        r
+        for r in (_row_to_record(row) for row in cur.fetchall())
+        if r.run_id.startswith(_CAMPAIGN_RUN_PREFIX)
     ]
 
-    legend_y = 34
-    for i, (model, pts) in enumerate(sorted(series.items())):
-        has_boundary = boundaries.get(model) is not None
-        color = _LINE_COLOR_BOUNDARY if has_boundary else _LINE_COLOR_NEUTRAL
-        stroke_width = "2.5" if has_boundary else "1.5"
-        poly_points = " ".join(f"{sx(x):.1f},{sy(rate):.1f}" for x, rate, _ in pts)
-        parts.append(
-            f'<polyline points="{poly_points}" fill="none" stroke="{color}" '
-            f'stroke-width="{stroke_width}"/>'
-        )
-        for x, rate, n in pts:
-            parts.append(
-                f'<circle cx="{sx(x):.1f}" cy="{sy(rate):.1f}" r="3" fill="{color}">'
-                f'<title>{html.escape(model)} x={x} rate={rate:.2f} n={n}</title></circle>'
-            )
-        legend_x = _CHART_W - 150
-        parts.append(
-            f'<rect x="{legend_x}" y="{legend_y - 8}" width="10" height="10" fill="{color}"/>'
-            f'<text x="{legend_x + 14}" y="{legend_y}" font-size="11" fill="{_CHART_TEXT}" '
-            f'font-family="sans-serif">{html.escape(model)}</text>'
-        )
-        legend_y += 16
 
-        mid = boundaries.get(model)
-        if mid is not None and x_lo <= mid <= x_hi:
-            bx = sx(mid)
+def _menu(records: list) -> dict[str, dict[str, int]]:
+    """kind -> dim -> how many records carry that dim. Drives the two
+    selectors (and their counts) without building every pane."""
+    out: dict[str, dict[str, int]] = {}
+    for r in records:
+        kind = _query_kind_of(r)
+        dims = out.setdefault(kind, {})
+        for d in r.realized_dims:
+            dims[d] = dims.get(d, 0) + 1
+    return out
+
+
+def _all_panes(records: list, menu: dict[str, dict[str, int]]) -> dict[tuple[str, str], _Pane]:
+    """Every (kind, dim) pane, built once. Used for the frontier count,
+    the default selection and the selected pane itself, so those three
+    can never be computed from different bucketings."""
+    out: dict[tuple[str, str], _Pane] = {}
+    for kind, dims in menu.items():
+        for dim in dims:
+            pane = _build_pane(records, kind, dim)
+            if pane is not None:
+                out[(kind, dim)] = pane
+    return out
+
+
+_DENSE_CELL_N = 10
+
+
+def _pane_rank(pane: _Pane) -> tuple:
+    """How good a first impression a pane makes.
+
+    Ranking by record count is useless here: in this store every record
+    carries all five dims, so all five dims of a kind tie at n=689 and
+    the winner is whichever dict order happens to surface. Ranking by
+    bucket COUNT is little better -- a dim the scheduler barely moved can
+    still produce six exact-value buckets with five trials in each.
+
+    What makes a readable map is cells with enough trials behind them to
+    be worth comparing, so that is the primary key: how many cells clear
+    `_DENSE_CELL_N`. Fitted frontiers break ties (a dim where something
+    actually broke beats one where nothing did), then raw trials, then
+    the dim name so the choice is deterministic.
+    """
+    dense = sum(1 for c in pane.cells.values() if c.n_scored >= _DENSE_CELL_N)
+    return (dense, len(pane.fits), pane.n_records, pane.dim)
+
+
+def _default_selection(panes: dict[tuple[str, str], _Pane]) -> tuple[str, str]:
+    if not panes:
+        return "", ""
+    key = max(panes, key=lambda k: _pane_rank(panes[k]))
+    return key[0], key[1]
+
+
+def _build_pane(records: list, kind: str, dim: str) -> _Pane | None:
+    subset = [r for r in records if _query_kind_of(r) == kind and dim in r.realized_dims]
+    if not subset:
+        return None
+
+    buckets = _build_buckets([float(r.realized_dims[dim]) for r in subset])
+    if not buckets:
+        return None
+
+    cells: dict[tuple[str, int], _Cell] = {}
+    points_by_model: dict[str, list[_Point]] = {}
+    for r in subset:
+        model = _short_model_name(r.model_name)
+        v = float(r.realized_dims[dim])
+        idx = _bucket_index(buckets, v)
+        if idx is None:
+            continue
+        cell = cells.setdefault((model, idx), _Cell())
+        name = r.verdict.name
+        if name in ("PASS", "FAIL"):
+            cell.n_scored += 1
+            if name == "PASS":
+                cell.n_pass += 1
+            points_by_model.setdefault(model, []).append(_Point(v, name == "PASS"))
+        else:
+            cell.n_error += 1
+
+    # Drop columns nothing landed in (exact-mode buckets built from the
+    # pooled population can be empty for an individual selection).
+    used = sorted({i for (_m, i) in cells})
+    if not used:
+        return None
+    remap = {old: new for new, old in enumerate(used)}
+    buckets = [buckets[i] for i in used]
+    cells = {(m, remap[i]): c for (m, i), c in cells.items()}
+
+    fits: dict[str, float] = {}
+    raw_fits: dict[str, float] = {}
+    for model, pts in points_by_model.items():
+        fit = fit_logistic([(p.x, p.passed) for p in pts])
+        if fit is None:
+            continue
+        raw_fits[model] = fit.midpoint
+        if buckets[0].lo <= fit.midpoint <= buckets[-1].hi:
+            fits[model] = fit.midpoint
+
+    models = sorted({m for (m, _i) in cells})
+    # Worst overall first: the reader should meet the model that breaks
+    # before the one that doesn't.
+    def _overall(m: str) -> float:
+        scored = sum(c.n_scored for (mm, _i), c in cells.items() if mm == m)
+        passed = sum(c.n_pass for (mm, _i), c in cells.items() if mm == m)
+        return (passed / scored) if scored else 1.0
+
+    models.sort(key=lambda m: (_overall(m), m))
+    return _Pane(kind, dim, models, buckets, cells, fits, raw_fits, len(subset))
+
+
+def _focal_model(pane: _Pane) -> str | None:
+    """The one series that gets hue. Focal-point discipline (design-notes
+    + the admin-dashboard reference: every bar identical except the one
+    that IS the point) applied along the axis this page is actually about
+    -- not "most recent" but "breaks earliest". The model whose fitted
+    frontier sits at the lowest difficulty is the finding; everything else
+    is context and stays achromatic."""
+    if not pane.fits:
+        return None
+    return min(pane.fits, key=lambda m: pane.fits[m])
+
+
+# ---------------------------------------------------------------------------
+# Rendering
+# ---------------------------------------------------------------------------
+
+
+def _cell_fill(rate: float | None) -> str:
+    """Achromatic luminance ramp down to the break threshold, trap red
+    below it. One hue total; the ramp itself carries magnitude."""
+    if rate is None:
+        return "none"
+    if rate >= _BREAK_THRESHOLD:
+        # 0.60 -> faintest, 1.00 -> brightest. Kept low-contrast on
+        # purpose: a passing cell is background, not signal.
+        t = (rate - _BREAK_THRESHOLD) / (1.0 - _BREAK_THRESHOLD)
+        alpha = 0.05 + 0.13 * t
+        return f"rgba(231,229,226,{alpha:.3f})"
+    t = 1.0 - (rate / _BREAK_THRESHOLD)  # 0 at threshold, 1 at zero pass
+    alpha = 0.16 + 0.44 * t
+    return f"rgba(196,84,75,{alpha:.3f})"
+
+
+def _cell_text_color(rate: float | None) -> str:
+    if rate is None:
+        return _INK_MUTED
+    return _INK if rate < _BREAK_THRESHOLD else _INK_SECONDARY
+
+
+def _trials_href(kind: str, dim: str, bucket_i: int, model: str | None = None) -> str:
+    params = {"kind": kind, "dim": dim, "b": str(bucket_i)}
+    if model:
+        params["model"] = model
+    return "/trials?" + urlencode(params)
+
+
+def _heatmap_svg(pane: _Pane) -> str:
+    """Models (rows) x difficulty buckets (columns), cell = scored pass
+    rate. Each cell is a focusable <a> that drills into its trials and
+    carries both a native <title> (works with JS off) and a data-tip (the
+    styled readout the inline JS shows)."""
+    n_cols = len(pane.buckets)
+    n_rows = len(pane.models)
+    width = _LABEL_W + n_cols * _CELL_W + 8
+    height = _HEAT_TOP + n_rows * _CELL_H + 30
+    focal = _focal_model(pane)
+
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
+        f'xmlns="http://www.w3.org/2000/svg" role="img" '
+        f'aria-label="Pass rate by model and {html.escape(pane.dim)} bucket">'
+    ]
+
+    # Column headers.
+    for c, b in enumerate(pane.buckets):
+        cx = _LABEL_W + c * _CELL_W + _CELL_W / 2
+        parts.append(
+            f'<text x="{cx:.1f}" y="{_HEAT_TOP - 12}" font-size="10.5" fill="{_INK_MUTED}" '
+            f'text-anchor="middle" font-family="monospace">{html.escape(b.label)}</text>'
+        )
+    parts.append(
+        f'<text x="{_LABEL_W}" y="12" font-size="9.5" fill="{_INK_MUTED}" '
+        f'font-family="monospace" letter-spacing="0.06em">'
+        f'{html.escape(pane.dim.upper())} → HARDER</text>'
+    )
+
+    for r_i, model in enumerate(pane.models):
+        y = _HEAT_TOP + r_i * _CELL_H
+        row_scored = sum(c.n_scored for (m, _i), c in pane.cells.items() if m == model)
+        row_pass = sum(c.n_pass for (m, _i), c in pane.cells.items() if m == model)
+        row_rate = (row_pass / row_scored) if row_scored else None
+        is_focal = model == focal
+        label_color = _CLAIM_BELIEF if is_focal else _INK_SECONDARY
+        label_weight = "650" if is_focal else "500"
+        parts.append(f'<g data-series="{html.escape(model)}">')
+        parts.append(
+            f'<text x="0" y="{y + _CELL_H / 2 - 2}" font-size="11.5" fill="{label_color}" '
+            f'font-family="monospace" font-weight="{label_weight}">'
+            f"{html.escape(model[:26])}</text>"
+        )
+        if row_rate is not None:
             parts.append(
-                f'<line x1="{bx:.1f}" y1="{_MARGIN}" x2="{bx:.1f}" '
-                f'y2="{_CHART_H - _MARGIN}" stroke="{color}" stroke-dasharray="4,3"/>'
+                f'<text x="0" y="{y + _CELL_H / 2 + 12}" font-size="9.5" fill="{_INK_MUTED}" '
+                f'font-family="monospace">overall {row_rate * 100:.0f}% · n={row_scored}</text>'
+            )
+
+        boundary_frac = _bucket_fraction(pane.buckets, pane.fits[model]) if model in pane.fits else None
+
+        for c_i, b in enumerate(pane.buckets):
+            cell = pane.cells.get((model, c_i))
+            x = _LABEL_W + c_i * _CELL_W
+            rate = cell.rate if cell else None
+            fill = _cell_fill(rate)
+            if cell is None or cell.n_scored == 0:
+                parts.append(
+                    f'<rect class="hc-bg" x="{x + 2}" y="{y + 2}" width="{_CELL_W - 4}" '
+                    f'height="{_CELL_H - 6}" fill="none" stroke="{_LINE}" '
+                    'stroke-dasharray="3 3" rx="2"/>'
+                    f'<text x="{x + _CELL_W / 2:.1f}" y="{y + _CELL_H / 2 + 3}" font-size="11" '
+                    f'fill="{_INK_MUTED}" text-anchor="middle" font-family="monospace">—</text>'
+                )
+                continue
+
+            tip = (
+                f"{model}|{pane.dim} {b.label}|pass {rate * 100:.1f}%  "
+                f"({cell.n_pass}/{cell.n_scored})"
+            )
+            if cell.n_error:
+                tip += f"|{cell.n_error} infra error(s)"
+            tip += "|click → these trials"
+            href = _trials_href(pane.kind, pane.dim, c_i, model)
+            parts.append(
+                f'<a class="heat-cell" href="{html.escape(href)}" '
+                f'data-tip="{html.escape(tip)}" tabindex="0">'
+                f"<title>{html.escape(f'{model} - {pane.dim} {b.label}: {rate * 100:.1f}% pass (n={cell.n_scored})')}</title>"
+                f'<rect class="hc-bg" x="{x + 2}" y="{y + 2}" width="{_CELL_W - 4}" '
+                f'height="{_CELL_H - 6}" fill="{fill}" stroke="{_LINE}" rx="2"/>'
+                f'<text x="{x + _CELL_W / 2:.1f}" y="{y + _CELL_H / 2 - 1}" font-size="13" '
+                f'font-weight="650" fill="{_cell_text_color(rate)}" text-anchor="middle" '
+                f'font-family="monospace">{rate * 100:.0f}%</text>'
+                f'<text x="{x + _CELL_W / 2:.1f}" y="{y + _CELL_H / 2 + 12}" font-size="9" '
+                f'fill="{_INK_MUTED}" text-anchor="middle" font-family="monospace">'
+                f"n={cell.n_scored}</text>"
+                "</a>"
+            )
+
+        # Fitted frontier: a single amber edge on this row, placed between
+        # columns. The ONE thing on the row allowed to be colored.
+        if boundary_frac is not None:
+            bx = _LABEL_W + (boundary_frac + 0.5) * _CELL_W
+            bx = max(_LABEL_W, min(_LABEL_W + n_cols * _CELL_W, bx))
+            frontier_title = html.escape(
+                f"{model}: fitted frontier at {pane.dim}={_fmt_num(pane.fits[model])}"
             )
             parts.append(
-                f'<text x="{bx:.1f}" y="{_MARGIN - 8}" font-size="9" text-anchor="middle" '
-                f'font-family="sans-serif" fill="{color}">{mid:.2f}</text>'
+                f'<line x1="{bx:.1f}" y1="{y + 1}" x2="{bx:.1f}" y2="{y + _CELL_H - 5}" '
+                f'stroke="{_CLAIM_BELIEF}" stroke-width="2">'
+                f"<title>{frontier_title}</title></line>"
             )
+        parts.append("</g>")
 
     parts.append("</svg>")
     return "".join(parts)
 
 
-def atlas_html(store: ResultsStore) -> str:
-    """Cross-model comparison across every `camp-*` run in `store`.
+def _curve_svg(pane: _Pane) -> str:
+    """Pass rate vs. difficulty bucket, one series per model. Same buckets
+    as the heatmap. Points are focusable links into their trials."""
+    n_cols = len(pane.buckets)
+    focal = _focal_model(pane)
+    plot_w = _CURVE_W - _CURVE_M_L - _CURVE_M_R
+    plot_h = _CURVE_H - _CURVE_M_T - _CURVE_M_B
 
-    Pure function: reads the whole `experiments` table, groups by
-    query_kind and dim, bins pass rate vs. dim value per model, fits a
-    logistic frontier per (model, dim) via `fit_logistic`, and renders one
-    SVG chart per (query_kind, dim) plus a model x query_kind summary
-    table. Returns a graceful "no campaign data" page if there are no
-    `camp-*` records at all.
+    def sx(col: float) -> float:
+        if n_cols <= 1:
+            return _CURVE_M_L + plot_w / 2
+        return _CURVE_M_L + (col / (n_cols - 1)) * plot_w
+
+    def sy(rate: float) -> float:
+        return _CURVE_M_T + (1.0 - rate) * plot_h
+
+    parts = [
+        f'<svg viewBox="0 0 {_CURVE_W} {_CURVE_H}" width="{_CURVE_W}" height="{_CURVE_H}" '
+        f'xmlns="http://www.w3.org/2000/svg" role="img" '
+        f'aria-label="Pass rate curve per model over {html.escape(pane.dim)}">'
+    ]
+
+    # Gridlines + y labels at 0 / 50 / 100%.
+    for frac, label in ((1.0, "100%"), (0.5, "50%"), (0.0, "0%")):
+        gy = sy(frac)
+        parts.append(
+            f'<line x1="{_CURVE_M_L}" y1="{gy:.1f}" x2="{_CURVE_M_L + plot_w}" y2="{gy:.1f}" '
+            f'stroke="{_LINE}"/>'
+            f'<text x="{_CURVE_M_L - 8}" y="{gy + 3.5:.1f}" font-size="10" fill="{_INK_MUTED}" '
+            f'text-anchor="end" font-family="monospace">{label}</text>'
+        )
+    # The break threshold is a real line in this product's vocabulary, so
+    # it is drawn, not implied.
+    ty = sy(_BREAK_THRESHOLD)
+    parts.append(
+        f'<line x1="{_CURVE_M_L}" y1="{ty:.1f}" x2="{_CURVE_M_L + plot_w}" y2="{ty:.1f}" '
+        f'stroke="{_TRAP}" stroke-opacity="0.45" stroke-dasharray="4 4"/>'
+        f'<text x="{_CURVE_M_L + plot_w + 6}" y="{ty + 3.5:.1f}" font-size="9" fill="{_TRAP}" '
+        f'fill-opacity="0.8" font-family="monospace">break</text>'
+    )
+
+    # X axis labels.
+    for c, b in enumerate(pane.buckets):
+        parts.append(
+            f'<text x="{sx(c):.1f}" y="{_CURVE_H - _CURVE_M_B + 18}" font-size="10" '
+            f'fill="{_INK_MUTED}" text-anchor="middle" font-family="monospace">'
+            f"{html.escape(b.label)}</text>"
+        )
+    parts.append(
+        f'<text x="{_CURVE_M_L + plot_w / 2:.1f}" y="{_CURVE_H - 8}" font-size="9.5" '
+        f'fill="{_INK_MUTED}" text-anchor="middle" font-family="monospace" '
+        f'letter-spacing="0.06em">{html.escape(pane.dim.upper())}</text>'
+    )
+
+    neutral_i = 0
+    for model in pane.models:
+        is_focal = model == focal
+        if is_focal:
+            color, dash, sw = _CLAIM_BELIEF, "", "2.4"
+        else:
+            color, sw = _INK_MUTED, "1.5"
+            dash = _NEUTRAL_DASHES[neutral_i % len(_NEUTRAL_DASHES)]
+            neutral_i += 1
+
+        pts = [
+            (c, pane.cells[(model, c)].rate)
+            for c in range(n_cols)
+            if (model, c) in pane.cells and pane.cells[(model, c)].n_scored
+        ]
+        if not pts:
+            continue
+
+        parts.append(f'<g class="series" data-series="{html.escape(model)}">')
+        if len(pts) >= 2:
+            poly = " ".join(f"{sx(c):.1f},{sy(rate):.1f}" for c, rate in pts)
+            dash_attr = f' stroke-dasharray="{dash}"' if dash else ""
+            parts.append(
+                f'<polyline points="{poly}" fill="none" stroke="{color}" '
+                f'stroke-width="{sw}" stroke-linejoin="round"{dash_attr}/>'
+            )
+
+        for c, rate in pts:
+            cell = pane.cells[(model, c)]
+            b = pane.buckets[c]
+            tip = (
+                f"{model}|{pane.dim} {b.label}|pass {rate * 100:.1f}%  "
+                f"({cell.n_pass}/{cell.n_scored})|click → these trials"
+            )
+            # Radius encodes sample size: a 5-trial point should not look
+            # as load-bearing as a 250-trial one.
+            radius = 3.0 + min(3.0, cell.n_scored / 60.0)
+            href = _trials_href(pane.kind, pane.dim, c, model)
+            parts.append(
+                f'<a class="series-dot" href="{html.escape(href)}" '
+                f'data-tip="{html.escape(tip)}" tabindex="0">'
+                f"<title>{html.escape(f'{model} - {pane.dim} {b.label}: {rate * 100:.1f}% pass (n={cell.n_scored})')}</title>"
+                f'<circle cx="{sx(c):.1f}" cy="{sy(rate):.1f}" r="{radius:.1f}" fill="{color}"/>'
+                "</a>"
+            )
+
+        # Direct end-of-line label -- beats a legend key the eye has to
+        # round-trip through.
+        last_c, last_rate = pts[-1]
+        parts.append(
+            f'<text x="{sx(last_c) + 9:.1f}" y="{sy(last_rate) + 3.5:.1f}" font-size="10" '
+            f'fill="{color}" font-family="monospace" '
+            f'font-weight="{"650" if is_focal else "400"}">{html.escape(model[:17])}</text>'
+        )
+
+        frac = _bucket_fraction(pane.buckets, pane.fits[model]) if model in pane.fits else None
+        if frac is not None and is_focal:
+            bx = sx(max(0.0, min(float(n_cols - 1), frac)))
+            parts.append(
+                f'<line x1="{bx:.1f}" y1="{_CURVE_M_T}" x2="{bx:.1f}" '
+                f'y2="{_CURVE_M_T + plot_h}" stroke="{color}" stroke-dasharray="4 3" '
+                'stroke-opacity="0.7"/>'
+                f'<text x="{bx:.1f}" y="{_CURVE_M_T - 6}" font-size="9" text-anchor="middle" '
+                f'font-family="monospace" fill="{color}">frontier {_fmt_num(pane.fits[model])}</text>'
+            )
+        parts.append("</g>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _legend_html(pane: _Pane) -> str:
+    """Per-model show/hide. Buttons, not links: they change how the SAME
+    plotted data is displayed, which is a view state, not a new view."""
+    focal = _focal_model(pane)
+    neutral_i = 0
+    items = []
+    for model in pane.models:
+        if model == focal:
+            swatch = _CLAIM_BELIEF
+        else:
+            swatch = _INK_MUTED
+            neutral_i += 1
+        items.append(
+            f'<button type="button" class="legend-toggle" aria-pressed="true" '
+            f'data-toggle-model="{html.escape(model)}">'
+            f'<span class="swatch" style="background:{swatch}"></span>'
+            f"{html.escape(model)}</button>"
+        )
+    return f'<div class="legend js-only">{"".join(items)}</div>'
+
+
+def _selector_html(
+    label: str, options: list[tuple[str, str, int]], active: str, param: str, other: tuple[str, str]
+) -> str:
+    """A segmented control of real links -- every selection has a URL and
+    survives a reload, and the page needs no JS to change what is plotted.
+
+    `options` is [(value, label, n_records)]; `other` is the (param,
+    value) pair to carry through unchanged.
     """
-    from .serve import _shell  # local import: avoid a circular import at module load
+    items = []
+    for value, text, n in options:
+        params = {other[0]: other[1], param: value}
+        href = "/atlas?" + urlencode(params)
+        cls = "seg-item active" if value == active else "seg-item"
+        aria = ' aria-current="true"' if value == active else ""
+        items.append(
+            f'<a class="{cls}" href="{html.escape(href)}"{aria} '
+            f'title="{n} record(s)">{html.escape(text)}</a>'
+        )
+    return (
+        f'<div class="control-row-item">'
+        f'<span class="control-label">{html.escape(label)}</span> '
+        f'<span class="seg-control">{"".join(items)}</span></div>'
+    )
 
-    cur = store._conn.execute("SELECT * FROM experiments")
-    from ..store.store import _row_to_record
 
-    all_records = [_row_to_record(row) for row in cur.fetchall()]
-    records = [r for r in all_records if r.run_id.startswith(_CAMPAIGN_RUN_PREFIX)]
+def atlas_html(store: ResultsStore, kind: str | None = None, dim: str | None = None) -> str:
+    """Cross-model atlas for one (query_kind, dimension) selection.
 
-    page_head = (
-        '<div class="page-head"><div class="page-head-main">'
-        "<h1>Cross-model atlas</h1>"
-        '<p class="subtitle">Pass rate vs. difficulty, per query kind and dimension, '
-        "compared across every model with campaign data in this store.</p>"
-        '</div><div class="page-head-actions">'
+    `kind`/`dim` come from `/atlas?kind=...&dim=...`; unknown or missing
+    values fall back to the densest varying selection, so the bare
+    `/atlas` URL (and every existing caller) still works.
+    """
+    from .serve import _rate_bar, _shell, _trial_count  # local: avoid a circular import
+
+    records = _campaign_records(store)
+
+    page_head_actions = (
+        '<div class="page-head-actions">'
         '<a class="cta-primary" href="/launch">Map another model &rarr;</a>'
-        "</div></div>"
+        "</div>"
     )
 
     if not records:
         body = (
-            f"{page_head}"
+            '<div class="page-head"><div class="page-head-main">'
+            "<h1>Cross-model atlas</h1>"
+            '<p class="subtitle">Where each model breaks, as a capability map.</p>'
+            f"</div>{page_head_actions}</div>"
             '<div class="empty-state"><p>No campaign data.</p>'
             '<p class="meta"><a href="/launch">Launch a campaign to populate this page &rarr;</a></p></div>'
         )
         return _shell("Cross-model atlas", "atlas", body)
 
-    # Group by query_kind -> model -> records.
-    by_kind_model: dict[str, dict[str, list]] = {}
-    for r in records:
-        kind = _query_kind_of(r)
-        model = _short_model_name(r.model_name)
-        by_kind_model.setdefault(kind, {}).setdefault(model, []).append(r)
+    menu = _menu(records)
+    panes = _all_panes(records, menu)
+    def_kind, def_dim = _default_selection(panes)
+    sel_kind = kind if kind in menu else def_kind
+    sel_dim = dim if (sel_kind, dim) in panes else None
+    if sel_dim is None:
+        if sel_kind == def_kind:
+            sel_dim = def_dim
+        else:
+            in_kind = {k: p for k, p in panes.items() if k[0] == sel_kind}
+            sel_dim = _default_selection(in_kind)[1] if in_kind else ""
 
-    # Discover every dim seen anywhere so charts cover every dim any model
-    # was probed on.
-    all_dims: dict[str, set[str]] = {}
-    for kind, by_model in by_kind_model.items():
-        dims: set[str] = set()
-        for recs in by_model.values():
-            for r in recs:
-                dims.update(r.realized_dims.keys())
-        all_dims[kind] = dims
+    pane = panes.get((sel_kind, sel_dim))
 
-    # Charts are composed as a two-up grid of cards per query kind, each
-    # card's header bar naming the dimension it plots and carrying the
-    # model count / how many of those models actually have a fitted
-    # boundary -- the chart's headline fact, which previously the reader
-    # had to infer from line color alone.
-    chart_sections = []
-    n_boundaries_total = 0
-    for kind in sorted(by_kind_model):
-        by_model = by_kind_model[kind]
-        kind_cards: list[str] = []
-        for dim in sorted(all_dims[kind]):
-            series: dict[str, list[tuple[float, float, int]]] = {}
-            boundaries: dict[str, float] = {}
-            for model, recs in by_model.items():
-                # Approximate baseline as the minimum observed value per
-                # dim for this model's records.
-                baseline: dict[str, float] = {}
-                for r in recs:
-                    for d, v in r.realized_dims.items():
-                        if d not in baseline or v < baseline[d]:
-                            baseline[d] = v
-                points = _one_dim_varied_points(recs, dim, baseline)
-                if not points:
-                    continue
-                binned = _bin_points(points)
-                if len(binned) < 1:
-                    continue
-                series[model] = binned
-
-                fit = fit_logistic([(p.x, p.passed) for p in points])
-                if fit is not None:
-                    boundaries[model] = fit.midpoint
-
-            if not series:
-                continue
-            svg = _svg_chart(f"{kind}: {dim}", series, boundaries, draw_title=False)
-            n_models_here = len(series)
-            n_bounds_here = len(boundaries)
-            n_boundaries_total += n_bounds_here
-            meta = f'{n_models_here} model{"" if n_models_here == 1 else "s"}'
-            if n_bounds_here:
-                meta += f" &middot; {n_bounds_here} boundary fit"
-            kind_cards.append(
-                '<div class="card"><div class="card-head">'
-                f'<span class="card-title">{html.escape(dim)}</span>'
-                f'<span class="card-meta">{meta}</span>'
-                '</div><div class="card-body">'
-                f'<div style="overflow-x:auto;">{svg}</div>'
-                "</div></div>"
-            )
-        if not kind_cards:
-            continue
-        chart_sections.append(f"<h2>Query kind: {html.escape(kind)}</h2>")
-        chart_sections.append(f'<div class="grid-2">{"".join(kind_cards)}</div>')
-
-    # Summary table: model x query_kind -> pass rate, n, total cost.
-    summary_rows: dict[tuple[str, str], dict] = {}
-    for r in records:
-        kind = _query_kind_of(r)
-        model = _short_model_name(r.model_name)
-        key = (model, kind)
-        agg = summary_rows.setdefault(key, {"n": 0, "pass": 0, "cost": 0.0})
-        agg["n"] += 1
-        agg["cost"] += r.cost_usd
-        if r.verdict.name == "PASS":
-            agg["pass"] += 1
-
-    table_rows = []
-    for (model, kind) in sorted(summary_rows):
-        agg = summary_rows[(model, kind)]
-        rate = (agg["pass"] / agg["n"] * 100.0) if agg["n"] else 0.0
-        table_rows.append(
-            "<tr>"
-            f'<td class="mono">{html.escape(model)}</td>'
-            f"<td>{html.escape(kind)}</td>"
-            f'<td class="num">{rate:.1f}%</td>'
-            f'<td class="num">{agg["n"]}</td>'
-            f'<td class="mono num">${agg["cost"]:.6f}</td>'
-            "</tr>"
-        )
-    summary_table = (
-        "<table><thead><tr><th>model</th><th>query_kind</th><th class=\"num\">pass rate</th>"
-        "<th class=\"num\">n</th><th class=\"num\">total cost</th></tr></thead><tbody>"
-        + "".join(table_rows)
-        + "</tbody></table>"
+    kind_options = [
+        (k, k, sum(dims.values())) for k, dims in sorted(menu.items())
+    ]
+    dim_options = [
+        (d, d, n) for d, n in sorted(menu.get(sel_kind, {}).items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    controls = (
+        '<div class="control-row">'
+        + _selector_html("Query kind", kind_options, sel_kind, "kind", ("dim", sel_dim))
+        + _selector_html("Dimension", dim_options, sel_dim, "dim", ("kind", sel_kind))
+        + "</div>"
     )
 
-    n_models_total = len({model for (model, _kind) in summary_rows})
-    n_pass_total = sum(agg["pass"] for agg in summary_rows.values())
-    n_total = sum(agg["n"] for agg in summary_rows.values())
-    atlas_rate = (n_pass_total / n_total * 100.0) if n_total else 0.0
+    # Headline stats, computed across the WHOLE store (they describe the
+    # atlas, not the current selection).
+    summary_rows: dict[tuple[str, str], dict] = {}
+    for r in records:
+        key = (_short_model_name(r.model_name), _query_kind_of(r))
+        agg = summary_rows.setdefault(key, {"n": 0, "pass": 0, "scored": 0, "cost": 0.0})
+        agg["n"] += 1
+        agg["cost"] += r.cost_usd
+        if r.verdict.name in ("PASS", "FAIL"):
+            agg["scored"] += 1
+            if r.verdict.name == "PASS":
+                agg["pass"] += 1
+
+    n_models_total = len({m for (m, _k) in summary_rows})
+    n_pass_total = sum(a["pass"] for a in summary_rows.values())
+    n_scored_total = sum(a["scored"] for a in summary_rows.values())
+    n_total = sum(a["n"] for a in summary_rows.values())
+    atlas_rate = (n_pass_total / n_scored_total * 100.0) if n_scored_total else 0.0
+
+    # Boundaries across every (kind, dim, model) -- the count of real
+    # frontiers this store has located, in-range fits only.
+    n_boundaries_total = sum(len(p.fits) for p in panes.values())
+
     stat_grid = (
         '<div class="stat-grid">'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_models_total}</div></div>'
         '<div class="stat-label">Models compared</div></div>'
-        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(by_kind_model)}</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(menu)}</div></div>'
         '<div class="stat-label">Query kinds</div></div>'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{atlas_rate:.0f}%</div>'
-        f'<div class="stat-delta">{n_pass_total:,}/{n_total:,}</div></div>'
+        f'<div class="stat-delta">{n_pass_total:,}/{n_scored_total:,}</div></div>'
         '<div class="stat-label">Campaign pass rate</div></div>'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_boundaries_total}</div></div>'
         '<div class="stat-label">Boundaries fitted</div></div>'
         "</div>"
     )
 
+    if pane is None:
+        pane_html = (
+            '<div class="empty-state"><p>No trials recorded for '
+            f"{html.escape(sel_kind)} / {html.escape(sel_dim)}.</p></div>"
+        )
+    else:
+        focal = _focal_model(pane)
+        if focal:
+            headline = (
+                f"{html.escape(focal)} crosses its fitted frontier first, at "
+                f"{html.escape(pane.dim)} = {_fmt_num(pane.fits[focal])}."
+            )
+        else:
+            headline = "No model crosses a fitted frontier on this dimension — nothing broke here."
+        n_cells = len(pane.cells)
+        pane_html = (
+            '<div class="card instrument"><div class="card-head">'
+            f'<span class="card-title">Capability map &middot; {html.escape(pane.kind)} / {html.escape(pane.dim)}</span>'
+            f'<span class="card-meta">{len(pane.models)} models &times; {len(pane.buckets)} buckets '
+            f"&middot; {pane.n_records:,} trials</span>"
+            '</div><div class="card-body">'
+            f'<p class="meta" style="margin:0 0 var(--sp-3);">{headline} '
+            "Darker red = lower pass rate. Click any cell for the trials behind it.</p>"
+            f'<div class="chart-wrap">{_heatmap_svg(pane)}</div>'
+            f"{_legend_html(pane)}"
+            f'<p class="heat-note">{n_cells} populated cells &middot; '
+            f"{len(pane.fits)} fitted frontier(s) in range &middot; hover a cell for exact counts</p>"
+            "</div></div>"
+            '<div class="card instrument"><div class="card-head">'
+            '<span class="card-title">Degradation curve &middot; model vs. model</span>'
+            f'<span class="card-meta">same buckets</span>'
+            '</div><div class="card-body">'
+            '<p class="meta" style="margin:0 0 var(--sp-3);">The same cells as slopes, for reading two '
+            "models against each other. Toggle a model off to narrow the comparison.</p>"
+            f'<div class="chart-wrap">{_curve_svg(pane)}</div>'
+            f"{_legend_html(pane)}"
+            "</div></div>"
+        )
+
+    # Summary table: now a bar per rate, not a bare number.
+    table_rows = []
+    for (model, kind_name) in sorted(summary_rows):
+        agg = summary_rows[(model, kind_name)]
+        rate = (agg["pass"] / agg["scored"] * 100.0) if agg["scored"] else 0.0
+        sub = "{0}/{1}".format(agg["pass"], agg["scored"])
+        table_rows.append(
+            "<tr>"
+            f'<td class="mono">{html.escape(model)}</td>'
+            f'<td>{_chip_link(kind_name, sel_dim)}</td>'
+            f'<td class="num">{_rate_bar(rate, sub=sub, decimals=1)}</td>'
+            f'<td class="num">{agg["n"]}</td>'
+            f'<td class="mono num">${agg["cost"]:.6f}</td>'
+            "</tr>"
+        )
+    summary_table = (
+        '<table><thead><tr><th>model</th><th>query_kind</th><th class="num">pass rate</th>'
+        '<th class="num">n</th><th class="num">total cost</th></tr></thead><tbody>'
+        + "".join(table_rows)
+        + "</tbody></table>"
+    )
+
     body = (
-        page_head
+        '<div class="page-head"><div class="page-head-main">'
+        "<h1>Cross-model atlas</h1>"
+        '<p class="subtitle">Where each model breaks. Pick a query kind and a difficulty '
+        "dimension; every model with campaign data is binned into the same difficulty "
+        "buckets so the cells are directly comparable.</p>"
+        f"</div>{page_head_actions}</div>"
         + stat_grid
-        + "".join(chart_sections)
+        + controls
+        + pane_html
         + '<div class="card"><div class="card-head">'
         + '<span class="card-title">Summary &middot; model x query kind</span>'
         + f'<span class="card-meta">{len(summary_rows)} pairs</span>'
@@ -373,4 +876,141 @@ def atlas_html(store: ResultsStore) -> str:
         + summary_table
         + "</div>"
     )
-    return _shell("Cross-model atlas", "atlas", body)
+    return _shell("Cross-model atlas", "atlas", body, trial_count=_trial_count(store))
+
+
+def _chip_link(kind_name: str, current_dim: str) -> str:
+    from .serve import _chip
+
+    return _chip(kind_name, "chip-muted", href="/atlas?" + urlencode({"kind": kind_name, "dim": current_dim}))
+
+
+# ---------------------------------------------------------------------------
+# /trials -- the drill-down target every heatmap cell and curve point
+# links to. Same bucketing code path as the chart, so a cell claiming
+# "43%  n=124" and the list it opens can never disagree.
+# ---------------------------------------------------------------------------
+
+_TRIALS_LIMIT = 200
+
+
+def trials_html(store: ResultsStore, params: dict[str, str]) -> str:
+    from .serve import (
+        _chip,
+        _chip_set,
+        _claim_strip,
+        _parse_verifier_detail,
+        _rate_bar,
+        _shell,
+        _short_answer,
+        _trial_count,
+    )
+
+    kind = params.get("kind", "")
+    dim = params.get("dim", "")
+    model = params.get("model", "")
+    try:
+        bucket_i = int(params.get("b", ""))
+    except (TypeError, ValueError):
+        bucket_i = -1
+
+    records = _campaign_records(store)
+    pane = _build_pane(records, kind, dim) if (kind and dim) else None
+
+    back = f'<a href="/atlas?{html.escape(urlencode({"kind": kind, "dim": dim}))}">Atlas</a>'
+    breadcrumb = f"{back}<span class=\"sep\">/</span>trials"
+
+    if pane is None or not (0 <= bucket_i < len(pane.buckets)):
+        body = (
+            '<div class="page-head"><div class="page-head-main"><h1>Trials</h1>'
+            '<p class="subtitle">That slice of the atlas does not exist in this store.</p>'
+            '</div></div><div class="empty-state"><p>No such selection.</p>'
+            '<p class="meta"><a href="/atlas">Back to the atlas &rarr;</a></p></div>'
+        )
+        return _shell("Trials", "atlas", body, breadcrumb=breadcrumb, trial_count=_trial_count(store))
+
+    bucket = pane.buckets[bucket_i]
+    matched = []
+    for r in records:
+        if _query_kind_of(r) != kind or dim not in r.realized_dims:
+            continue
+        if model and _short_model_name(r.model_name) != model:
+            continue
+        if _bucket_index(pane.buckets, float(r.realized_dims[dim])) != bucket_i:
+            continue
+        matched.append(r)
+
+    n_scored = sum(1 for r in matched if r.verdict.name in ("PASS", "FAIL"))
+    n_pass = sum(1 for r in matched if r.verdict.name == "PASS")
+    rate = (n_pass / n_scored * 100.0) if n_scored else 0.0
+
+    rows = []
+    for r in matched[:_TRIALS_LIMIT]:
+        detail = _parse_verifier_detail(r.verifier_detail)
+        answer = _short_answer(r.response_text, max_chars=56)
+        if r.verdict.name == "PASS":
+            evidence = f'answered <b>"{html.escape(answer)}"</b>' if answer else "matched ground truth"
+        elif r.verdict.name == "FAIL":
+            evidence = f'answered <b>"{html.escape(answer)}"</b>' if answer else None
+        else:
+            evidence = html.escape(detail.get("error", "") or r.finish_reason or "infra failure")
+        # PASS rows carry no edge and no class attribute at all -- see
+        # _CSS section 13 on why an edge on every row is no edge.
+        sev = {"FAIL": "row-sev row-sev-fail", "ERROR": "row-sev row-sev-error"}.get(r.verdict.name, "")
+        row_attr = f' class="{sev}"' if sev else ""
+        traps = _chip_set(detail.get("traps", ""), "chip-trap")
+        rows.append(
+            f"<tr{row_attr}>"
+            f'<td class="mono">{html.escape(_short_model_name(r.model_name))}</td>'
+            f'<td class="claim-cell">{_claim_strip(r.verdict.name, evidence)}</td>'
+            f'<td class="mono num">{_fmt_num(float(r.realized_dims[dim]))}</td>'
+            f"<td>{traps or _chip(detail.get('sim', ''), 'chip-muted')}</td>"
+            f'<td class="mono"><a href="/run/{html.escape(r.run_id)}">{html.escape(r.run_id)}</a></td>'
+            f'<td><a href="/record/{html.escape(r.record_id)}">transcript &rarr;</a></td>'
+            "</tr>"
+        )
+
+    truncated = (
+        f'<p class="meta">Showing the first {_TRIALS_LIMIT} of {len(matched):,} matching trials.</p>'
+        if len(matched) > _TRIALS_LIMIT
+        else ""
+    )
+    who = _chip(model or "all models", "chip-muted")
+    body = (
+        '<div class="page-head"><div class="page-head-main">'
+        f"<h1>Trials &middot; {html.escape(dim)} {html.escape(bucket.label)}</h1>"
+        f'<p class="subtitle">Every {html.escape(kind)} trial behind one cell of the atlas: '
+        f"{html.escape(dim)} in {html.escape(bucket.label)}.</p>"
+        f'<p class="meta">{who} {_chip(kind, "chip-muted")} '
+        f'{_chip(f"{dim} {bucket.label}", "chip-muted")}</p>'
+        '</div><div class="page-head-actions">'
+        f'<a href="/atlas?{html.escape(urlencode({"kind": kind, "dim": dim}))}">&larr; back to the map</a>'
+        "</div></div>"
+        '<div class="stat-grid">'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(matched):,}</div></div>'
+        '<div class="stat-label">Trials in this cell</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{rate:.0f}%</div>'
+        f'<div class="stat-delta">{n_pass:,}/{n_scored:,} scored</div></div>'
+        '<div class="stat-label">Pass rate</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">'
+        f'{len({_short_model_name(r.model_name) for r in matched})}</div></div>'
+        '<div class="stat-label">Models</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">'
+        f'${sum(r.cost_usd for r in matched):.4f}</div></div>'
+        '<div class="stat-label">Cell cost</div></div>'
+        "</div>"
+        '<div class="card"><div class="card-head">'
+        '<span class="card-title">Trials</span>'
+        f'<span class="card-meta">{_rate_bar(rate, sub=f"{n_pass}/{n_scored}")}</span>'
+        "</div>"
+        '<table><thead><tr><th>model</th><th>verdict</th>'
+        f'<th class="num">{html.escape(dim)}</th><th>seeded traps</th><th>run</th><th></th>'
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
+        + truncated
+    )
+    return _shell(
+        f"Trials {dim} {bucket.label}", "atlas", body, breadcrumb=breadcrumb, trial_count=_trial_count(store)
+    )
+
+
+__all__ = ["atlas_html", "trials_html"]

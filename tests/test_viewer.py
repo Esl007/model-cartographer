@@ -6,6 +6,7 @@ plain functions over a `ResultsStore`, tested directly.
 
 from __future__ import annotations
 
+import re
 import threading
 
 import pytest
@@ -187,9 +188,18 @@ def test_record_html_escapes_script_in_response_text(tmp_path):
     store, r1, r2, r3 = _seed_store(tmp_path)
     page = record_html(store, r2.record_id)
 
-    assert "<script>" not in page
+    # The shell now ships ONE trusted inline <script> (the chart
+    # interaction layer, serve._INSTRUMENT_JS). Strip the shell's own
+    # script blocks before asserting, so this test keeps checking exactly
+    # what it always checked -- that attacker-controlled response text can
+    # never introduce a tag -- instead of silently degrading into "the app
+    # contains no JavaScript", which is a different (and now false) claim.
+    outside_trusted_scripts = re.sub(r"<script>.*?</script>", "", page, flags=re.DOTALL)
+    assert "<script>" not in outside_trusted_scripts
     assert "&lt;script&gt;" in page
     assert "alert(" in page  # content still present, just escaped
+    # And specifically: the injected payload is never live markup.
+    assert "<script>alert(" not in page
 
 
 def test_record_html_contains_reasoning_inside_details(tmp_path):
@@ -714,7 +724,7 @@ def test_nav_present_on_every_page(tmp_path):
     pages = [
         index_html(store),
         runs_html(store),
-        findings_html(),
+        findings_html(store),
         coverage_html(),
         run_html(store, "run-a"),
         record_html(store, r1.record_id),
@@ -727,10 +737,19 @@ def test_nav_present_on_every_page(tmp_path):
 
 
 def test_findings_page_lists_the_four_modes(tmp_path):
+    """The curated 'Documented findings' section survives the move to a
+    data-derived page: these are causal results (a pronoun ablation, a
+    renderer-bug retraction, a strategic escalation-vs-traps comparison)
+    that no aggregate over pass/fail columns can reproduce, so they are
+    still rendered verbatim -- now in their own labelled section beneath
+    the derived capability map."""
     from cartographer.viewer.findings import findings_html
 
-    page = findings_html()
+    store, _r1, _r2, _r3 = _seed_store(tmp_path)
+    page = findings_html(store)
     assert "Findings" in page
+    assert "Documented findings" in page
+    assert "curated &middot; not auto-derived" in page
     # belief -> reality collapse (witness-rendering bug, now corrected)
     assert "collapse" in page.lower()
     # Nano continuity-of-observation
@@ -809,4 +828,252 @@ def test_run_detail_page_verdict_panel_graceful_when_empty(tmp_path):
     store = ResultsStore(tmp_path / "empty.sqlite")
     page = run_html(store, "no-such-run")
     assert "No records found." in page
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# /atlas is an INSTRUMENT, not a picture: hover readout, per-model toggles,
+# a real selector, and a drill-down per cell.
+#
+# Background these assert against: the previous atlas filtered to records
+# that varied exactly one dim from a per-model baseline, which on real
+# adaptive-campaign data admitted 3-8 records per (model, dim) and binned
+# them to ONE x value -- a polyline with a single point, i.e. nothing.
+# Bucketing by quantile over every record of a query kind is what makes
+# the cells below exist at all, so these tests pin that down too.
+# ---------------------------------------------------------------------------
+
+
+def _atlas_pane(tmp_path):
+    from cartographer.viewer import atlas as atlas_mod
+
+    store, _records = _seed_atlas_store(tmp_path)
+    records = atlas_mod._campaign_records(store)
+    menu = atlas_mod._menu(records)
+    panes = atlas_mod._all_panes(records, menu)
+    return store, atlas_mod, panes
+
+
+def test_atlas_buckets_use_every_record_not_a_baseline_slice(tmp_path):
+    """Every campaign record of the selected kind lands in a cell."""
+    store, atlas_mod, panes = _atlas_pane(tmp_path)
+    pane = panes[("belief", "chain_length")]
+    binned = sum(c.n_scored + c.n_error for c in pane.cells.values())
+    assert binned == pane.n_records == 10  # 5 Model-A + 5 Model-B
+    store.close()
+
+
+def test_atlas_every_cell_has_a_tooltip_and_a_drilldown(tmp_path):
+    store, _records = _seed_atlas_store(tmp_path)
+    page = atlas_html(store, kind="belief", dim="chain_length")
+
+    n_cells = page.count('class="heat-cell"')
+    assert n_cells >= 2
+    # Each cell is a link into its own trials AND carries a hover readout.
+    assert page.count('href="/trials?') >= n_cells
+    assert page.count("data-tip=") >= n_cells
+    # ...and a native <title>, so the readout survives with JS off.
+    assert "<title>" in page
+    store.close()
+
+
+def test_atlas_legend_offers_a_toggle_for_every_model(tmp_path):
+    store, _records = _seed_atlas_store(tmp_path)
+    page = atlas_html(store, kind="belief", dim="chain_length")
+
+    for model in ("Model-A", "Model-B"):
+        assert f'data-toggle-model="{model}"' in page
+        # Series are tagged so a toggle has something to hide.
+        assert f'data-series="{model}"' in page
+    assert 'aria-pressed="true"' in page
+    store.close()
+
+
+def test_atlas_selectors_are_real_links_and_honour_query_params(tmp_path):
+    """Every view state has a URL -- the page needs no JS to change what
+    is plotted."""
+    store, _records = _seed_atlas_store(tmp_path)
+    page = atlas_html(store)
+    assert "kind=belief" in page
+    assert "dim=chain_length" in page
+    assert 'class="seg-item' in page
+
+    picked = atlas_html(store, kind="belief", dim="scramble")
+    assert "belief / scramble" in picked
+    assert 'aria-current="true"' in picked
+
+    # Garbage params fall back to the default pane rather than 500ing.
+    junk = atlas_html(store, kind="nope", dim="also-nope")
+    assert "Capability map" in junk
+    store.close()
+
+
+def test_atlas_focal_colour_marks_the_model_that_breaks_first(tmp_path):
+    """Focal-point discipline: hue goes to the model with the lowest
+    fitted frontier, not to every series."""
+    store, atlas_mod, panes = _atlas_pane(tmp_path)
+    pane = panes[("belief", "chain_length")]
+    # Model-A passes everywhere (no crossing -> no fit); Model-B breaks.
+    assert "Model-A" not in pane.fits
+    assert atlas_mod._focal_model(pane) == "Model-B"
+    store.close()
+
+
+def test_atlas_survives_one_model_one_bucket_and_empty_selections(tmp_path):
+    from cartographer.viewer import atlas as atlas_mod
+
+    store = ResultsStore(tmp_path / "thin_atlas.sqlite")
+    store.append_many([
+        ExperimentRecord(
+            run_id="camp-belief-solo-001",
+            model_name="solo/Only-Model",
+            latent_params={"chain_length": 3.0},
+            realized_dims={"chain_length": 3.0},
+            render_mode=RenderMode.TEMPLATE,
+            task_seed=1,
+            trial_seed=1,
+            verdict=Verdict.PASS,
+            verifier_detail="kind=belief;campaign=1",
+            tokens_in=1,
+            tokens_out=1,
+            cost_usd=0.0,
+            latency_ms=1.0,
+            finish_reason="stop",
+        )
+    ])
+    page = atlas_html(store)
+    assert "Only-Model" in page
+    assert "Capability map" in page
+    # One model, one bucket, one point: no polyline is drawn, but the page
+    # still renders a cell and does not raise.
+    assert page.count('class="heat-cell"') == 1
+
+    empty_pane = atlas_mod._build_pane(atlas_mod._campaign_records(store), "belief", "nope")
+    assert empty_pane is None
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# /trials -- the drill-down an atlas cell opens.
+# ---------------------------------------------------------------------------
+
+
+def test_trials_page_lists_the_records_behind_one_cell(tmp_path):
+    from cartographer.viewer.atlas import _campaign_records, _build_pane, trials_html
+
+    store, _records = _seed_atlas_store(tmp_path)
+    pane = _build_pane(_campaign_records(store), "belief", "chain_length")
+    last = len(pane.buckets) - 1
+
+    page = trials_html(
+        store, {"kind": "belief", "dim": "chain_length", "b": str(last), "model": "Model-B"}
+    )
+    assert "Trials" in page
+    assert "Model-B" in page
+    assert "Model-A" not in page.split("Trials in this cell")[-1]
+    # Every listed trial links to its own transcript.
+    assert "/record/" in page
+    # The cell's own pass rate is restated as a bar, not a bare number.
+    assert 'class="databar-fill"' in page
+    store.close()
+
+
+def test_trials_page_rejects_a_bogus_slice_gracefully(tmp_path):
+    from cartographer.viewer.atlas import trials_html
+
+    store, _records = _seed_atlas_store(tmp_path)
+    page = trials_html(store, {"kind": "belief", "dim": "chain_length", "b": "999"})
+    assert "No such selection" in page
+    page2 = trials_html(store, {})
+    assert "No such selection" in page2
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# Visual encoding: a rate is a bar + a number, not a bare number.
+# ---------------------------------------------------------------------------
+
+
+def test_rate_bar_width_tracks_the_rate_and_clamps(tmp_path):
+    from cartographer.viewer.serve import _rate_bar
+
+    assert "width:81.0%" in _rate_bar(81.0)
+    assert "width:0.0%" in _rate_bar(-5.0)       # clamped low
+    assert "width:100.0%" in _rate_bar(140.0)    # clamped high
+    assert "width:0.0%" in _rate_bar(float("nan"))
+    assert "width:0.0%" in _rate_bar("not a number")
+
+
+def test_rate_bar_colours_only_below_the_threshold():
+    from cartographer.viewer.serve import _RATE_WARN_THRESHOLD, _rate_bar
+
+    hot = _rate_bar(_RATE_WARN_THRESHOLD - 1)
+    cool = _rate_bar(_RATE_WARN_THRESHOLD + 1)
+    assert 'class="databar below"' in hot
+    assert 'class="databar below"' not in cool
+    # An explicit "magnitude only" bar is never coloured, either way.
+    assert "below" not in _rate_bar(5.0, threshold=None)
+    assert "full" not in _rate_bar(100.0, threshold=None)
+
+
+def test_sparkline_refuses_to_imply_a_trend_from_one_point():
+    from cartographer.viewer.serve import _sparkline, _verdict_seq_rates
+
+    assert _sparkline([]) == ""
+    assert _sparkline([0.5]) == ""
+    assert "<svg" in _sparkline([1.0, 0.5, 0.0])
+    # Fewer than four scored trials is not a trend.
+    assert _verdict_seq_rates(["PASS", "FAIL"]) == []
+    rates = _verdict_seq_rates(["PASS"] * 4 + ["FAIL"] * 4)
+    assert rates[0] == 1.0 and rates[-1] == 0.0
+
+
+def test_runs_table_renders_bars_and_status_chips(tmp_path):
+    store, r1, r2, r3 = _seed_store(tmp_path)
+    page = runs_html(store)
+
+    assert 'class="databar-fill"' in page
+    assert "33%" in page  # the exact number survives alongside the bar
+    assert 'class="chip ' in page
+    store.close()
+
+
+def test_run_table_marks_fail_and_error_rows_at_the_row_edge(tmp_path):
+    store, r1, r2, r3 = _seed_store(tmp_path)
+    page = run_html(store, "run-a")
+
+    # run-a is 1 PASS / 1 unverified FAIL / 1 ERROR.
+    assert '<tr class="row-sev row-sev-unverified">' in page
+    assert '<tr class="row-sev row-sev-error">' in page
+    # PASS rows get no edge -- an edge on every row means nothing.
+    # (Counted on the ROWS, not the page: the stylesheet naturally
+    # mentions the class names too.)
+    assert page.count('<tr class="row-sev') == 2
+    # Query kind is a chip now, not a bare cell.
+    assert 'class="chip chip-muted">state<' in page
+    store.close()
+
+
+def test_record_page_chips_categorical_metadata(tmp_path):
+    store, r1, r2, r3 = _seed_store(tmp_path)
+    page = record_html(store, r1.record_id)
+
+    assert 'class="chip-set"' in page
+    assert 'class="chip chip-muted">template<' in page   # render mode
+    assert 'class="chip chip-muted">state<' in page      # query kind
+    # The raw verifier_detail is still there -- chips summarize, not hide.
+    assert "kind=state;sim=same_category" in page
+    store.close()
+
+
+def test_shell_ships_the_interaction_layer_inline_and_offline(tmp_path):
+    """All JS is inline in the served HTML: no CDN, works from a local
+    server with no network."""
+    store, r1, r2, r3 = _seed_store(tmp_path)
+    page = atlas_html(store)
+
+    assert "<script>" in page and 'src=' not in page.split("<script>")[1]
+    assert "data-toggle-model" in page
+    # prefers-reduced-motion is respected for the one transition added.
+    assert "prefers-reduced-motion" in page
     store.close()

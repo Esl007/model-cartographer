@@ -41,9 +41,11 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable
 
+from ..confirm.replicate import next_replication_run_id, run_finding_replication
 from ..exec import client as client_mod
 from ..exec.client import GROQ, NEBIUS, Client, Provider
 from ..exec.evaluator import (
+    _KNOWN_KEYS,
     run_adversarial_belief_campaign,
     run_belief_campaign,
     run_breaking_point_campaign,
@@ -685,6 +687,146 @@ def _verify_now_thread(
         import sys
 
         sys.stderr.write(f"[launch] verify-now for {run_id} failed: {exc!r}\n")
+    finally:
+        with _lock:
+            _CURRENT_RUN = None
+
+
+# ---------------------------------------------------------------------------
+# "Replicate this finding" -- fresh-seed re-test of one derived finding from
+# /findings, triggered from that page.
+#
+# Same shape as handle_verify_now above, and deliberately so: a replication
+# is a small live campaign, so it takes the SAME one-at-a-time slot, the
+# SAME cancel_event, and the SAME "spawn a daemon thread with its own store
+# connection" pattern. The statistics are not reimplemented here either --
+# `cartographer.confirm.replicate.run_finding_replication` calls the Phase 7
+# `confirm_all` (Wilson intervals + Holm-Bonferroni) that decompose
+# hypotheses already go through.
+# ---------------------------------------------------------------------------
+
+_CFG_PREFIX = "cfg_"
+
+
+def parse_replication_config(form: dict[str, str]) -> dict[str, float]:
+    """Pull the `cfg_<knob>` hidden fields out of a /replicate POST body.
+
+    Unknown knob names are dropped rather than passed through: `_apply_config`
+    raises on an unrecognized key, and a form field is untrusted input even
+    on localhost.
+    """
+    out: dict[str, float] = {}
+    for name, raw in form.items():
+        if not name.startswith(_CFG_PREFIX):
+            continue
+        knob = name[len(_CFG_PREFIX):]
+        if knob not in _KNOWN_KEYS:
+            continue
+        try:
+            out[knob] = float(raw)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def handle_replicate_now(
+    form: dict[str, str], deps: LaunchDeps
+) -> tuple[bool, str]:
+    """Kick off a fresh-seed replication of one derived finding.
+
+    Returns `(started, run_id_or_html)`, mirroring `handle_start` /
+    `handle_verify_now`: on success the caller redirects to the new run's
+    page, on failure it renders the returned error/busy HTML.
+    """
+    global _CURRENT_RUN
+
+    provider_name = form.get("provider", "")
+    provider = _PROVIDERS.get(provider_name)
+    if provider is None:
+        return False, error_html(f"unknown provider: {provider_name}")
+
+    key = _resolve_key(provider_name, form.get("api_key", "").strip(), deps)
+    if not key:
+        return False, error_html(
+            f"no API key provided and none found in the env/ key file for {provider_name}"
+        )
+
+    store_model = form.get("model", "").strip()
+    api_model = (form.get("api_model", "") or store_model).strip()
+    query_kind = form.get("query_kind", "").strip() or "belief"
+    if not api_model:
+        return False, error_html("missing model")
+
+    failing_config = parse_replication_config(form)
+    if not failing_config:
+        return False, error_html(
+            "no failing configuration to replicate -- this finding has no "
+            "recorded latent params to re-run"
+        )
+
+    try:
+        cost_cap = float(form.get("cost_cap", "0.05") or "0.05")
+    except ValueError:
+        return False, error_html("cost cap must be numeric")
+    if cost_cap <= 0:
+        return False, error_html("cost cap must be greater than zero")
+
+    store = ResultsStore(deps.db_path)
+    try:
+        base_run_id = next_replication_run_id(store, api_model, query_kind)
+    finally:
+        store.close()
+
+    cancel_event = threading.Event()
+    with _lock:
+        if _CURRENT_RUN is not None:
+            return False, busy_html(_CURRENT_RUN["run_id"])
+        thread = threading.Thread(
+            target=_replicate_thread,
+            args=(
+                deps, provider, key, api_model, query_kind, failing_config,
+                base_run_id, cost_cap, cancel_event,
+            ),
+            name=f"replicate-{base_run_id}",
+            daemon=True,
+        )
+        _CURRENT_RUN = {"run_id": base_run_id, "thread": thread, "cancel_event": cancel_event}
+    thread.start()
+    return True, base_run_id
+
+
+def _replicate_thread(
+    deps: LaunchDeps,
+    provider: Provider,
+    key: str,
+    model: str,
+    query_kind: str,
+    failing_config: dict,
+    base_run_id: str,
+    cost_cap: float,
+    cancel_event: threading.Event,
+) -> None:
+    global _CURRENT_RUN
+    try:
+        store = ResultsStore(deps.db_path)
+        try:
+            campaign_client = deps.client_factory(provider, key)
+            run_finding_replication(
+                client=campaign_client,
+                model=model,
+                store=store,
+                query_kind=query_kind,
+                failing_config=failing_config,
+                base_run_id=base_run_id,
+                cost_cap=cost_cap,
+                cancel_event=cancel_event,
+            )
+        finally:
+            store.close()
+    except Exception as exc:  # never let this crash kill silently
+        import sys
+
+        sys.stderr.write(f"[launch] replication {base_run_id} failed: {exc!r}\n")
     finally:
         with _lock:
             _CURRENT_RUN = None

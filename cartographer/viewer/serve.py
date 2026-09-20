@@ -27,9 +27,9 @@ from ..report.verdict import run_verdict
 from ..store.schema import ExperimentRecord
 from ..store.store import ResultsStore
 from . import launch as launch_mod
-from .atlas import atlas_html
+from .atlas import atlas_html, trials_html
 from .coverage import coverage_html
-from .findings import findings_html
+from .findings import capability_trials_html, findings_html
 
 _DEFAULT_DB_PATH = "results/campaign.sqlite"
 _DEFAULT_PORT = 8788
@@ -725,6 +725,358 @@ button.btn-secondary:hover { color: var(--ink); border-color: var(--ink-muted); 
   color: var(--ink-muted); border: 1px solid var(--line-strong);
   text-decoration: line-through; text-decoration-color: var(--ink-muted);
 }
+
+/* ---------------------------------------------------------------------
+   13. VISUAL ENCODING -- data bars, sparklines, chips, row severity.
+
+   The diagnosis this section answers: every surface in this app rendered
+   quantities as digits in table cells. A bare "81%" makes the reader do
+   the comparison arithmetic themselves, row by row; a bar of length 81%
+   makes the comparison pre-attentive. The shipped references this design
+   derives from (admin-dashboard's in-cell progress meters, the
+   bug-tracker's left-edge severity bars) encode magnitude and criticality
+   visually and reserve digits for the exact value.
+
+   Focal-point discipline is preserved, NOT regressed into a rainbow: a
+   data bar is achromatic ink-secondary by DEFAULT and only takes
+   --verdict-fail-trap when the value crosses a threshold that means
+   something. The row edge is likewise colorless unless the row is a
+   finding. Nothing here introduces a new hue.
+   ------------------------------------------------------------------- */
+.databar-cell {
+  display: flex; align-items: center; gap: var(--sp-2); justify-content: flex-end;
+}
+th.num + td .databar-cell { justify-content: flex-end; }
+.databar {
+  position: relative; display: block; width: 58px; height: 6px; flex: none;
+  background: var(--line-strong); border-radius: 1px; overflow: hidden;
+}
+.databar-fill {
+  display: block; height: 100%; border-radius: 1px;
+  background: var(--ink-secondary);
+}
+.databar.below .databar-fill { background: var(--verdict-fail-trap); }
+.databar.full .databar-fill { background: var(--verdict-pass); }
+.databar-num {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: var(--fs-small); font-weight: 600; color: var(--ink);
+  min-width: 3.1em; text-align: right;
+}
+.databar-num.below { color: var(--verdict-fail-trap); }
+.databar-sub {
+  font-family: var(--mono); font-size: 10px; color: var(--ink-muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+/* Sparkline: a trend, not a chart -- no axes, no labels, terminal point
+   marked so "where it ended up" reads without a legend. */
+.sparkline { display: inline-block; vertical-align: middle; }
+.sparkline .spark-area { fill: rgba(255,255,255,0.055); }
+.sparkline .spark-line { fill: none; stroke: var(--ink-muted); stroke-width: 1.25; }
+.sparkline .spark-mid { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 2 2; }
+.sparkline .spark-last { fill: var(--claim-belief); }
+.spark-row { display: flex; align-items: center; gap: var(--sp-2); }
+.spark-row .spark-caption {
+  font-family: var(--mono); font-size: 10px; color: var(--ink-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+
+/* Chips: categorical metadata (query kind, trap kinds, render mode) that
+   used to be comma-joined prose. A chip is a bounded token you can scan
+   down a column; a comma-joined string is something you have to read. */
+.chip {
+  display: inline-flex; align-items: center; gap: 0.3em;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+  line-height: 1.6; padding: 0.1em 0.45em; border-radius: 2px;
+  background: var(--surface-instrument-2); color: var(--ink-secondary);
+  border: 1px solid var(--line); white-space: nowrap;
+}
+.chip-set { display: inline-flex; flex-wrap: wrap; gap: var(--sp-1); }
+.chip.chip-trap { color: var(--claim-belief); border-color: var(--claim-belief-dim); }
+.chip.chip-live { color: var(--claim-belief); border-color: var(--claim-belief-dim); }
+.chip.chip-live::before { content: "\\25CF"; font-size: 8px; }
+.chip.chip-done::before { content: "\\2713"; font-size: 9px; color: var(--ink-muted); }
+.chip.chip-muted { color: var(--ink-muted); }
+a.chip:hover { border-color: var(--claim-belief-dim); color: var(--claim-belief); text-decoration: none; }
+
+/* Row severity: the bug-tracker reference puts a colored bar on the LEFT
+   EDGE of a row so criticality reads before any text does. Applied here
+   to the verdict axis, and deliberately NOT applied to PASS rows -- if
+   every row has an edge, no edge means anything. */
+tbody tr.row-sev td:first-child { box-shadow: inset 3px 0 0 0 transparent; }
+tbody tr.row-sev-fail td:first-child { box-shadow: inset 3px 0 0 0 var(--verdict-fail-trap); }
+tbody tr.row-sev-unverified td:first-child { box-shadow: inset 3px 0 0 0 var(--claim-belief-dim); }
+tbody tr.row-sev-error td:first-child { box-shadow: inset 3px 0 0 0 var(--verdict-error-infra); }
+tbody tr:hover { background: var(--surface-instrument-2); }
+tbody tr:focus-within { background: var(--surface-instrument-2); outline: 1px solid var(--line-strong); }
+
+/* ---------------------------------------------------------------------
+   14. INSTRUMENT -- the interactive chart surface on /atlas.
+
+   Controls are real <a> links first (every view state has a URL and
+   works with JS off); the JS layer below adds hover readout and series
+   toggling on top. `.js-only` affordances are hidden until the inline
+   script sets `.js` on <html>, so a no-JS reader is never shown a dead
+   button.
+   ------------------------------------------------------------------- */
+.js-only { display: none !important; }
+.js .legend.js-only, .js .chip-set.js-only, .js .seg-control.js-only { display: inline-flex !important; }
+.js .block-js-only { display: block !important; }
+
+.seg-control {
+  display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px;
+  background: var(--well); border: 1px solid var(--line); border-radius: 4px;
+}
+.seg-item {
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  padding: 0.3em 0.7em; border-radius: 3px; color: var(--ink-secondary);
+}
+.seg-item:hover { background: var(--surface-instrument-2); color: var(--ink); text-decoration: none; }
+.seg-item:focus-visible { outline: 2px solid var(--claim-belief); outline-offset: 1px; }
+.seg-item.active { background: var(--surface-instrument-2); color: var(--ink); font-weight: 650; box-shadow: inset 0 0 0 1px var(--line-strong); }
+.control-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-4);
+  margin: 0 0 var(--sp-4);
+}
+.control-row-item { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.control-label {
+  font-family: var(--mono); font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--ink-muted);
+}
+
+.chart-wrap { position: relative; overflow-x: auto; }
+.chart-tip {
+  position: absolute; z-index: 20; pointer-events: none; opacity: 0;
+  transform: translate(-50%, -100%);
+  background: var(--surface-instrument-2); border: 1px solid var(--line-strong);
+  border-radius: 3px; padding: var(--sp-2) var(--sp-3);
+  font-family: var(--mono); font-size: 11px; color: var(--ink);
+  white-space: pre; box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+  transition: opacity 120ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chart-tip { transition: none; }
+  .databar-fill, .heat-cell, .series-dot { transition: none !important; }
+}
+.chart-tip[data-open="1"] { opacity: 1; }
+
+.legend { display: inline-flex; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-3) 0 0; }
+.legend-toggle {
+  display: inline-flex; align-items: center; gap: 0.45em; cursor: pointer;
+  font-family: var(--mono); font-size: 11px; color: var(--ink-secondary);
+  background: var(--surface-instrument-1); border: 1px solid var(--line);
+  border-radius: 3px; padding: 0.25em 0.6em;
+}
+.legend-toggle:hover { border-color: var(--line-strong); color: var(--ink); }
+.legend-toggle:focus-visible { outline: 2px solid var(--claim-belief); outline-offset: 1px; }
+.legend-toggle .swatch { width: 10px; height: 3px; border-radius: 1px; flex: none; }
+.legend-toggle[aria-pressed="false"] { opacity: 0.4; text-decoration: line-through; }
+.legend-toggle[aria-pressed="false"] .swatch { background: var(--ink-muted) !important; }
+
+/* Series + heat cells: hidden via an attribute so the state is readable
+   from the DOM (and from a test) rather than only from computed style. */
+[data-hidden="1"] { display: none; }
+.series-dot { cursor: pointer; }
+.series-dot:hover, .series-dot:focus { stroke: var(--ink); stroke-width: 2; outline: none; }
+.heat-cell { cursor: pointer; }
+.heat-cell:hover rect.hc-bg, .heat-cell:focus rect.hc-bg { stroke: var(--ink); stroke-width: 1.5; outline: none; }
+.heat-note {
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-muted);
+  margin: var(--sp-3) 0 0;
+}
+
+/* ---------------------------------------------------------------------
+   15. THE CAPABILITY MAP -- /findings' models x capabilities grid, plus
+   the trust vocabulary that hangs off each derived finding.
+
+   The ramp is built ONLY from tokens this product already uses to mean
+   something: verdict-pass green (correct), claim-belief amber (a
+   provisional claim), salience amber (a measured ramp), verdict-fail-trap
+   red (a trap was sprung). Read top to bottom it is monotone green ->
+   amber -> red, so it is a heat scale and not a rainbow, and it
+   introduces no hue the rest of the app doesn't already have. Every cell
+   is an <a>: the grid's whole job is to make a weak province visible AND
+   reachable in one click.
+   ------------------------------------------------------------------- */
+.cap-map-wrap { overflow-x: auto; }
+table.cap-map { margin: 0; background: none; border: none; }
+table.cap-map th.cap-group {
+  text-align: center; background: var(--surface-instrument-2);
+  border-bottom: 1px solid var(--line-strong);
+}
+table.cap-map th.cap-corner { background: var(--surface-instrument-2); }
+table.cap-map th, table.cap-map td { padding: 0.3rem 0.35rem; }
+table.cap-map th.cap-model {
+  text-align: left; text-transform: none; font-family: var(--sans);
+  font-size: var(--fs-small); font-weight: 650; color: var(--ink);
+  background: none; letter-spacing: 0; white-space: nowrap;
+  border-bottom: 1px solid var(--line); vertical-align: middle;
+}
+table.cap-map th.cap-model a { color: var(--ink); }
+.cap-model-meta {
+  display: block; font-family: var(--mono); font-size: 9.5px;
+  color: var(--ink-muted); font-weight: 500;
+}
+.cap-arrow { color: var(--ink-muted); margin-left: 0.2em; }
+td.cap-cell { border-bottom: 1px solid var(--line); }
+.cap-block {
+  display: block; border-radius: 2px; padding: 0.35rem 0.4rem;
+  text-align: center; font-family: var(--mono); min-width: 58px;
+  border: 1px solid transparent;
+}
+a.cap-block:hover { text-decoration: none; border-color: var(--ink); }
+a.cap-block:focus-visible { outline: 2px solid var(--claim-belief); outline-offset: 1px; }
+.cap-block .cap-rate {
+  display: block; font-size: var(--fs-small); font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.cap-block .cap-n { display: block; font-size: 9px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+.heat-5 { background: rgba(92,158,124,0.22); color: var(--verdict-pass); }
+.heat-4 { background: rgba(217,164,65,0.16); color: var(--claim-belief); }
+.heat-3 { background: rgba(176,129,46,0.30); color: var(--salience-high); }
+.heat-2 { background: rgba(196,84,75,0.26); color: var(--verdict-fail-trap); }
+.heat-1 { background: rgba(196,84,75,0.55); color: var(--ink); }
+.heat-none {
+  background-image: repeating-linear-gradient(135deg, rgba(255,255,255,0.04) 0 3px, transparent 3px 7px);
+  color: var(--ink-muted);
+}
+.cap-row-selected td.cap-cell, .cap-row-selected th.cap-model { background: var(--surface-instrument-2); }
+.cap-legend { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin: var(--sp-3) 0; }
+.cap-legend-item {
+  display: inline-flex; align-items: center; gap: 0.4em;
+  font-family: var(--mono); font-size: 9.5px; color: var(--ink-muted);
+}
+.cap-swatch { width: 16px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* Model switcher: the same inverted-contrast "exactly one is selected"
+   language as the sidebar's active nav row, at page scope. */
+.model-tabs {
+  display: flex; flex-wrap: wrap; gap: var(--sp-2);
+  margin: var(--sp-5) 0 var(--sp-4);
+  border-bottom: 1px solid var(--line); padding-bottom: var(--sp-3);
+}
+.model-tab {
+  font-size: var(--fs-small); font-weight: 600; color: var(--ink-secondary);
+  padding: 0.35rem 0.7rem; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--surface-instrument-1); white-space: nowrap;
+}
+.model-tab:hover { text-decoration: none; color: var(--ink); border-color: var(--line-strong); }
+.model-tab.active { background: var(--ink); color: var(--surface-instrument-0); border-color: var(--ink); }
+
+/* A derived finding's left edge carries its polarity -- the same
+   left-edge-severity idiom section 13 uses on table rows, so "this is a
+   weak spot" reads before the sentence does. */
+.finding-weakness { border-left: 2px solid var(--verdict-fail-trap); }
+.finding-strength { border-left: 2px solid var(--verdict-pass); }
+.card-body details.replicate { margin-top: var(--sp-3); }
+
+/* Verification state of a whole capability cell -- the SAME three words
+   the claim strip already uses for one FAIL (verified-stable / noise /
+   unverified), and the same treatments: stable is a neutral audited fact
+   (pass-green edge, ink-secondary text, not alarming), noise is hatched,
+   unverified is a dashed outline. Replication state is a second,
+   orthogonal tag with the same grammar. */
+.status-tag.verif-verified-stable { color: var(--ink-secondary); border: 1px solid var(--verdict-pass); }
+.status-tag.verif-contains-noise {
+  color: var(--ink-muted); border: 1px solid var(--line-strong);
+  background-image: repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 3px, transparent 3px 7px);
+}
+.status-tag.verif-unverified { color: var(--ink-muted); border: 1px dashed var(--line-strong); }
+/* Zero failures: nothing was resampled, so this deliberately does NOT get
+   the pass-green edge "verified-stable" earns. A clean cell is quiet. */
+.status-tag.verif-no-failures { color: var(--ink-muted); border: 1px solid var(--line); }
+.status-tag.repl-replicated { color: var(--verdict-pass); border: 1px solid var(--verdict-pass); }
+.status-tag.repl-replication-disagrees { color: var(--claim-belief); border: 1px solid var(--claim-belief-dim); }
+.status-tag.repl-replication-incomplete { color: var(--ink-muted); border: 1px dashed var(--claim-belief-dim); }
+.status-tag.repl-not-replicated { color: var(--ink-muted); border: 1px dashed var(--line-strong); }
+
+/* A cited run_id whose records are no longer in the store. Struck, not
+   hidden: the citation is still the honest provenance of the claim, it
+   just can't be followed any more. */
+.dangling { color: var(--ink-muted); text-decoration: line-through; text-decoration-color: var(--verdict-fail-trap); }
+"""
+
+
+# Inline, vanilla, dependency-free. Two jobs only: a hover/focus readout
+# for any `[data-tip]` inside a `.chart-wrap`, and series toggling driven
+# by `[data-toggle-model]` buttons. Both are progressive enhancements over
+# markup that is already complete and readable without them -- every data
+# point also carries an SVG <title> (native tooltip), and every control
+# that changes what is PLOTTED is a real link, not a button.
+_INSTRUMENT_JS = """
+(function () {
+  var d = document;
+  d.documentElement.className += " js";
+
+  function tipFor(wrap) {
+    var t = wrap.querySelector(".chart-tip");
+    if (!t) {
+      t = d.createElement("div");
+      t.className = "chart-tip";
+      wrap.appendChild(t);
+    }
+    return t;
+  }
+
+  function showTip(wrap, el) {
+    var text = el.getAttribute("data-tip");
+    if (!text) return;
+    var tip = tipFor(wrap);
+    tip.textContent = text.replace(/\\|/g, "\\n");
+    var wr = wrap.getBoundingClientRect();
+    var er = el.getBoundingClientRect();
+    var x = er.left - wr.left + wrap.scrollLeft + er.width / 2;
+    var y = er.top - wr.top + wrap.scrollTop - 6;
+    tip.style.left = x + "px";
+    tip.style.top = Math.max(y, 24) + "px";
+    tip.setAttribute("data-open", "1");
+  }
+
+  function hideTip(wrap) {
+    var tip = wrap.querySelector(".chart-tip");
+    if (tip) tip.setAttribute("data-open", "0");
+  }
+
+  function bindWrap(wrap) {
+    function onOver(ev) {
+      var el = ev.target && ev.target.closest ? ev.target.closest("[data-tip]") : null;
+      if (el && wrap.contains(el)) showTip(wrap, el); else hideTip(wrap);
+    }
+    wrap.addEventListener("mouseover", onOver);
+    wrap.addEventListener("focusin", onOver);
+    wrap.addEventListener("mouseleave", function () { hideTip(wrap); });
+    wrap.addEventListener("focusout", function () { hideTip(wrap); });
+  }
+
+  var wraps = d.querySelectorAll(".chart-wrap");
+  for (var i = 0; i < wraps.length; i++) bindWrap(wraps[i]);
+
+  // Series toggles. Scope is the nearest `.instrument` ancestor so two
+  // charts on one page never toggle each other.
+  function setModel(scope, model, on) {
+    var targets = scope.querySelectorAll('[data-series="' + (window.CSS && CSS.escape ? CSS.escape(model) : model) + '"]');
+    for (var i = 0; i < targets.length; i++) {
+      if (on) targets[i].removeAttribute("data-hidden");
+      else targets[i].setAttribute("data-hidden", "1");
+    }
+  }
+
+  d.addEventListener("click", function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest("[data-toggle-model]") : null;
+    if (!btn) return;
+    ev.preventDefault();
+    var scope = btn.closest(".instrument") || d;
+    var model = btn.getAttribute("data-toggle-model");
+    var on = btn.getAttribute("aria-pressed") !== "true";
+    // Never let the reader blank the chart entirely: refuse the last one off.
+    if (!on) {
+      var pressed = scope.querySelectorAll('[data-toggle-model][aria-pressed="true"]');
+      if (pressed.length <= 1) return;
+    }
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    setModel(scope, model, on);
+  });
+})();
 """
 
 
@@ -826,8 +1178,162 @@ def _shell(
         f"<title>{html.escape(title)}</title><style>{_CSS}</style></head>"
         f'<body><div class="app-shell">{sidebar}'
         f'<main class="shell-main">{breadcrumb_html}{body}</main>'
-        "</div></body></html>"
+        f"</div><script>{_INSTRUMENT_JS}</script></body></html>"
     )
+
+
+# ---------------------------------------------------------------------------
+# Visual encoding primitives -- shared by every page that shows a rate, a
+# trend, or a categorical tag. See _CSS section 13 for the reasoning; the
+# short version is that a bare percentage makes the reader do the
+# comparison, a bar does the comparison for them.
+# ---------------------------------------------------------------------------
+
+# Below this pass rate a bar stops being neutral and takes the trap color.
+# Not a style choice: a scored pass rate under ~60% is the regime where a
+# campaign's own scheduler treats a cell as "broken" rather than noisy.
+_RATE_WARN_THRESHOLD = 60.0
+_RATE_FULL_THRESHOLD = 99.999
+
+
+def _rate_bar(
+    rate_pct: float,
+    *,
+    sub: str | None = None,
+    threshold: float | None = _RATE_WARN_THRESHOLD,
+    decimals: int = 0,
+) -> str:
+    """Inline pass-rate meter: neutral bar + exact number, semantic color
+    ONLY below `threshold` (admin-dashboard reference: in-cell meters that
+    are identical gray until one crosses the line that matters).
+
+    `threshold=None` means "magnitude only, never colored" -- for bars
+    measuring a quantity where high/low carries no verdict (a share of
+    failures, a share of budget). Without that escape hatch every bar on
+    the page ends up colored, which is exactly the decorate-everything
+    failure the threshold exists to avoid.
+
+    `sub` is optional small print after the number (e.g. "113/214").
+    Defensive: clamps to 0..100 so a NaN/overshoot can never paint a bar
+    wider than its track.
+    """
+    try:
+        pct = float(rate_pct)
+    except (TypeError, ValueError):
+        pct = 0.0
+    if pct != pct:  # NaN
+        pct = 0.0
+    pct = max(0.0, min(100.0, pct))
+    state = ""
+    if threshold is None:
+        state = ""
+    elif pct < threshold:
+        state = " below"
+    elif pct >= _RATE_FULL_THRESHOLD:
+        state = " full"
+    sub_html = f'<span class="databar-sub">{sub}</span>' if sub else ""
+    return (
+        '<span class="databar-cell">'
+        f'{sub_html}'
+        f'<span class="databar{state}"><span class="databar-fill" style="width:{pct:.1f}%"></span></span>'
+        f'<span class="databar-num{state}">{pct:.{decimals}f}%</span>'
+        "</span>"
+    )
+
+
+def _rate_sequence(records: list, n_buckets: int = 24) -> list[float]:
+    """Pass rate (0..1) over the trial sequence, chunked into at most
+    `n_buckets` equal slices -- the input to a run's sparkline. ERRORs are
+    excluded from the rate but not from ordering. Returns [] when there is
+    nothing scoreable (so callers render no sparkline at all rather than a
+    flat lie)."""
+    scored = [r for r in records if getattr(r, "verdict", None) is not None and r.verdict.name in ("PASS", "FAIL")]
+    if len(scored) < 4:
+        return []
+    k = max(2, min(n_buckets, len(scored) // 2))
+    out: list[float] = []
+    for i in range(k):
+        lo = i * len(scored) // k
+        hi = (i + 1) * len(scored) // k
+        chunk = scored[lo:hi]
+        if not chunk:
+            continue
+        out.append(sum(1 for r in chunk if r.verdict.name == "PASS") / len(chunk))
+    return out
+
+
+def _verdict_seq_rates(verdict_names: list[str], n_buckets: int = 24) -> list[float]:
+    """`_rate_sequence` over a bare list of verdict NAMES (what the /runs
+    aggregate query has in hand -- it never materializes records)."""
+    scored = [v for v in verdict_names if v in ("PASS", "FAIL")]
+    if len(scored) < 4:
+        return []
+    k = max(2, min(n_buckets, len(scored) // 2))
+    out: list[float] = []
+    for i in range(k):
+        chunk = scored[i * len(scored) // k:(i + 1) * len(scored) // k]
+        if chunk:
+            out.append(sum(1 for v in chunk if v == "PASS") / len(chunk))
+    return out
+
+
+def _sparkline(values: list[float], width: int = 76, height: int = 20, label: str = "") -> str:
+    """Tiny inline SVG trend over `values` (each 0..1). No library, no
+    axes, no labels -- a 50% reference dash and a marked terminal point,
+    which is all a sparkline is allowed to say.
+
+    Returns "" for fewer than 2 points: a one-point "trend" is a dot
+    pretending to be information.
+    """
+    pts = [v for v in values if isinstance(v, (int, float))]
+    if len(pts) < 2:
+        return ""
+    pad = 2.0
+    inner_w = width - 2 * pad
+    inner_h = height - 2 * pad
+    step = inner_w / (len(pts) - 1)
+    coords = [
+        (pad + i * step, pad + (1.0 - max(0.0, min(1.0, v))) * inner_h)
+        for i, v in enumerate(pts)
+    ]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    area = f"{pad:.1f},{height - pad:.1f} " + line + f" {coords[-1][0]:.1f},{height - pad:.1f}"
+    mid_y = pad + 0.5 * inner_h
+    lx, ly = coords[-1]
+    aria = f' role="img" aria-label="{html.escape(label)}"' if label else ' aria-hidden="true"'
+    return (
+        f'<svg class="sparkline" viewBox="0 0 {width} {height}" width="{width}" '
+        f'height="{height}" xmlns="http://www.w3.org/2000/svg"{aria}>'
+        f'<polygon class="spark-area" points="{area}"/>'
+        f'<line class="spark-mid" x1="{pad}" y1="{mid_y:.1f}" x2="{width - pad}" y2="{mid_y:.1f}"/>'
+        f'<polyline class="spark-line" points="{line}"/>'
+        f'<circle class="spark-last" cx="{lx:.1f}" cy="{ly:.1f}" r="2"/>'
+        "</svg>"
+    )
+
+
+def _chip(label: str, cls: str = "", href: str | None = None, title: str = "") -> str:
+    """One categorical token. `label` is escaped here -- callers pass raw
+    db strings."""
+    if not label:
+        return ""
+    classes = f"chip {cls}".strip()
+    title_attr = f' title="{html.escape(title)}"' if title else ""
+    inner = html.escape(str(label))
+    if href:
+        return f'<a class="{classes}" href="{html.escape(href)}"{title_attr}>{inner}</a>'
+    return f'<span class="{classes}"{title_attr}>{inner}</span>'
+
+
+def _chip_set(labels, cls: str = "") -> str:
+    """A comma-joined metadata string rendered as scannable chips. Accepts
+    a list or a raw "a,b,c" string; empty input renders nothing."""
+    if isinstance(labels, str):
+        labels = [p.strip() for p in labels.split(",")]
+    items = [_chip(str(x).strip(), cls) for x in (labels or []) if str(x).strip()]
+    if not items:
+        return ""
+    return f'<span class="chip-set">{"".join(items)}</span>'
 
 
 # Backwards-compatible alias used by atlas.py and launch.py call sites that
@@ -1060,10 +1566,13 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
         run_id = row["run_id"]
         agg = by_run.setdefault(
             run_id,
-            {"counts": {}, "model": row["model_name"], "cost": 0.0, "created_ats": []},
+            {"counts": {}, "model": row["model_name"], "cost": 0.0, "created_ats": [], "seq": []},
         )
         agg["counts"][row["verdict"]] = agg["counts"].get(row["verdict"], 0) + 1
         agg["cost"] += row["cost_usd"] or 0.0
+        # Verdicts in insertion order -- the input to this run's sparkline.
+        # Cheap: one extra string per row on a query already being read.
+        agg["seq"].append(row["verdict"])
         if row["created_at"]:
             agg["created_ats"].append(row["created_at"])
 
@@ -1080,12 +1589,14 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
             child_run_ids.add(run_id)
             agg = by_run[run_id]
             p = parents.setdefault(
-                parent, {"counts": {}, "model": agg["model"], "cost": 0.0, "created_ats": []}
+                parent,
+                {"counts": {}, "model": agg["model"], "cost": 0.0, "created_ats": [], "seq": []},
             )
             for verdict_name, n in agg["counts"].items():
                 p["counts"][verdict_name] = p["counts"].get(verdict_name, 0) + n
             p["cost"] += agg["cost"]
             p["created_ats"].extend(agg["created_ats"])
+            p["seq"].extend(agg["seq"])
     for parent, agg in parents.items():
         by_run[parent] = agg
     for child in child_run_ids:
@@ -1120,15 +1631,28 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
             if headline
             else ""
         )
+        # A run's pass rate over its own trial sequence: did it degrade as
+        # the scheduler pushed difficulty, or was it flat? That trend is
+        # the single most useful thing about a run that a total can't say.
+        spark = _sparkline(
+            _verdict_seq_rates(agg["seq"]),
+            label=f"pass rate trend for {run_id}",
+        )
+        # Row edge: only a run that actually broke gets one (see _CSS 13).
+        row_cls = ' class="row-sev row-sev-fail"' if total and pass_rate < _RATE_WARN_THRESHOLD else ""
+        status_chip = (
+            _chip("live", "chip-live") if is_live else _chip("complete", "chip-done chip-muted")
+        )
         rows_html.append(
-            "<tr>"
+            f"<tr{row_cls}>"
             f'<td class="mono"><a href="/run/{safe_run_id}">{safe_run_id}</a>{headline_html}</td>'
             f'<td class="mono">{model_short}</td>'
             f'<td class="num">{total}</td>'
-            f'<td class="num"><span class="pill pill-PASS">{pass_rate:.0f}%</span></td>'
+            f'<td class="num">{_rate_bar(pass_rate, sub=f"{passn}/{total}")}</td>'
+            f'<td>{spark}</td>'
             f'<td class="mono num">${agg["cost"]:.4f}</td>'
             f"<td>{html.escape(_relative_time(newest))}</td>"
-            f"<td>{status}</td>"
+            f"<td>{status_chip}</td>"
             "</tr>"
         )
     return rows_html, by_run
@@ -1183,7 +1707,8 @@ def runs_html(store: ResultsStore) -> str:
     )
     table = (
         "<table><thead><tr><th>run_id</th><th>model</th><th class=\"num\">records</th>"
-        "<th class=\"num\">pass rate</th><th class=\"num\">cost</th><th>started</th><th>status</th>"
+        "<th class=\"num\">pass rate</th><th>trend</th><th class=\"num\">cost</th>"
+        "<th>started</th><th>status</th>"
         "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
     body = (
@@ -1837,13 +2362,29 @@ def run_html(store: ResultsStore, run_id: str) -> str:
             except ValueError:
                 salience = None
 
+        # Left-edge severity bar (bug-tracker reference): criticality
+        # readable before any text is. PASS rows get no edge on purpose --
+        # an edge on every row is an edge that means nothing. A FAIL that
+        # has not been resample-checked is its own state, amber not red,
+        # matching the "?" mark the claim strip already gives it.
+        if r.verdict.name == "FAIL":
+            row_cls = (
+                ' class="row-sev row-sev-unverified"'
+                if stability == "unverified"
+                else ' class="row-sev row-sev-fail"'
+            )
+        elif r.verdict.name == "ERROR":
+            row_cls = ' class="row-sev row-sev-error"'
+        else:
+            row_cls = ""
+
         rows_html.append(
-            "<tr>"
+            f"<tr{row_cls}>"
             f'<td class="mono">{html.escape(r.model_name)}</td>'
             f"{stage_html}"
             f'<td class="claim-cell">{_claim_strip(r.verdict.name, evidence, stability, salience)}</td>'
-            f"<td>{html.escape(kind)}</td>"
-            f"<td>{html.escape(difficulty)}</td>"
+            f"<td>{_chip(kind, 'chip-muted') if kind and kind != '-' else '-'}</td>"
+            f"<td>{_chip(difficulty, 'chip-muted') if difficulty and difficulty != '-' else '-'}</td>"
             f'<td class="mono">{r.cost_usd:.6f}</td>'
             f'<td class="mono">{r.tokens_in}/{r.tokens_out}</td>'
             f'<td><a href="/record/{html.escape(r.record_id)}">full transcript &rarr;</a></td>'
@@ -1936,14 +2477,33 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         if (n_stable or n_noise)
         else ""
     )
+    # The pass-rate KPI is one number; the sparkline beside it says whether
+    # the run got there smoothly or fell off a cliff partway through. For
+    # an adaptive campaign (difficulty climbs along the sequence) that
+    # shape IS the finding, not decoration.
+    run_spark = _sparkline(
+        _rate_sequence(records), width=96, height=22, label="pass rate over the trial sequence"
+    )
+    spark_html = (
+        f'<div class="spark-row" style="margin-top:var(--sp-2);">{run_spark}'
+        '<span class="spark-caption">over trials</span></div>'
+        if run_spark
+        else ""
+    )
+    fail_share = (n_fail / n_trials * 100.0) if n_trials else 0.0
     stat_grid = (
         '<div class="stat-grid">'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_trials:,}</div>{trials_delta}</div>'
         '<div class="stat-label">Trials</div></div>'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{run_pass_rate:.0f}%</div>'
         f'<div class="stat-delta">{n_pass:,}/{n_scored:,} scored</div></div>'
+        f"{spark_html}"
         '<div class="stat-label">Pass rate</div></div>'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_fail:,}</div>{fail_delta}</div>'
+        # Magnitude only: this bar measures a SHARE of failures, where
+        # neither direction is a verdict the bar itself should render.
+        # The row edges and claim strips below already carry that color.
+        f'<div style="margin-top:var(--sp-2);">{_rate_bar(fail_share, threshold=None)}</div>'
         '<div class="stat-label">Failures</div></div>'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">${run_cost:.4f}</div></div>'
         '<div class="stat-label">Run cost</div></div>'
@@ -2026,10 +2586,24 @@ def record_html(store: ResultsStore, record_id: str) -> str:
     detail = _parse_verifier_detail(record.verifier_detail)
     traps = detail.get("traps", "")
     trap_line = (
-        f'<p class="meta">trap kind(s) this world was seeded for: <span class="mono">{html.escape(traps)}</span></p>'
+        f'<p class="meta">trap kind(s) this world was seeded for: {_chip_set(traps, "chip-trap")}</p>'
         if traps
         else ""
     )
+    # Categorical provenance as scannable chips rather than a
+    # semicolon-joined verifier_detail string the reader has to parse.
+    # The raw string is kept below it -- chips summarize, they don't hide.
+    meta_chips = "".join(
+        _chip(text, cls)
+        for text, cls in (
+            (detail.get("kind", ""), "chip-muted"),
+            (record.render_mode.name.lower(), "chip-muted"),
+            (detail.get("sim", ""), "chip-muted"),
+            (record.finish_reason or "", "chip-muted"),
+        )
+        if text
+    )
+    meta_chip_row = f'<p class="meta"><span class="chip-set">{meta_chips}</span></p>' if meta_chips else ""
 
     # prev/next trial within the same run -- lateral navigation so a
     # dead-end detail page never strands the reader (design-notes principle 4).
@@ -2094,6 +2668,7 @@ def record_html(store: ResultsStore, record_id: str) -> str:
         cost: <span class="mono num">${record.cost_usd:.6f}</span> &middot;
         latency: <span class="mono num">{record.latency_ms:.1f} ms</span>
       </p>
+      {meta_chip_row}
       <p class="meta">verifier_detail: <span class="mono">{html.escape(record.verifier_detail or "-")}</span></p>
       {trap_line}
       <p class="meta">lineage: {lineage_links}</p>
@@ -2169,7 +2744,12 @@ class _ViewerHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/findings":
-            self._send_html(findings_html())
+            # /findings?model=<name> -- every model's findings are rendered
+            # into the page and the switcher toggles them client-side, but
+            # the URL is real so a particular model's view is shareable and
+            # works with JS off (see findings._switcher_html).
+            q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            self._send_html(findings_html(self.store, model=q.get("model")))
             return
 
         if path == "/coverage":
@@ -2186,7 +2766,24 @@ class _ViewerHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/atlas":
-            self._send_html(atlas_html(self.store))
+            # /atlas?kind=belief&dim=context_length -- every atlas view
+            # state is a real URL, so the selectors work with JS off and
+            # a particular map is shareable/bookmarkable.
+            q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            self._send_html(atlas_html(self.store, kind=q.get("kind"), dim=q.get("dim")))
+            return
+
+        if path == "/trials":
+            # Two callers share this route with different vocabularies: the
+            # atlas heatmap (kind+dim+bucket index) and the /findings
+            # capability map (model+axis+key). `axis` is the discriminator;
+            # each renderer owns the bucketing its own surface painted, so
+            # neither cell can disagree with the list it opens.
+            q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            if q.get("axis"):
+                self._send_html(capability_trials_html(self.store, q))
+            else:
+                self._send_html(trials_html(self.store, q))
             return
 
         if path.startswith("/run/"):
@@ -2235,6 +2832,27 @@ class _ViewerHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             self._send_html(_shell("Verify failures", "runs", payload))
+            return
+
+        if path == "/replicate":
+            # "Replicate this finding" on /findings. Same contract as
+            # /verify above: (started, run_id_or_html), redirect on success.
+            # On success we land on /live rather than the new run's page --
+            # a replication takes minutes and the live monitor is the page
+            # that can actually show it progressing (and stop it).
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length else b""
+            form = {
+                k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()
+            }
+            started, payload = launch_mod.handle_replicate_now(form, self.launch_deps)
+            if started:
+                self.send_response(303)
+                self.send_header("Location", "/live")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self._send_html(_shell("Replicate finding", "findings", payload))
             return
 
         if path != "/launch":

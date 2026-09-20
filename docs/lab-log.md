@@ -1915,6 +1915,245 @@ tests — all resample/verify behavior exercised via scripted fake clients.
 
 ---
 
+## 2026-09-19 — BUG (critical, fixed) + FEATURE (shipped) — /atlas was plotting almost none of its data; rebuilt as an interactive capability map
+
+**What we saw:** two rounds of "the Atlas panel has no interactive
+features, just raw projections" and "it just looks like a generic
+outdated government platform". Four prior viewer passes had treated this
+as a styling problem and restyled around it.
+
+**Root cause:** it was never mainly a styling problem — `/atlas` was
+plotting almost no data. `atlas._one_dim_varied_points` admitted only
+records that varied *exactly one* dim away from a per-model baseline (the
+`resume_from_records` idiom, correct for a grid sweep). The adaptive
+campaign scheduler moves several dims at once, so on the real 779-record
+store that filter left **3–8 records per (model, dim), binned into a
+single x value**. Measured across all 30 (kind, dim, model) series: 21 of
+them collapsed to exactly **one** bin. A `<polyline>` with one point
+renders nothing. The page was six panels of empty axes, correctly styled.
+
+The secondary cause is real and was the actual "government platform"
+tell: every quantity in the app was a **digit in a table cell**. The
+shipped references this design is derived from (the bug-tracker's
+left-edge severity bars, the admin-dashboard's in-cell progress meters)
+encode magnitude and criticality *visually* and keep digits for the exact
+value. Absence of visual encoding — not fonts, borders or spacing — is
+what read as unfinished.
+
+**Fix:**
+
+- **Bucketing replaces the baseline filter.** Quantile buckets over the
+  value *population* (not its range) for every record of a query kind, so
+  columns carry comparable trial counts rather than comparable axis
+  slices — which matters precisely because the scheduler samples
+  difficulty so unevenly. Dims with ≤6 distinct values bucket by exact
+  value instead. All 779 records now land in a cell; cells carry n=5..250.
+
+- **Primary visualization is a models × difficulty heatmap**, not
+  parallel polylines. Defensible on four counts: (1) "where does each
+  model break" is a lookup on a model/difficulty grid, and a heatmap *is*
+  that grid, so the answer is a position rather than an inference from
+  overlapping lines; (2) a line implies interpolation between points that
+  these unevenly-sampled adaptive x values do not support, while a cell
+  claims only what it measured; (3) it scales — six models on shared axes
+  is spaghetti, six heatmap rows is six rows; (4) it is the same object
+  as the capability-map mental model the rest of the app uses. The
+  degradation **curve is kept as the secondary view**, driven by the same
+  buckets (so the two can never disagree), because reading two models'
+  slopes against each other is the one job lines beat a heatmap at.
+
+- **Interaction** (inline vanilla JS, ~70 lines, no library, no CDN):
+  hover/focus readout on all 30 data marks; per-model toggles that hide a
+  series (with a guard that refuses to blank the chart); query-kind and
+  dimension selectors that are **real `<a href>` links**, so every view
+  state has a shareable URL and the page works fully with JS off; and
+  click-through from any cell or point to a new `/trials?kind&dim&b&model`
+  page listing the individual trials behind it, re-deriving the same
+  buckets so the cell and the list can never disagree.
+
+- **Focal-point discipline kept, not regressed.** One hue on the map:
+  cells are an achromatic luminance ramp down to the 60% break threshold
+  and trap-red below it. On the curve, hue goes to exactly one series —
+  the model with the *lowest fitted frontier*, i.e. the one that breaks
+  first, which is the finding; the rest are neutral, separated by stroke
+  weight/dash and direct end-of-line labels rather than a rainbow legend.
+
+- **Visual encoding across the app:** inline pass-rate bars (`_rate_bar`,
+  neutral by default, colored only past the threshold, with a
+  `threshold=None` escape hatch for bars measuring a share rather than a
+  verdict — without it every bar on the page ends up colored, which is
+  the failure the threshold exists to prevent); sparklines of pass rate
+  over a run's trial sequence on `/runs` and the run KPI (`_sparkline`,
+  which returns "" for <2 points rather than implying a trend from a
+  dot); left-edge row severity on FAIL/ERROR rows only — deliberately not
+  on PASS rows, since an edge on every row is an edge that means nothing;
+  and chips for categorical metadata (query kind, render mode, trap
+  kinds) that used to be comma-joined prose.
+
+**Verified against the real store, not asserted:** 779 records, 7 runs,
+3 models, served on :8792 and measured in the rendered DOM. 15 heatmap
+cells and 15 curve points, 30 elements with a hover readout; hovering
+cell #8 opens a tooltip reading "nemotron-3-super-120b-a12b /
+context_length 11–19 / pass 58.5% (38/65)", opacity 0→1 over the 120ms
+transition and back on mouseleave. Clicking a legend toggle takes the
+curve from 3 visible series to 2 (dots 15→10) with the heatmap
+unaffected; re-clicking restores; clicking every toggle leaves one on.
+All 15 drill-down hrefs and all 7 selector links return 200. Three cells
+cross-checked against direct SQL on the live store and matched exactly:
+gpt-oss-120b @29–37 = 16/44 = 36.4%, nemotron-super @11–19 = 38/65 =
+58.5%, Nano @6–8 = 51/55 = 92.7%; the `/trials` page for the first shows
+44 rows, 16/44, 28 severity-edged FAIL rows, 44 transcript links. Bar
+widths measured in pixels track their rates (93.3% → 54.11px of a 58px
+track; 52.8% → 30.61px) and only the sub-60% bars are colored. With the
+`js` class removed (the no-JS case) the legend hides rather than showing
+dead buttons, while all 15 cells remain real links with their 32 native
+`<title>` readouts intact.
+
+**Bug caught building this:** the first default-pane heuristic ranked by
+record count, which is a five-way tie in this store (every record carries
+all five dims) and landed on `belief/entity_state` — six buckets, but
+four of them holding five trials each. Ranking now counts cells clearing
+n≥10 first, which opens on `belief/context_length`: the clean monotone
+story where Nano holds ~90–100% while gpt-oss-120b falls 67%→36% and
+nemotron-super 76%→38%. That finding was in the database the whole time
+and the old page could not show it.
+
+Full suite: 359/359 passing (+15 viewer tests). One existing assertion
+updated rather than weakened: `test_record_html_escapes_script_in_response_text`
+used a blunt `"<script>" not in page`, which now also catches the shell's
+own trusted inline script; it strips `<script>…</script>` blocks first
+and additionally asserts `"<script>alert(" not in page`, so it still
+tests that attacker-controlled text cannot introduce a tag instead of
+silently degrading into "the app contains no JavaScript".
+
+---
+
+## 2026-09-19 — BUG (critical, fixed) + FEATURE (shipped) — /findings could not see the store at all; rebuilt as a live per-model capability map
+
+**What we saw:** the user's verdict on the page that is supposed to be the
+product's headline: *"The findings are the weakest. Viewers wanna know
+where it failed. It has differentiation for confirmed and needs
+replication only. Also, add verify or do replication in the findings so
+that it gets updated as well. I want to see what are the positives and
+negatives. It is good to have model vs model comparison. But I'd like it
+to have a capability map panned out in the findings. No way to switch
+inbetween models findings. It's just showing the latest findings."*
+
+**Root cause:** not styling. `cartographer/viewer/findings.py`'s
+`findings_html()` **took no store argument**. Every "finding" on the page
+was a hardcoded `@dataclass` literal transcribed by hand from this log.
+That single fact explains every complaint at once: a page with no store
+cannot switch models (there are no models), cannot show a strength (nobody
+hand-writes "it passed"), cannot say where a failure lives (the realized
+dims were never read), and cannot update after a replication (there was
+nothing to update). Four prior passes restyled it; none of them could have
+fixed it.
+
+**Fix:** `findings_html(store, model=None)` — the page is now derived.
+
+- **Capability map.** Models × capabilities, rendered as a heat grid:
+  4 query kinds (state / order / belief / adversarial_belief) + the 6
+  measured difficulty dims, each dim column reporting its HIGH tercile.
+  On the current store that is **3 models × 10 capabilities = 30 cells,
+  21 populated and 9 honestly empty** (nothing in this store has ever run
+  `order`, `adversarial_belief`, or produced a `witness_gap`). Every
+  populated cell is an `<a>` into `/trials?model=…&axis=…&key=…`, which
+  calls the same `cell_trials()` the grid called, so a cell and the list
+  it opens are one computation run twice rather than two that agree today.
+  The 5-step ramp is built only from tokens already in the palette
+  (verdict-pass → claim-belief → salience → verdict-fail-trap); no new hue.
+  Tercile cuts are GLOBAL, not per-model — a column whose value range
+  differed per row would be incomparable numbers under one header. The
+  header tooltip reports the smallest value that actually lands in the
+  high bucket, not the raw cut: `distractors` is 2 for two thirds of the
+  store, so its terciles collapse to (2, 2) and "distractors >= 2" would
+  have been a lie about the column's contents.
+
+- **Strengths, which were invisible before.** A cell at ≥95% over ≥20
+  scored trials is a finding. Verbatim from the rendered page:
+  *"NVIDIA-Nemotron-3-Nano-30B-A3B passes state queries cleanly: 30/30, no
+  failures at all."*
+
+- **Weaknesses that answer WHERE.** A cell under 90% over ≥20 scored
+  trials, reported with the dimension region the failures concentrate in,
+  the trap kinds parsed from `traps=`, and three linked example trials.
+  Verbatim: *"nemotron-3-super-120b-a12b fails belief queries: 61% pass
+  (224/369 scored, 145 real failures) — concentrated at context_length
+  20–37, where it drops to 43% (53/124)."* Dim-region weaknesses are
+  pruned to the two that genuinely LOCALIZE the failure (≥5 points below
+  the model's own overall rate, max 2): without that rule a model that is
+  simply bad at belief emits six near-identical cards restating the same
+  50% and buries the one card that says something. Pruned cells are not
+  hidden — they are still squares in the map, still clickable.
+
+- **One denominator.** Scored trials only (PASS+FAIL), ERRORs excluded,
+  resample-`noise` FAILs excluded, via the existing
+  `classify_all_verified_failures` — the same definition
+  `report/verdict.py` uses. `*/verify` and `repl-*` run_ids are excluded
+  from the map entirely: a verified-noisy failure must not get three more
+  votes, and a replication's deliberately-easy baseline arm must not lift
+  a capability rate.
+
+- **Model switcher.** `/findings?model=<name>`, real links. The server
+  renders every model's section and hides all but the selected one
+  server-side; a small vanilla script toggles visibility and
+  `history.pushState`es the URL. Chosen over pure server-side tabs because
+  switching then costs zero round-trips and the capability map above the
+  sections never repaints (it doesn't change); chosen over a pure
+  client-side widget because the URLs stay shareable and the page is
+  correct with JS off. An unknown `?model=` falls back to All models.
+
+- **Replicate, so a finding updates.** Each weakness gets a Replicate
+  action that re-runs its worst config plus the generator baseline on
+  fresh seeds (`seed_base >= 10_000`) and scores them with the Phase 7
+  `confirm_all` — Wilson intervals + Holm-Bonferroni, not reimplemented.
+  New `cartographer/confirm/replicate.py` is glue only. The cost estimate
+  is derived from that model's own recorded per-trial cost, never a token
+  guess: *"~$0.0066 (20 fresh-seed trials × $0.000332 mean observed
+  cost/trial over 400 recorded trials)"*. POST `/replicate` reuses
+  `/launch`'s one-campaign-at-a-time slot and cancel_event.
+
+- **Curated findings kept, and separated.** The pronoun ablation, the
+  witness-bug retraction and the escalation-vs-trap-selection result are
+  causal claims no aggregate over verdict columns can reproduce; they stay
+  verbatim in a "Documented findings" section labelled *curated · not
+  auto-derived*, with their run_ids checked against the store at render
+  time. A citation whose records are gone renders struck through as
+  "evidence no longer in store" rather than as a live link. (On the
+  current store all three cited run_ids still resolve; the ~1,180 records
+  lost on 2026-09-19 happened not to include them. The check and its test
+  stay, because the next loss will not be so lucky.)
+
+**Bug caught by actually clicking the button:** the replicate POST was
+tested live, found a key in `env/`, and started a real replication; it was
+cancelled two API calls in (total spend **$0.0015**, against a COPY of the
+store in a scratch dir — the live `results/campaign.sqlite` was never
+opened by the verification server and still holds exactly 779 records).
+The cancelled job left the baseline arm with zero SCORED trials, and the
+page reported that as *"replication disagrees"* — a cancelled job rendered
+as evidence against the finding. Added a fourth state,
+`replication-incomplete`, which says so in plain English. Also renamed the
+zero-failure verification state from `verified-stable` to `no-failures`:
+a 30/30 cell had nothing resampled, and claiming an audit that never ran
+is the exact overstatement this page exists to avoid.
+
+**Measured on the rendered DOM (port 8791), not asserted from source:**
+`/findings` and three per-model views all 200; grid 3×10 with 30 `<td>`s;
+all 21 cell hrefs 200 and landing on their Trials page with a matching
+rate and n; all 6 example `/record/` links 200; three cells cross-checked
+against direct read-only SQL over the live store and matching to the
+digit — super/belief 224/369 = 61%, nano/high-coreference 44/48 = 92%
+(global tercile cut 3.0), gpt-oss-120b/high-distractors 38/89 = 43%.
+
+Full suite: 360/360 passing (+25 in the new `tests/test_findings.py`).
+Two existing assertions updated rather than weakened:
+`test_nav_present_on_every_page` and `test_findings_page_lists_the_four_modes`
+now pass a store (the signature change is the fix) and the latter asserts
+the curated section is present AND labelled as curated, which is the new
+truth — the page it used to describe no longer exists.
+
+---
+
 ## Template for new entries
 
 ```
