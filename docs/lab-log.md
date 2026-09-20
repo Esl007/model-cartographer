@@ -222,6 +222,86 @@ tier) -- flagged for a decision, not changed here.
 
 ---
 
+## 2026-09-20 — DECISION (decided) — tool_planning stays a standalone campaign, not a full_map stage
+
+User call, with reasoning: tool-call planning measures a genuinely
+different province (goal-directed action sequencing under preconditions)
+from the five existing `full_map` stages (all narrative
+state/order/belief tracking over one world-model generator). Bundling it
+into `full_map` would blur "what capability did this number measure" the
+moment a judge or a future reader looks at a profile report -- a single
+aggregate pass rate spanning two unrelated provinces is less useful than
+two clearly separated ones. `tool_planning` stays a standalone `/launch`
+preset (already wired: `cartographer/exec/evaluator.py`'s
+`run_tool_planning_campaign`, `kind=tool_plan` picked up automatically by
+`/findings`' capability grid and `/atlas`). Revisit if/when a second
+tool-planning-flavored family exists and a real "full battery" concept
+spans provinces cleanly.
+
+---
+
+## 2026-09-20 — BUG (fixed... partially) — the three "parallel" full_map campaigns took ~an hour instead of minutes: shared-account rate-limit contention, not a parallelism failure
+
+User noticed the three tier-rebuild campaigns (Nano/Super/Ultra,
+2026-09-20 -- see the "full_map rebuild" entry above) took far longer in
+total than expected for genuinely parallel execution and asked for a
+diagnosis.
+
+**They DID launch in true OS-level parallel** -- three separate `python3`
+processes, each with its own `Client`/`ResultsStore` connection, confirmed
+by their start timestamps landing within 17 seconds of each other
+(18:28:19 / 18:28:30 / 18:28:36 UTC). That part worked as designed.
+
+**But wall-clock duration was wildly uneven and none of the three
+finished in the "minutes" a truly independent parallel run should take:**
+
+| campaign | records | duration | gaps >15s (count / total secs) | max single gap |
+|---|---|---|---|---|
+| Ultra | 432 | ~10.5 min | 4 / 81.6s | 20.5s |
+| Super | 495 | ~22 min | 28 / 539.7s | 24.8s |
+| Nano | 651 | ~82.5 min | 94 / 3172.6s | 124.7s |
+
+Nano alone spent ~53 of its ~82.5 minutes (roughly two-thirds) sitting in
+gaps between record writes far larger than any observed single-call
+latency (avg call latency across all three campaigns: 3.7-9.4s) --
+the unmistakable signature of exponential-backoff retry delay on 429s,
+not generation time.
+
+**Root cause:** `cartographer.exec.client.NEBIUS` has no explicit
+`suggested_parallelism` override, so it uses the `Provider` dataclass
+default of **6** -- a figure calibrated assuming ONE campaign runs against
+the account at a time, which is exactly what `/launch`'s module-level
+one-campaign-at-a-time guard (`cartographer/viewer/launch.py`) exists to
+enforce. This rebuild was launched by invoking
+`run_full_map_campaign`/`run_tool_planning_campaign` directly via script,
+bypassing that guard entirely (deliberately, for wall-clock speed) -- so
+three campaigns each independently issuing up to 6 concurrent requests
+put up to **18 concurrent requests** against one Nebius account's shared
+rate-limit pool. `RetryPolicy`'s exponential backoff (honoring
+`Retry-After`) absorbed the resulting 429s correctly -- no record was
+corrupted or mis-scored -- but the aggregate throughput was capped by the
+shared ceiling, not additive per-campaign capacity, so "parallel" bought
+far less speedup than the process-level concurrency alone would suggest.
+
+**Why Nano specifically absorbed the most delay:** it simply issued the
+most total requests of the three (651 records vs. 495 and 432,
+compounded by ~14+ length-cap retry round-trips from the
+`cap_hit=1;retry_exhausted=1` errors already logged in the full_map-rebuild
+entry above) -- more requests in the same contested window meant more
+collisions with the shared throttle, not a Nano-specific rate limit.
+
+**Not fixed here** (diagnosis only, per the ask): the real fix is either
+(a) never bypass `/launch`'s one-at-a-time guard for genuinely concurrent
+multi-model campaigns -- accept sequential wall-clock time as the safe
+default, or (b) if concurrent cross-model campaigns are wanted regularly,
+add a *shared* rate limiter/semaphore across `Client` instances hitting
+the same provider+account, since per-campaign `suggested_parallelism` has
+no visibility into sibling campaigns. Flagging for a decision rather than
+changing unilaterally, since (b) is a real architecture change to the
+execution layer.
+
+---
+
 ## 2026-09-19 — DESIGN (pass 6) — the pass-5 composition system applied to the remaining eight pages
 
 Pass 5 proved the composition fix on the overview only and closed with a
