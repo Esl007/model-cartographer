@@ -1,0 +1,978 @@
+{
+  "meta": {
+    "generated_at": "2026-09-20T17:38:41.308172+00:00",
+    "analyst_model": "nvidia/nemotron-3-super-120b-a12b",
+    "schema": "capability_report_v1"
+  },
+  "store_totals": {
+    "n_models": 3,
+    "n_trials": 1305,
+    "n_scored": 1273,
+    "spend_usd": 0.3257
+  },
+  "diagnosis": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "raw_text": "\n\n## Executive Summary  \nThe evidence shows a clear performance tier: the Nano model achieves a very high overall pass rate (94.1\u202f%) with near\u2011perfect scores on state and order queries, but it shows a specific breakdown when witness_gap is high, especially combined with high entity_state, temporal or coreference loads. The Super and GPT\u2011OSS models sit in a lower tier (overall pass rates 63.4\u202f% and 58.6\u202f% respectively) and fail broadly on belief, distractors and context_length dimensions, with belief pass rates dropping to roughly 60\u202f% (Super) and 53\u202f% (GPT\u2011OSS). All three models handle state queries flawlessly, but only Nano maintains perfect order performance; the other two have no order trials in the pack.\n\n## Per-Model Profile  \n\n### NVIDIA-Nemotron-3-Nano-30B-A3B  \n**Strengths**  \n- Order queries: 100.0\u202f% pass (78/78 scored, 0 failures).  \n- State queries: 100.0\u202f% pass (60/60 scored, 0 failures).  \n\n**Weaknesses / Breakdowns**  \n- High\u2011witness_gap region: 81.8\u202f% pass (27/33 scored, 6 real failures).  \n- High\u2011entity_state region: 88.8\u202f% pass (158/178 scored, 20 real failures); this weakness concentrates where witness_gap is high (3\u201322), where the pass rate falls to the same 81.8\u202f% (27/33).  \n- The capability grid shows belief pass rate 92.5\u202f% (492 scored, 455 pass, 37 fail) \u2013 the only non\u2011perfect kind besides the dimensional weaknesses above.  \n\n### nemotron-3-super-120b-a12b  \n**Strengths**  \n- State queries: 96.7\u202f% pass (29/30 scored, 1 failure).  \n\n**Weaknesses / Breakdowns**  \n- High\u2011distractors region: 48.6\u202f% pass (70/144 scored, 74 real failures); concentration at temporal 0.52\u20130.57 drops to 36.9\u202f% pass (31/84).  \n- High\u2011context_length region: 50.0\u202f% pass (87/174 scored, 87 real failures); concentration at temporal 0.52\u20130.58 drops to 37.5\u202f% pass (39/104).  \n- Belief queries: 60.7\u202f% pass (224/369 scored, 145 real failures); concentration at context_length 15\u201337 drops to 44.2\u202f% pass (68/154).  \n- The grid shows entity_state (high) 55.8\u202f% pass, temporal (high) 50.7\u202f%, coreference (high) 52.6\u202f%, distractors (high) 48.6\u202f%, context_length (high) 50.0\u202f%; witness_gap has no trials (n_scored\u202f=\u202f0).  \n\n### openai/gpt-oss-120b  \n**Strengths**  \n- State queries: 100.0\u202f% pass (30/30 scored, 0 failures).  \n\n**Weaknesses / Breakdowns**  \n- High\u2011distractors region: 42.7\u202f% pass (38/89 scored, 51 real failures); concentration at coreference 3\u201321 drops to 31.1\u202f% pass (19/61).  \n- High\u2011coreference region: 45.0\u202f% pass (54/120 scored, 66 real failures); concentration at distractors 6\u201320 drops to 31.1\u202f% pass (19/61).  \n- Belief queries: 52.8\u202f% pass (113/214 scored, 101 real failures); concentration at context_length 15\u201337 drops to 38.4\u202f% pass (38/99).  \n- The grid shows entity_state (high) 57.7\u202f% pass, temporal (high) 45.2\u202f%, coreference (high) 45.0\u202f%, distractors (high) 42.7\u202f%, context_length (high) 48.7\u202f%; witness_gap again has no trials.  \n\n## Cross-Model Comparison  \n- **Tier discrimination**: Nano\u2019s overall pass rate (94.1\u202f%) is markedly higher than Super\u2019s (63.4\u202f%) and GPT\u2011OSS\u2019s (58.6\u202f%).  \n- **Shared failure modes**: All three models show perfect state performance, but Super and GPT\u2011OSS both suffer heavily on belief, distractors and context_length (belief pass rates \u2248\u202f60\u202f% and 53\u202f%; distractors \u2248\u202f49\u202f% and 43\u202f%; context_length \u2248\u202f50\u202f% and 49\u202f%). Nano\u2019s belief pass rate remains high (92.5\u202f%).  \n- **Distinct failure modes**: Nano\u2019s primary vulnerability is the interaction of high witness_gap with high entity_state/temporal/coreference, where pass rates fall to the low\u201180\u202f% range. Super and GPT\u2011OSS lack witness_gap trials entirely, so this failure mode is not observed for them. Conversely, Super and GPT\u2011OSS exhibit strong sensitivity to distractor and context_length loads, which Nano handles relatively well (its high\u2011distractors and high\u2011context_length grid entries show pass rates in the mid\u201190\u202f% range).  \n- **Order handling**: Only Nano has order trials and passes them perfectly; Super and GPT\u2011OSS have zero order trials in the pack.  \n\n## Recommended Next Probes  \n1. **Nano",
+    "sections": [
+      [
+        "Executive Summary",
+        "The evidence shows a clear performance tier: the Nano model achieves a very high overall pass rate (94.1\u202f%) with near\u2011perfect scores on state and order queries, but it shows a specific breakdown when witness_gap is high, especially combined with high entity_state, temporal or coreference loads. The Super and GPT\u2011OSS models sit in a lower tier (overall pass rates 63.4\u202f% and 58.6\u202f% respectively) and fail broadly on belief, distractors and context_length dimensions, with belief pass rates dropping to roughly 60\u202f% (Super) and 53\u202f% (GPT\u2011OSS). All three models handle state queries flawlessly, but only Nano maintains perfect order performance; the other two have no order trials in the pack."
+      ],
+      [
+        "Per-Model Profile",
+        "### NVIDIA-Nemotron-3-Nano-30B-A3B  \n**Strengths**  \n- Order queries: 100.0\u202f% pass (78/78 scored, 0 failures).  \n- State queries: 100.0\u202f% pass (60/60 scored, 0 failures).  \n\n**Weaknesses / Breakdowns**  \n- High\u2011witness_gap region: 81.8\u202f% pass (27/33 scored, 6 real failures).  \n- High\u2011entity_state region: 88.8\u202f% pass (158/178 scored, 20 real failures); this weakness concentrates where witness_gap is high (3\u201322), where the pass rate falls to the same 81.8\u202f% (27/33).  \n- The capability grid shows belief pass rate 92.5\u202f% (492 scored, 455 pass, 37 fail) \u2013 the only non\u2011perfect kind besides the dimensional weaknesses above.  \n\n### nemotron-3-super-120b-a12b  \n**Strengths**  \n- State queries: 96.7\u202f% pass (29/30 scored, 1 failure).  \n\n**Weaknesses / Breakdowns**  \n- High\u2011distractors region: 48.6\u202f% pass (70/144 scored, 74 real failures); concentration at temporal 0.52\u20130.57 drops to 36.9\u202f% pass (31/84).  \n- High\u2011context_length region: 50.0\u202f% pass (87/174 scored, 87 real failures); concentration at temporal 0.52\u20130.58 drops to 37.5\u202f% pass (39/104).  \n- Belief queries: 60.7\u202f% pass (224/369 scored, 145 real failures); concentration at context_length 15\u201337 drops to 44.2\u202f% pass (68/154).  \n- The grid shows entity_state (high) 55.8\u202f% pass, temporal (high) 50.7\u202f%, coreference (high) 52.6\u202f%, distractors (high) 48.6\u202f%, context_length (high) 50.0\u202f%; witness_gap has no trials (n_scored\u202f=\u202f0).  \n\n### openai/gpt-oss-120b  \n**Strengths**  \n- State queries: 100.0\u202f% pass (30/30 scored, 0 failures).  \n\n**Weaknesses / Breakdowns**  \n- High\u2011distractors region: 42.7\u202f% pass (38/89 scored, 51 real failures); concentration at coreference 3\u201321 drops to 31.1\u202f% pass (19/61).  \n- High\u2011coreference region: 45.0\u202f% pass (54/120 scored, 66 real failures); concentration at distractors 6\u201320 drops to 31.1\u202f% pass (19/61).  \n- Belief queries: 52.8\u202f% pass (113/214 scored, 101 real failures); concentration at context_length 15\u201337 drops to 38.4\u202f% pass (38/99).  \n- The grid shows entity_state (high) 57.7\u202f% pass, temporal (high) 45.2\u202f%, coreference (high) 45.0\u202f%, distractors (high) 42.7\u202f%, context_length (high) 48.7\u202f%; witness_gap again has no trials."
+      ],
+      [
+        "Cross-Model Comparison",
+        "- **Tier discrimination**: Nano\u2019s overall pass rate (94.1\u202f%) is markedly higher than Super\u2019s (63.4\u202f%) and GPT\u2011OSS\u2019s (58.6\u202f%).  \n- **Shared failure modes**: All three models show perfect state performance, but Super and GPT\u2011OSS both suffer heavily on belief, distractors and context_length (belief pass rates \u2248\u202f60\u202f% and 53\u202f%; distractors \u2248\u202f49\u202f% and 43\u202f%; context_length \u2248\u202f50\u202f% and 49\u202f%). Nano\u2019s belief pass rate remains high (92.5\u202f%).  \n- **Distinct failure modes**: Nano\u2019s primary vulnerability is the interaction of high witness_gap with high entity_state/temporal/coreference, where pass rates fall to the low\u201180\u202f% range. Super and GPT\u2011OSS lack witness_gap trials entirely, so this failure mode is not observed for them. Conversely, Super and GPT\u2011OSS exhibit strong sensitivity to distractor and context_length loads, which Nano handles relatively well (its high\u2011distractors and high\u2011context_length grid entries show pass rates in the mid\u201190\u202f% range).  \n- **Order handling**: Only Nano has order trials and passes them perfectly; Super and GPT\u2011OSS have zero order trials in the pack."
+      ],
+      [
+        "Recommended Next Probes",
+        "1. **Nano"
+      ]
+    ],
+    "error": null
+  },
+  "audit_flags": [
+    {
+      "figure": "80\u202f%",
+      "normalized": 80.0,
+      "kind": "percent",
+      "context": "here pass rates fall to the low\u201180 % range. Super and GPT\u2011OSS lack w"
+    },
+    {
+      "figure": "90\u202f%",
+      "normalized": 90.0,
+      "kind": "percent",
+      "context": "ries show pass rates in the mid\u201190 % range). - **Order handling**:"
+    }
+  ],
+  "corroborations": null,
+  "literature": {
+    "note": "literature check not run (no Tavily key)"
+  },
+  "evidence_pack": {
+    "schema": "evidence_pack_v1",
+    "arithmetic_contract": "All rates are over SCORED trials only (PASS+FAIL); infra ERRORs excluded; FAILs classified as resample noise excluded from both numerator and denominator. Percentages are rounded to one decimal.",
+    "store_totals": {
+      "n_models": 3,
+      "n_trials": 1305,
+      "n_scored": 1273,
+      "spend_usd": 0.3257
+    },
+    "capability_kinds": [
+      "state",
+      "order",
+      "belief",
+      "adversarial_belief",
+      "tool_plan"
+    ],
+    "difficulty_dims": [
+      "entity_state",
+      "temporal",
+      "coreference",
+      "distractors",
+      "context_length",
+      "witness_gap"
+    ],
+    "dim_high_regions": {
+      "entity_state": {
+        "high_min": 6.0,
+        "tercile_cuts": [
+          2.0,
+          6.0
+        ]
+      },
+      "temporal": {
+        "high_min": 0.15076923076923077,
+        "tercile_cuts": [
+          0.0,
+          0.0
+        ]
+      },
+      "coreference": {
+        "high_min": 3.0,
+        "tercile_cuts": [
+          1.0,
+          3.0
+        ]
+      },
+      "distractors": {
+        "high_min": 6.0,
+        "tercile_cuts": [
+          2.0,
+          2.0
+        ]
+      },
+      "context_length": {
+        "high_min": 15.0,
+        "tercile_cuts": [
+          7.0,
+          15.0
+        ]
+      },
+      "witness_gap": {
+        "high_min": 3.0,
+        "tercile_cuts": [
+          1.0,
+          1.0
+        ]
+      }
+    },
+    "models": [
+      {
+        "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+        "short_name": "NVIDIA-Nemotron-3-Nano-30B-A3B",
+        "overall_pass_rate_pct": 94.1,
+        "n_trials": 661,
+        "n_scored": 630,
+        "n_pass": 593,
+        "spend_usd": 0.121,
+        "strengths": [
+          {
+            "headline": "NVIDIA-Nemotron-3-Nano-30B-A3B passes order queries cleanly: 78/78, no failures at all",
+            "label": "order",
+            "pass_rate_pct": 100.0,
+            "n_scored": 78,
+            "n_pass": 78
+          },
+          {
+            "headline": "NVIDIA-Nemotron-3-Nano-30B-A3B passes state queries cleanly: 60/60, no failures at all",
+            "label": "state",
+            "pass_rate_pct": 100.0,
+            "n_scored": 60,
+            "n_pass": 60
+          }
+        ],
+        "weaknesses": [
+          {
+            "headline": "NVIDIA-Nemotron-3-Nano-30B-A3B fails trials in the high-witness_gap region: 82% pass (27/33 scored, 6 real failures)",
+            "label": "witness_gap (high)",
+            "pass_rate_pct": 81.8,
+            "n_scored": 33,
+            "n_pass": 27,
+            "n_fail": 6,
+            "concentrations": [
+              {
+                "dim": "entity_state",
+                "bucket": "high",
+                "range": "entity_state 9\u201325",
+                "pass_rate_pct": 81.8,
+                "n_scored": 33,
+                "n_pass": 27
+              },
+              {
+                "dim": "temporal",
+                "bucket": "high",
+                "range": "temporal 0.27\u20130.52",
+                "pass_rate_pct": 81.8,
+                "n_scored": 33,
+                "n_pass": 27
+              },
+              {
+                "dim": "coreference",
+                "bucket": "high",
+                "range": "coreference 4\u201337",
+                "pass_rate_pct": 81.8,
+                "n_scored": 33,
+                "n_pass": 27
+              }
+            ],
+            "traps": [],
+            "replication": null
+          },
+          {
+            "headline": "NVIDIA-Nemotron-3-Nano-30B-A3B fails trials in the high-entity_state region: 89% pass (158/178 scored, 20 real failures) \u2014 concentrated at witness_gap 3\u201322, where it drops to 82% (27/33)",
+            "label": "entity_state (high)",
+            "pass_rate_pct": 88.8,
+            "n_scored": 178,
+            "n_pass": 158,
+            "n_fail": 20,
+            "concentrations": [
+              {
+                "dim": "witness_gap",
+                "bucket": "high",
+                "range": "witness_gap 3\u201322",
+                "pass_rate_pct": 81.8,
+                "n_scored": 33,
+                "n_pass": 27
+              },
+              {
+                "dim": "coreference",
+                "bucket": "high",
+                "range": "coreference 3\u201337",
+                "pass_rate_pct": 84.0,
+                "n_scored": 75,
+                "n_pass": 63
+              },
+              {
+                "dim": "temporal",
+                "bucket": "high",
+                "range": "temporal 0.27\u20130.54",
+                "pass_rate_pct": 84.2,
+                "n_scored": 38,
+                "n_pass": 32
+              }
+            ],
+            "traps": [
+              {
+                "trap_kind": "final_true_state",
+                "count": 4
+              },
+              {
+                "trap_kind": "last_mentioned_location",
+                "count": 4
+              },
+              {
+                "trap_kind": "last_witnessed_by_anyone",
+                "count": 4
+              },
+              {
+                "trap_kind": "most_frequent_location",
+                "count": 4
+              },
+              {
+                "trap_kind": "query_agent_own_last_move",
+                "count": 4
+              }
+            ],
+            "replication": null
+          }
+        ],
+        "capability_grid": [
+          {
+            "key": "state",
+            "axis": "kind",
+            "label": "state",
+            "pass_rate_pct": 100.0,
+            "n_scored": 60,
+            "n_pass": 60,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          },
+          {
+            "key": "order",
+            "axis": "kind",
+            "label": "order",
+            "pass_rate_pct": 100.0,
+            "n_scored": 78,
+            "n_pass": 78,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 2,
+            "verification": "no-failures"
+          },
+          {
+            "key": "belief",
+            "axis": "kind",
+            "label": "belief",
+            "pass_rate_pct": 92.5,
+            "n_scored": 492,
+            "n_pass": 455,
+            "n_fail": 37,
+            "n_noise_excluded": 11,
+            "n_error_excluded": 18,
+            "verification": "contains-noise"
+          },
+          {
+            "key": "adversarial_belief",
+            "axis": "kind",
+            "label": "adversarial_belief",
+            "pass_rate_pct": null,
+            "n_scored": 0,
+            "n_pass": 0,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          },
+          {
+            "key": "tool_plan",
+            "axis": "kind",
+            "label": "tool_plan",
+            "pass_rate_pct": null,
+            "n_scored": 0,
+            "n_pass": 0,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          },
+          {
+            "key": "entity_state",
+            "axis": "dim",
+            "label": "entity_state (high)",
+            "pass_rate_pct": 88.8,
+            "n_scored": 178,
+            "n_pass": 158,
+            "n_fail": 20,
+            "n_noise_excluded": 3,
+            "n_error_excluded": 11,
+            "verification": "contains-noise"
+          },
+          {
+            "key": "temporal",
+            "axis": "dim",
+            "label": "temporal (high)",
+            "pass_rate_pct": 94.2,
+            "n_scored": 120,
+            "n_pass": 113,
+            "n_fail": 7,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 14,
+            "verification": "unverified"
+          },
+          {
+            "key": "coreference",
+            "axis": "dim",
+            "label": "coreference (high)",
+            "pass_rate_pct": 92.4,
+            "n_scored": 224,
+            "n_pass": 207,
+            "n_fail": 17,
+            "n_noise_excluded": 4,
+            "n_error_excluded": 12,
+            "verification": "contains-noise"
+          },
+          {
+            "key": "distractors",
+            "axis": "dim",
+            "label": "distractors (high)",
+            "pass_rate_pct": 94.2,
+            "n_scored": 120,
+            "n_pass": 113,
+            "n_fail": 7,
+            "n_noise_excluded": 1,
+            "n_error_excluded": 13,
+            "verification": "contains-noise"
+          },
+          {
+            "key": "context_length",
+            "axis": "dim",
+            "label": "context_length (high)",
+            "pass_rate_pct": 93.8,
+            "n_scored": 178,
+            "n_pass": 167,
+            "n_fail": 11,
+            "n_noise_excluded": 1,
+            "n_error_excluded": 15,
+            "verification": "contains-noise"
+          },
+          {
+            "key": "witness_gap",
+            "axis": "dim",
+            "label": "witness_gap (high)",
+            "pass_rate_pct": 81.8,
+            "n_scored": 33,
+            "n_pass": 27,
+            "n_fail": 6,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 9,
+            "verification": "unverified"
+          }
+        ]
+      },
+      {
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "short_name": "nemotron-3-super-120b-a12b",
+        "overall_pass_rate_pct": 63.4,
+        "n_trials": 400,
+        "n_scored": 399,
+        "n_pass": 253,
+        "spend_usd": 0.1328,
+        "strengths": [
+          {
+            "headline": "nemotron-3-super-120b-a12b handles state queries: 97% pass (29/30 scored)",
+            "label": "state",
+            "pass_rate_pct": 96.7,
+            "n_scored": 30,
+            "n_pass": 29
+          }
+        ],
+        "weaknesses": [
+          {
+            "headline": "nemotron-3-super-120b-a12b fails trials in the high-distractors region: 49% pass (70/144 scored, 74 real failures) \u2014 concentrated at temporal 0.52\u20130.57, where it drops to 37% (31/84)",
+            "label": "distractors (high)",
+            "pass_rate_pct": 48.6,
+            "n_scored": 144,
+            "n_pass": 70,
+            "n_fail": 74,
+            "concentrations": [
+              {
+                "dim": "temporal",
+                "bucket": "high",
+                "range": "temporal 0.52\u20130.57",
+                "pass_rate_pct": 36.9,
+                "n_scored": 84,
+                "n_pass": 31
+              },
+              {
+                "dim": "entity_state",
+                "bucket": "high",
+                "range": "entity_state = 10",
+                "pass_rate_pct": 37.5,
+                "n_scored": 64,
+                "n_pass": 24
+              },
+              {
+                "dim": "coreference",
+                "bucket": "high",
+                "range": "coreference 3\u201321",
+                "pass_rate_pct": 41.1,
+                "n_scored": 95,
+                "n_pass": 39
+              }
+            ],
+            "traps": [],
+            "replication": null
+          },
+          {
+            "headline": "nemotron-3-super-120b-a12b fails trials in the high-context_length region: 50% pass (87/174 scored, 87 real failures) \u2014 concentrated at temporal 0.52\u20130.58, where it drops to 38% (39/104)",
+            "label": "context_length (high)",
+            "pass_rate_pct": 50.0,
+            "n_scored": 174,
+            "n_pass": 87,
+            "n_fail": 87,
+            "concentrations": [
+              {
+                "dim": "temporal",
+                "bucket": "high",
+                "range": "temporal 0.52\u20130.58",
+                "pass_rate_pct": 37.5,
+                "n_scored": 104,
+                "n_pass": 39
+              },
+              {
+                "dim": "coreference",
+                "bucket": "high",
+                "range": "coreference 3\u201321",
+                "pass_rate_pct": 41.4,
+                "n_scored": 116,
+                "n_pass": 48
+              },
+              {
+                "dim": "distractors",
+                "bucket": "high",
+                "range": "distractors 11\u201320",
+                "pass_rate_pct": 44.8,
+                "n_scored": 134,
+                "n_pass": 60
+              }
+            ],
+            "traps": [],
+            "replication": null
+          },
+          {
+            "headline": "nemotron-3-super-120b-a12b fails belief queries: 61% pass (224/369 scored, 145 real failures) \u2014 concentrated at context_length 15\u201337, where it drops to 44% (68/154)",
+            "label": "belief",
+            "pass_rate_pct": 60.7,
+            "n_scored": 369,
+            "n_pass": 224,
+            "n_fail": 145,
+            "concentrations": [
+              {
+                "dim": "context_length",
+                "bucket": "high",
+                "range": "context_length 15\u201337",
+                "pass_rate_pct": 44.2,
+                "n_scored": 154,
+                "n_pass": 68
+              },
+              {
+                "dim": "entity_state",
+                "bucket": "high",
+                "range": "entity_state 6\u201310",
+                "pass_rate_pct": 48.1,
+                "n_scored": 129,
+                "n_pass": 62
+              },
+              {
+                "dim": "distractors",
+                "bucket": "high",
+                "range": "distractors 6\u201320",
+                "pass_rate_pct": 48.6,
+                "n_scored": 144,
+                "n_pass": 70
+              }
+            ],
+            "traps": [],
+            "replication": null
+          }
+        ],
+        "capability_grid": [
+          {
+            "key": "state",
+            "axis": "kind",
+            "label": "state",
+            "pass_rate_pct": 96.7,
+            "n_scored": 30,
+            "n_pass": 29,
+            "n_fail": 1,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "unverified"
+          },
+          {
+            "key": "order",
+            "axis": "kind",
+            "label": "order",
+            "pass_rate_pct": null,
+            "n_scored": 0,
+            "n_pass": 0,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          },
+          {
+            "key": "belief",
+            "axis": "kind",
+            "label": "belief",
+            "pass_rate_pct": 60.7,
+            "n_scored": 369,
+            "n_pass": 224,
+            "n_fail": 145,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 1,
+            "verification": "unverified"
+          },
+          {
+            "key": "adversarial_belief",
+            "axis": "kind",
+            "label": "adversarial_belief",
+            "pass_rate_pct": null,
+            "n_scored": 0,
+            "n_pass": 0,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          },
+          {
+            "key": "tool_plan",
+            "axis": "kind",
+            "label": "tool_plan",
+            "pass_rate_pct": null,
+            "n_scored": 0,
+            "n_pass": 0,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          },
+          {
+            "key": "entity_state",
+            "axis": "dim",
+            "label": "entity_state (high)",
+            "pass_rate_pct": 55.8,
+            "n_scored": 154,
+            "n_pass": 86,
+            "n_fail": 68,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 1,
+            "verification": "unverified"
+          },
+          {
+            "key": "temporal",
+            "axis": "dim",
+            "label": "temporal (high)",
+            "pass_rate_pct": 50.7,
+            "n_scored": 144,
+            "n_pass": 73,
+            "n_fail": 71,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 1,
+            "verification": "unverified"
+          },
+          {
+            "key": "coreference",
+            "axis": "dim",
+            "label": "coreference (high)",
+            "pass_rate_pct": 52.6,
+            "n_scored": 190,
+            "n_pass": 100,
+            "n_fail": 90,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "unverified"
+          },
+          {
+            "key": "distractors",
+            "axis": "dim",
+            "label": "distractors (high)",
+            "pass_rate_pct": 48.6,
+            "n_scored": 144,
+            "n_pass": 70,
+            "n_fail": 74,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 1,
+            "verification": "unverified"
+          },
+          {
+            "key": "context_length",
+            "axis": "dim",
+            "label": "context_length (high)",
+            "pass_rate_pct": 50.0,
+            "n_scored": 174,
+            "n_pass": 87,
+            "n_fail": 87,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 1,
+            "verification": "unverified"
+          },
+          {
+            "key": "witness_gap",
+            "axis": "dim",
+            "label": "witness_gap (high)",
+            "pass_rate_pct": null,
+            "n_scored": 0,
+            "n_pass": 0,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          }
+        ]
+      },
+      {
+        "model": "openai/gpt-oss-120b",
+        "short_name": "gpt-oss-120b",
+        "overall_pass_rate_pct": 58.6,
+        "n_trials": 244,
+        "n_scored": 244,
+        "n_pass": 143,
+        "spend_usd": 0.0719,
+        "strengths": [
+          {
+            "headline": "gpt-oss-120b passes state queries cleanly: 30/30, no failures at all",
+            "label": "state",
+            "pass_rate_pct": 100.0,
+            "n_scored": 30,
+            "n_pass": 30
+          }
+        ],
+        "weaknesses": [
+          {
+            "headline": "gpt-oss-120b fails trials in the high-distractors region: 43% pass (38/89 scored, 51 real failures) \u2014 concentrated at coreference 3\u201321, where it drops to 31% (19/61)",
+            "label": "distractors (high)",
+            "pass_rate_pct": 42.7,
+            "n_scored": 89,
+            "n_pass": 38,
+            "n_fail": 51,
+            "concentrations": [
+              {
+                "dim": "coreference",
+                "bucket": "high",
+                "range": "coreference 3\u201321",
+                "pass_rate_pct": 31.1,
+                "n_scored": 61,
+                "n_pass": 19
+              },
+              {
+                "dim": "temporal",
+                "bucket": "high",
+                "range": "temporal 0.52\u20130.57",
+                "pass_rate_pct": 32.7,
+                "n_scored": 49,
+                "n_pass": 16
+              },
+              {
+                "dim": "entity_state",
+                "bucket": "high",
+                "range": "entity_state = 10",
+                "pass_rate_pct": 36.4,
+                "n_scored": 44,
+                "n_pass": 16
+              }
+            ],
+            "traps": [],
+            "replication": null
+          },
+          {
+            "headline": "gpt-oss-120b fails trials in the high-coreference region: 45% pass (54/120 scored, 66 real failures) \u2014 concentrated at distractors 6\u201320, where it drops to 31% (19/61)",
+            "label": "coreference (high)",
+            "pass_rate_pct": 45.0,
+            "n_scored": 120,
+            "n_pass": 54,
+            "n_fail": 66,
+            "concentrations": [
+              {
+                "dim": "distractors",
+                "bucket": "high",
+                "range": "distractors 6\u201320",
+                "pass_rate_pct": 31.1,
+                "n_scored": 61,
+                "n_pass": 19
+              },
+              {
+                "dim": "context_length",
+                "bucket": "high",
+                "range": "context_length 15\u201337",
+                "pass_rate_pct": 34.2,
+                "n_scored": 79,
+                "n_pass": 27
+              },
+              {
+                "dim": "temporal",
+                "bucket": "high",
+                "range": "temporal 0.27\u20130.87",
+                "pass_rate_pct": 35.5,
+                "n_scored": 62,
+                "n_pass": 22
+              }
+            ],
+            "traps": [],
+            "replication": null
+          },
+          {
+            "headline": "gpt-oss-120b fails belief queries: 53% pass (113/214 scored, 101 real failures) \u2014 concentrated at context_length 15\u201337, where it drops to 38% (38/99)",
+            "label": "belief",
+            "pass_rate_pct": 52.8,
+            "n_scored": 214,
+            "n_pass": 113,
+            "n_fail": 101,
+            "concentrations": [
+              {
+                "dim": "context_length",
+                "bucket": "high",
+                "range": "context_length 15\u201337",
+                "pass_rate_pct": 38.4,
+                "n_scored": 99,
+                "n_pass": 38
+              },
+              {
+                "dim": "coreference",
+                "bucket": "high",
+                "range": "coreference 3\u201321",
+                "pass_rate_pct": 41.6,
+                "n_scored": 113,
+                "n_pass": 47
+              },
+              {
+                "dim": "distractors",
+                "bucket": "high",
+                "range": "distractors 6\u201320",
+                "pass_rate_pct": 42.7,
+                "n_scored": 89,
+                "n_pass": 38
+              }
+            ],
+            "traps": [],
+            "replication": null
+          }
+        ],
+        "capability_grid": [
+          {
+            "key": "state",
+            "axis": "kind",
+            "label": "state",
+            "pass_rate_pct": 100.0,
+            "n_scored": 30,
+            "n_pass": 30,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          },
+          {
+            "key": "order",
+            "axis": "kind",
+            "label": "order",
+            "pass_rate_pct": null,
+            "n_scored": 0,
+            "n_pass": 0,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          },
+          {
+            "key": "belief",
+            "axis": "kind",
+            "label": "belief",
+            "pass_rate_pct": 52.8,
+            "n_scored": 214,
+            "n_pass": 113,
+            "n_fail": 101,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "unverified"
+          },
+          {
+            "key": "adversarial_belief",
+            "axis": "kind",
+            "label": "adversarial_belief",
+            "pass_rate_pct": null,
+            "n_scored": 0,
+            "n_pass": 0,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          },
+          {
+            "key": "tool_plan",
+            "axis": "kind",
+            "label": "tool_plan",
+            "pass_rate_pct": null,
+            "n_scored": 0,
+            "n_pass": 0,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          },
+          {
+            "key": "entity_state",
+            "axis": "dim",
+            "label": "entity_state (high)",
+            "pass_rate_pct": 57.7,
+            "n_scored": 104,
+            "n_pass": 60,
+            "n_fail": 44,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "unverified"
+          },
+          {
+            "key": "temporal",
+            "axis": "dim",
+            "label": "temporal (high)",
+            "pass_rate_pct": 45.2,
+            "n_scored": 84,
+            "n_pass": 38,
+            "n_fail": 46,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "unverified"
+          },
+          {
+            "key": "coreference",
+            "axis": "dim",
+            "label": "coreference (high)",
+            "pass_rate_pct": 45.0,
+            "n_scored": 120,
+            "n_pass": 54,
+            "n_fail": 66,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "unverified"
+          },
+          {
+            "key": "distractors",
+            "axis": "dim",
+            "label": "distractors (high)",
+            "pass_rate_pct": 42.7,
+            "n_scored": 89,
+            "n_pass": 38,
+            "n_fail": 51,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "unverified"
+          },
+          {
+            "key": "context_length",
+            "axis": "dim",
+            "label": "context_length (high)",
+            "pass_rate_pct": 48.7,
+            "n_scored": 119,
+            "n_pass": 58,
+            "n_fail": 61,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "unverified"
+          },
+          {
+            "key": "witness_gap",
+            "axis": "dim",
+            "label": "witness_gap (high)",
+            "pass_rate_pct": null,
+            "n_scored": 0,
+            "n_pass": 0,
+            "n_fail": 0,
+            "n_noise_excluded": 0,
+            "n_error_excluded": 0,
+            "verification": "no-failures"
+          }
+        ]
+      }
+    ],
+    "curated_findings": {
+      "confirmed_or_needs_replication": [
+        {
+          "name": "Belief-to-reality collapse (witness-rendering bug, corrected)",
+          "mechanism": "Once non-actor witnesses are actually rendered into prose, Nemotron Super shows NO belief/reality collapse: it tracks false beliefs correctly across chain_length, scramble, coref_pressure, and distractor_events.",
+          "evidence": "camp-belief-nemotron-super-002: 105 calls, baseline 3/3, no boundary found on any of the four swept dims.",
+          "status": "confirmed",
+          "date": "2026-09-17",
+          "run_ids": [
+            "camp-belief-nemotron-super-002"
+          ],
+          "evidence_resolves": true
+        },
+        {
+          "name": "Nano continuity-of-observation over-generalization",
+          "mechanism": "Nemotron Nano assumes an entity keeps observing an object's moves even after the story stops placing that entity at the scene -- it over-extends 'last witnessed' into 'still watching', producing a false-belief error the true reasoning chain doesn't support.",
+          "evidence": "camp-belief-nemotron-nano-001: 105 calls, 93% pass, 7 real failures verified against regenerated ground truth -- the first confirmed tier discrimination between Super and Nano.",
+          "status": "confirmed",
+          "date": "2026-09-17",
+          "run_ids": [
+            "camp-belief-nemotron-nano-001"
+          ],
+          "evidence_resolves": true
+        },
+        {
+          "name": "witness_cutoff generalizes the Nano failure mode",
+          "mechanism": "Sweeping witness_cutoff (how early an entity's last witnessed exposure to an object is cut off from the object's later moves) reproduces the same over-generalization systematically: at witness_cutoff=0.7, belief/truth divergence hits 94%.",
+          "evidence": "docs/lab-log.md 2026-09-17 entry, commit 313e3b2.",
+          "status": "confirmed",
+          "date": "2026-09-17",
+          "run_ids": [],
+          "evidence_resolves": true
+        },
+        {
+          "name": "Ultra protagonist-continuity pronoun bias",
+          "mechanism": "Ultra misresolves pronouns toward the story's protagonist specifically -- an ablation that swaps pronoun/name surface form while holding the answer key fixed separates this cleanly from ordinary coreference noise in 6/6 ablated cases.",
+          "evidence": "5 Super belief failures verified real against regenerated ground truth: 4 were pronoun misresolution, 1 was a continuity over-generalization (first recorded Super failures) -- ablation catalog run gave 6/6 separation.",
+          "status": "confirmed",
+          "date": "2026-09-17",
+          "run_ids": [],
+          "evidence_resolves": true
+        },
+        {
+          "name": "Ultra abstention under trap pressure",
+          "mechanism": "Under adversarial (foil-selected) belief queries at high trap density, Ultra sometimes abstains/answers 'unknown' rather than committing to a wrong-but-plausible foil answer -- 2 stable cases so far, not yet replicated on fresh seeds.",
+          "evidence": "2 stable failures observed during adversarial_belief probing; flagged explicitly as unreplicated in docs/lab-log.md.",
+          "status": "needs-replication",
+          "date": "2026-09-17",
+          "run_ids": [],
+          "evidence_resolves": true
+        },
+        {
+          "name": "Trap-selection breaks Ultra where magnitude escalation didn't",
+          "mechanism": "Escalating every difficulty dim to its generator ceiling (chain_length 25, scramble 1.0, coref_pressure 8, distractor_events 40, filler_events 60, witness_cutoff 0.9 simultaneously) never broke Ultra. Adversarial seed search at a much shorter chain_length=2 -- picking the single world among many candidates where a plausible-but-wrong foil answer most directly competes with the truth -- did break it.",
+          "evidence": "run_breaking_point_campaign (escalation ray, t up to 1.0): no breaking point found. run_adversarial_belief_campaign at chain_length=2: confirmed failures. This is the strategic headline result: difficulty magnitude and trap salience are different axes, and only the second one moved Ultra.",
+          "status": "confirmed",
+          "date": "2026-09-17",
+          "run_ids": [],
+          "evidence_resolves": true
+        }
+      ],
+      "retracted": [
+        {
+          "name": "[RETRACTED] Nemotron Super has an intrinsic false-belief floor",
+          "mechanism": "First read of camp-belief-nemotron-super-001 (baseline only 3/5) looked like a real ~60%% capability ceiling on false belief tracking, independent of surface difficulty.",
+          "evidence": "Root cause was a renderer bug, not a model limitation: cartographer/world/simulate.py assigned beliefs to every witness, but cartographer/render/templates.py only ever interpolated the acting entity into prose -- non-actor witnesses were silently never mentioned in the story the model actually read. The model was correctly saying 'unknown' about entities it was never told were present. Fixed in commit 5bd297f; corrected re-run (camp-belief-nemotron-super-002) reversed the result completely -- see the corrected finding above.",
+          "status": "retracted",
+          "date": "2026-09-17",
+          "run_ids": [
+            "camp-belief-nemotron-super-001"
+          ],
+          "evidence_resolves": true
+        }
+      ]
+    }
+  }
+}

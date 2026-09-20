@@ -150,13 +150,33 @@ class ResultsStore:
     that a record read today will read identically tomorrow.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, read_only: bool = False) -> None:
         # check_same_thread=False + an internal write lock make appends safe
         # from worker threads: the parallel campaign scheduler (see
         # `cartographer/schedule/scheduler.py`, SchedulerConfig.parallelism)
         # calls PipelineEvaluator -- and therefore `append` -- from a
         # ThreadPoolExecutor. All writes are serialized under `_write_lock`;
         # sqlite itself then only ever sees one writer on this connection.
+        #
+        # `read_only=True` opens the file through sqlite's `mode=ro` URI so
+        # NO byte of the target db is ever written -- not the CREATE TABLE,
+        # not the ALTER TABLE migration, not the index DDL. This is the
+        # opener every analysis surface uses against the LIVE, gitignored
+        # `results/campaign.sqlite`, which a paid campaign may be appending
+        # to concurrently: a reader must never take a write lock on it or
+        # mutate its schema. A read-only store is append-incapable by
+        # construction (`append`/`append_many` raise), so the immutability
+        # guarantee above is enforced, not merely honored.
+        self._read_only = read_only
+        if read_only:
+            uri = f"file:{Path(path)}?mode=ro"
+            self._conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+            self._write_lock = threading.Lock()
+            self._conn.row_factory = sqlite3.Row
+            # No DDL: the db is opened purely for reading. A db that predates
+            # the reasoning_text/finish_reason migration still reads fine --
+            # `_row_get` already tolerates a missing column.
+            return
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._write_lock = threading.Lock()
         self._conn.row_factory = sqlite3.Row
@@ -165,6 +185,17 @@ class ResultsStore:
         for stmt in _INDEXES:
             self._conn.execute(stmt)
         self._conn.commit()
+
+    @classmethod
+    def open_read_only(cls, path: str | Path) -> "ResultsStore":
+        """Open an existing db for reading only -- see `__init__(read_only=True)`.
+
+        Use this everywhere an analysis/report surface touches the live
+        `results/campaign.sqlite`: it guarantees the reader can neither
+        write rows nor alter the schema of a file a campaign may be
+        actively appending to.
+        """
+        return cls(path, read_only=True)
 
     def _migrate(self) -> None:
         """Idempotently add columns introduced after the original schema to
@@ -179,10 +210,14 @@ class ResultsStore:
         self._conn.commit()
 
     def append(self, record: ExperimentRecord) -> None:
+        if self._read_only:
+            raise RuntimeError("ResultsStore opened read-only: append is disabled")
         with self._write_lock, self._conn:
             self._conn.execute(_INSERT_SQL, _record_to_row(record))
 
     def append_many(self, records: list[ExperimentRecord]) -> None:
+        if self._read_only:
+            raise RuntimeError("ResultsStore opened read-only: append is disabled")
         with self._write_lock, self._conn:
             self._conn.executemany(_INSERT_SQL, (_record_to_row(r) for r in records))
 

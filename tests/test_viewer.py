@@ -713,18 +713,20 @@ def test_current_run_never_leaks_cancel_event():
 # detail pages.
 # ---------------------------------------------------------------------------
 
-_NAV_LABELS = ["Overview", "Findings", "Coverage", "Runs", "Live", "Atlas", "Launch"]
+_NAV_LABELS = ["Overview", "Findings", "Report", "Coverage", "Runs", "Live", "Atlas", "Launch"]
 
 
 def test_nav_present_on_every_page(tmp_path):
     from cartographer.viewer.coverage import coverage_html
     from cartographer.viewer.findings import findings_html
+    from cartographer.viewer.serve import report_html
 
     store, r1, r2, r3 = _seed_store(tmp_path)
     pages = [
         index_html(store),
         runs_html(store),
         findings_html(store),
+        report_html(store),
         coverage_html(),
         run_html(store, "run-a"),
         record_html(store, r1.record_id),
@@ -734,6 +736,22 @@ def test_nav_present_on_every_page(tmp_path):
     for page in pages:
         for label in _NAV_LABELS:
             assert label in page
+
+
+def test_report_page_empty_state_when_no_report(tmp_path, monkeypatch):
+    """With no generated sidecar, /report renders inside the shell and shows
+    the empty state pointing at the generator script."""
+    import cartographer.analyst.report_page as rp
+    from cartographer.viewer.serve import report_html
+
+    monkeypatch.setattr(rp, "_DEFAULT_SIDECAR", tmp_path / "no-report.json")
+    store, _r1, _r2, _r3 = _seed_store(tmp_path)
+    page = report_html(store)
+    assert "Capability report" in page
+    assert "No report yet" in page
+    assert "write_report.py" in page
+    # rendered inside the shell
+    assert "Model Cartographer" in page
 
 
 def test_findings_page_lists_the_four_modes(tmp_path):

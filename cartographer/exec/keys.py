@@ -11,14 +11,18 @@ import re
 from pathlib import Path
 
 _GROQ_KEY_RE = re.compile(r"gsk_[A-Za-z0-9_]+")
+# Tavily search keys are conventionally prefixed "tvly-".
+_TAVILY_KEY_RE = re.compile(r"tvly-[A-Za-z0-9_\-]+")
 
 
 def load_keys(path: str = "env/Nebius api.txt") -> dict[str, str]:
-    """Parse the Nebius/Groq key file relative to the repo root.
+    """Parse the Nebius/Groq/Tavily key file relative to the repo root.
 
     Line 1 is the Nebius key (starts with "v1."). Any line containing
-    "groq" (case-insensitive) holds the Groq key, extracted via regex.
-    Missing keys are simply omitted from the returned dict.
+    "groq" (case-insensitive) holds the Groq key, extracted via regex. Any
+    line containing "tavily" (case-insensitive) or a "tvly-" token holds
+    the Tavily search key. Missing keys are simply omitted from the
+    returned dict.
     """
     repo_root = Path(__file__).resolve().parents[2]
     key_path = repo_root / path
@@ -37,6 +41,14 @@ def load_keys(path: str = "env/Nebius api.txt") -> dict[str, str]:
             match = _GROQ_KEY_RE.search(line)
             if match:
                 keys["groq"] = match.group(0)
+                break
+
+    for line in lines:
+        lower = line.lower()
+        if "tavily" in lower or "tvly-" in lower:
+            match = _TAVILY_KEY_RE.search(line)
+            if match:
+                keys["tavily"] = match.group(0)
                 break
 
     return keys

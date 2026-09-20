@@ -53,6 +53,7 @@ _NAV_GROUPS = [
     ("Results", [
         ("overview", "/", "Overview"),
         ("findings", "/findings", "Findings"),
+        ("report", "/report", "Report"),
         ("runs", "/runs", "Runs"),
     ]),
     ("Explore", [
@@ -1087,6 +1088,7 @@ _INSTRUMENT_JS = """
 _NAV_ICONS = {
     "overview": "▣",
     "findings": "✓",
+    "report": "✎",
     "runs": "≡",
     "atlas": "∿",
     "coverage": "▦",
@@ -1664,6 +1666,19 @@ def _trial_count(store: ResultsStore) -> int:
     cur = store._conn.execute("SELECT COUNT(*) AS n FROM experiments")
     row = cur.fetchone()
     return int(row["n"]) if row is not None else 0
+
+
+def report_html(store: ResultsStore) -> str:
+    """The /report page -- the analyst's latest capability diagnosis, its
+    contamination audit, and any literature corroboration. Read-only: the
+    report was generated offline by `scripts/write_report.py`; this route
+    only renders the sidecar it wrote (or an empty state if none exists)."""
+    from ..analyst.report_page import load_report, report_body
+
+    body = report_body(load_report())
+    return _shell(
+        "Capability report", "report", body, trial_count=_trial_count(store)
+    )
 
 
 def runs_html(store: ResultsStore) -> str:
@@ -2750,6 +2765,10 @@ class _ViewerHandler(BaseHTTPRequestHandler):
             # works with JS off (see findings._switcher_html).
             q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
             self._send_html(findings_html(self.store, model=q.get("model")))
+            return
+
+        if path == "/report":
+            self._send_html(report_html(self.store))
             return
 
         if path == "/coverage":
