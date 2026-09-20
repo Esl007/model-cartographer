@@ -4,3 +4,14 @@ __pycache__/
 .pytest_cache/
 env/
 *.env
+
+# Live results stores. These are APPEND-ONLY DATABASES that campaigns
+# write to while running -- they must NOT be tracked. A tracked mutable
+# db is silently reverted by any git checkout/restore/stash, which is
+# exactly how ~1,180 real trial records (~$0.84 of API spend) were lost
+# on 2026-09-19. History keeps the last committed snapshot; the live
+# file now lives outside git where no git operation can clobber it.
+results/*.sqlite
+results/*.sqlite-wal
+results/*.sqlite-shm
+results/*.bak-*
