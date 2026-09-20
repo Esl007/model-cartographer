@@ -7,6 +7,58 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-19 — DESIGN (pass 4, by Fable directly) — the three measured defects behind "still doesn't look like a SaaS app"
+
+Pass 3 delivered the sidebar, the claim-strip signature, and a
+domain-derived token system, and the user's verdict was "better now but
+not looking like a SaaS." Rather than re-reading the design skill a
+fourth time, this pass MEASURED the rendered DOM against the reference
+screenshots. Three concrete defects, none of them taste:
+
+1. **Content had no container.** `document.querySelector('table')
+   .parentElement` was `MAIN.shell-main` -- the data table sat directly
+   on the page canvas. In every reference (test-factory's REQUEST /
+   RESPONSE / ASSERTIONS, admin-dashboard's Services / Requests /
+   Tenants, bug-tracker's list) nothing ever floats on the canvas; each
+   block is enclosed in a bordered card. This enclosure is most of what
+   separates "application" from "styled document," and it was simply
+   absent. Fixed by making every table self-enclosing (own surface,
+   border, radius) rather than hand-wrapping 11 emission sites across 3
+   modules and churning their markup assertions; `.card` + `.card-head`
+   exist for the cases that want an explicit label-left/meta-right
+   header bar.
+
+2. **Density was tighter than any reference.** Pass 3 explicitly chose
+   "workbench-tight, not SaaS-airy" and landed at 0.44rem cell padding
+   (34px rows) and 13.6px card padding. Measured, every reference sits
+   at ~44-52px rows and ~20-24px card padding. The intent was
+   "precision instrument"; the result read as cramped. Spacing scale
+   moved onto a clean 4px grid, cells to 0.7rem/1rem (42px rows),
+   cards to 20px.
+
+3. **Default system typeface.** `-apple-system, BlinkMacSystemFont...`
+   -- named explicitly in the design skill's own Avoid list ("default
+   typography ... where a direction was set"). Now loads Manrope +
+   JetBrains Mono, the exact pairing the reference site itself ships,
+   with the full system stack retained as fallback so an offline run
+   degrades rather than breaks.
+
+Verified in a real browser after the change: Manrope resolves
+(`document.fonts.check` true), tables carry their own surface
+(rgb(19,20,21)) and border, rows are 42px, card padding 20px, sidebar
+248px + main 887px at a 1150px viewport with no dead gutter.
+
+**One self-inflicted regression, caught and fixed:** the new CSS comment
+contained a literal table tag, and
+`test_run_detail_page_contains_verdict_panel_marker` does a naive
+`page.index()` over the whole document including the inline style block
+-- so it found that comment before the real markup and failed. Confirmed
+against a stash that the test passed pre-change (i.e. mine to fix, not a
+pre-existing flake) and reworded the comment rather than weakening the
+assertion. 320/320 green.
+
+---
+
 ## 2026-09-19 — BUILD (confirmed) — viewer: third redesign pass — domain-derived signature system, then a sidebar/showcase-evidence correction, same session
 
 **Why a third pass.** Two earlier redesign passes on the same day had each

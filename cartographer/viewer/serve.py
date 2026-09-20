@@ -105,13 +105,20 @@ _CSS = """
   --salience-mid: #B0812E;
   --salience-high: #F0A93A;
 
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  --sans: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 
-  /* spacing scale -- workbench-tight, not SaaS-airy (design-notes
-     "Density tightens to workbench levels"). */
-  --sp-1: 0.2rem; --sp-2: 0.4rem; --sp-3: 0.6rem; --sp-4: 0.85rem;
-  --sp-5: 1.15rem; --sp-6: 1.6rem; --sp-7: 2.4rem;
+  /* Spacing scale on a 4px grid. REVISED (pass 4): pass 3 chose
+     "workbench-tight, not SaaS-airy" and landed at ~7px cell padding /
+     13.6px card padding. Measured against the real shipped references
+     this design is derived from (admin-dashboard KPI cards,
+     test-factory request/response cards), that is materially tighter
+     than any of them -- it read as cramped rather than precise, which
+     is the difference between "instrument" and "unstyled". Still
+     denser than consumer SaaS; but a card must have enough padding
+     that the grouping itself is legible. */
+  --sp-1: 0.25rem; --sp-2: 0.5rem; --sp-3: 0.75rem; --sp-4: 1rem;
+  --sp-5: 1.25rem; --sp-6: 2rem; --sp-7: 3rem;
 
   /* type scale: real ~1.25 ratio, 4 sizes. */
   --fs-display: 1.75rem;
@@ -283,7 +290,7 @@ h1 {
 }
 .subtitle { color: var(--ink-secondary); font-size: var(--fs-body); margin: 0 0 var(--sp-5); }
 h2 {
-  font-size: var(--fs-h2); font-weight: 600; margin: var(--sp-6) 0 var(--sp-2);
+  font-size: var(--fs-h2); font-weight: 600; margin: var(--sp-6) 0 var(--sp-3);
   color: var(--ink); letter-spacing: -0.005em;
 }
 h3 { font-size: var(--fs-body); font-weight: 650; margin: var(--sp-4) 0 var(--sp-1); color: var(--ink); }
@@ -305,7 +312,7 @@ h3 { font-size: var(--fs-body); font-weight: 650; margin: var(--sp-4) 0 var(--sp
   background: var(--surface-instrument-1);
   border: 1px solid var(--line);
   border-radius: 3px;
-  padding: var(--sp-4) var(--sp-5);
+  padding: var(--sp-5);
 }
 .panel + .panel { margin-top: var(--sp-3); }
 .panel-grid {
@@ -315,6 +322,49 @@ h3 { font-size: var(--fs-body); font-weight: 650; margin: var(--sp-4) 0 var(--sp
   margin: var(--sp-3) 0 var(--sp-6);
 }
 .panel-grid .panel { padding: var(--sp-4); }
+
+/* CARD -- pass 4. The structural fix behind "it still doesn't look like
+   a SaaS app": content was sitting DIRECTLY on the page background. In
+   every real reference (test-factory's REQUEST/RESPONSE/ASSERTIONS,
+   admin-dashboard's Services/Requests/Tenants, bug-tracker's list), no
+   table or data block ever floats on the canvas -- each is enclosed in
+   a bordered card with its own header bar: uppercase label left,
+   contextual meta right, hairline beneath, body flush below. That
+   enclosure is most of what reads as "designed application" rather
+   than "styled document". A table inside a card goes edge-to-edge (the
+   card owns the padding), so `.card > table` resets its own margins. */
+.card {
+  background: var(--surface-instrument-1);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  margin: var(--sp-3) 0 var(--sp-6);
+  overflow: hidden;   /* keeps the flush table's corners inside the radius */
+}
+.card-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--line);
+}
+.card-title {
+  font-size: 10px; font-weight: 650; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--ink-secondary);
+  font-family: var(--mono);
+}
+.card-meta {
+  font-size: var(--fs-small); color: var(--ink-muted);
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.card-body { padding: var(--sp-5); }
+.card-body > :first-child { margin-top: 0; }
+.card-body > :last-child { margin-bottom: 0; }
+/* A table is the card's whole body: flush to the edges, no stray margin,
+   and no double border where the last row meets the card edge. */
+.card > table { margin: 0; }
+.card > table th:first-child, .card > table td:first-child { padding-left: var(--sp-5); }
+.card > table th:last-child, .card > table td:last-child { padding-right: var(--sp-5); }
+.card > table tbody tr:last-child td { border-bottom: none; }
 
 /* Hero KPI stat card -- confirmed against a real shipped admin-dashboard
    example: a big bold number (~32-36px, not 24px) + a small inline
@@ -350,12 +400,33 @@ h3 { font-size: var(--fs-body); font-weight: 650; margin: var(--sp-4) 0 var(--sp
    0.6rem to ~7px), numeric columns right-aligned + tabular, header row
    raised one surface step with a real rule beneath it.
    ------------------------------------------------------------------- */
-table { border-collapse: collapse; width: 100%; margin: var(--sp-3) 0 var(--sp-5); font-size: var(--fs-small); }
-th, td { padding: 0.44rem var(--sp-3); text-align: left; border-bottom: 1px solid var(--line); }
+/* Every table is self-enclosing (pass 4). Previously a bare table element
+   sat directly on the page canvas with no container -- the strongest
+   "unstyled document, not an application" tell, and the thing no
+   reference does anywhere. Rather than hand-wrapping 11 emission sites
+   across 3 modules (and churning the tests that assert on their markup),
+   the table IS the card: its own surface, border, and radius. `.card >
+   table` above opts out for the cases that want an explicit header bar.
+   border-collapse must be `separate` for the radius to render, so the
+   row rule moves to a bottom border per cell with spacing zeroed. */
+table {
+  border-collapse: separate; border-spacing: 0;
+  width: 100%; margin: var(--sp-3) 0 var(--sp-6); font-size: var(--fs-small);
+  background: var(--surface-instrument-1);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+.card > table { background: none; border: none; border-radius: 0; }
+/* Row height, pass 4: 0.44rem vertical padding gave 34px rows -- denser
+   than every reference measured (which sit ~44-52px). Scanning a column
+   of numbers needs the row to be taller than the glyphs. */
+th, td { padding: 0.7rem var(--sp-4); text-align: left; border-bottom: 1px solid var(--line); }
+tbody tr:last-child td { border-bottom: none; }
 th {
   color: var(--ink-muted); text-transform: uppercase; font-size: 10px;
-  letter-spacing: 0.05em; font-weight: 650; border-bottom: 1px solid var(--line-strong);
+  letter-spacing: 0.06em; font-weight: 650; border-bottom: 1px solid var(--line-strong);
   background: var(--surface-instrument-2); font-family: var(--mono);
+  white-space: nowrap;
 }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.mono, td .mono { font-family: var(--mono); }
@@ -663,6 +734,17 @@ def _shell(
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         f"{refresh_tag}"
+        # Manrope + JetBrains Mono -- the pairing the reference examples
+        # this design derives from actually ship. Purely additive: the
+        # --sans/--mono tokens list full system fallbacks after these, so
+        # an offline or blocked-network run degrades to the previous
+        # system-stack rendering rather than breaking. `display=swap`
+        # keeps first paint immediate.
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+        "family=Manrope:wght@400;500;600;700&"
+        'family=JetBrains+Mono:wght@400;500;600&display=swap">'
         f"<title>{html.escape(title)}</title><style>{_CSS}</style></head>"
         f'<body><div class="app-shell">{sidebar}'
         f'<main class="shell-main">{breadcrumb_html}{body}</main>'
