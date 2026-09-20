@@ -982,20 +982,44 @@ FINDINGS: tuple[Finding, ...] = (
         run_ids=(),
     ),
     Finding(
-        name="Ultra abstention under trap pressure",
+        name="Trap-pressure abstention (confirmed on Super, not Ultra)",
         mechanism=(
             "Under adversarial (foil-selected) belief queries at high trap "
-            "density, Ultra sometimes abstains/answers 'unknown' rather "
-            "than committing to a wrong-but-plausible foil answer -- 2 "
-            "stable cases so far, not yet replicated on fresh seeds."
+            "density, a model can abstain/answer 'unknown' rather than "
+            "commit to a wrong-but-plausible foil answer, on questions "
+            "with a fully determinable ground-truth belief. First "
+            "observed on Ultra (2026-09-17, 2 unreplicated cases); a "
+            "2026-09-20 replication attempt on a fresh Ultra candidate "
+            "carrying the same trap signature evaporated under proper "
+            "token budget (28000 vs the 16000 'ultra'-class ceiling: 5/5 "
+            "completed cleanly, 0/5 abstained) -- the original Ultra "
+            "'unknown' answers were very plausibly reasoning-chain "
+            "truncation misread as abstention, not genuine behavior. The "
+            "SAME replication pass found the real thing on Super instead: "
+            "7 adversarial_belief FAILs under the identical trap "
+            "combination, all clean completions (finish_reason=stop, "
+            "500-1900 tokens, no truncation risk on Super's 4000-token "
+            "budget). Resample-classified per this project's standard "
+            "noise gate: 3 of 7 were noise (majority/unanimous PASS on "
+            "resample -- filtered out), 4 survive stable, 3 of those "
+            "answering 'unknown' on all 4 independent draws (original + 3 "
+            "resamples)."
         ),
         evidence=(
-            "2 stable failures observed during adversarial_belief probing; "
-            "flagged explicitly as unreplicated in docs/lab-log.md."
+            "camp-full_map-super-002/adversarial_belief: 4 stable cases "
+            "(pass rate <=0.33 across original+3 resamples), verified "
+            "against regenerated ground truth on one case (prompt "
+            "reproduces byte-identical, answer_key='the workshop' -- a "
+            "normal determinable belief). camp-full_map-ultra-002: the "
+            "debunking resample (5x at max_tokens=28000 on the fresh Ultra "
+            "candidate) is not itself a stored campaign run -- see "
+            "docs/lab-log.md 2026-09-20 entries for both the Ultra "
+            "debunking and the Super confirmation, including the full "
+            "per-record resample table."
         ),
-        status="needs-replication",
-        date="2026-09-17",
-        run_ids=(),
+        status="confirmed",
+        date="2026-09-20",
+        run_ids=("camp-full_map-super-002/adversarial_belief",),
     ),
     Finding(
         name="Trap-selection breaks Ultra where magnitude escalation didn't",

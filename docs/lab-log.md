@@ -132,6 +132,61 @@ this entry instead. Worth a fix, not chased here.
 
 ---
 
+## 2026-09-20 — FINDING (confirmed) — trap-pressure abstention replicates on Super, resample-verified; the phenomenon is real, just mis-attributed to the wrong tier
+
+Continuing the abstention-replication work above: Super's fresh `full_map`
+run (`camp-full_map-super-002`, $0.1731, 495 records) turned up 8 FAILs on
+`adversarial_belief`, 7 of them answering `'unknown'`, ALL under the exact
+same trap combination
+(`final_true_state,last_mentioned_location,last_witnessed_by_anyone`) that
+produced both the original Ultra claim and the Ultra candidate just
+debunked above as a token-truncation artifact. Given that debunking,
+these were not taken at face value -- checked `finish_reason` first
+(all `stop`, 500-1900 tokens, nowhere near Super's 4000-token budget --
+not a truncation case), then ran the same resample-stability classification
+this project applies everywhere:
+
+| original record | resamples (3x) | pass rate | verdict |
+|---|---|---|---|
+| 6186c0cf0863 (unknown) | unknown, unknown, unknown | 0.00 | **STABLE** |
+| fefd0c534495 (unknown) | unknown, unknown, unknown | 0.00 | **STABLE** |
+| 31e06e4beb39 (unknown) | unknown, unknown, unknown | 0.00 | **STABLE** |
+| ed9d3a74ae48 (unknown) | east wing, unknown, unknown | 0.33 | **STABLE** |
+| 3e9839b5185c (loading dock -- not abstention) | FAIL, FAIL, FAIL | 0.00 | STABLE, but a foil-capture case, not abstention |
+| 132bf126e7e0 (unknown) | unknown, PASS, PASS | 0.67 | NOISE |
+| e835c376654a (unknown) | PASS, PASS, PASS | 1.00 | NOISE |
+| 1c28851f8c76 (unknown) | PASS, PASS, PASS | 1.00 | NOISE |
+
+**3 of 7 apparent abstentions were noise** (majority or unanimous PASS on
+resample) -- exactly the Priya-case pattern this whole project's resample
+discipline exists to catch. But **4 survive**, 3 of them answering
+`'unknown'` on literally every one of 4 independent draws (original + 3
+resamples), the 4th on 3 of 4. Verified one case's ground truth directly:
+prompt reproduces byte-identical from the stored seed, answer_key = `'the
+workshop'` -- a normal, fully determinable belief, not an edge case where
+abstaining could be defended as correct.
+
+**Conclusion:** trap-pressure abstention is real -- it just wasn't Ultra's
+phenomenon. The original 2026-09-17 finding attributed it to Ultra using
+infrastructure (8000/16000 token budget) that this session showed can
+mask truncation as abstention; today's Ultra candidate evaporated under
+that exact mechanism. Super, on a normal (non-"ultra") 1500/4000 budget
+with no truncation risk, shows the pattern cleanly and reproducibly. This
+is the SAME failure mode the earlier session named ("belief-attribution
+abstention under trap pressure, distinct from belief-to-reality collapse
+and pronoun bias") -- just correctly attributed now, and with a much
+stronger evidence base (4 stable cases, resample-verified, vs. the
+original's 2 unreplicated ones).
+
+**Action:** `cartographer/viewer/findings.py`'s curated "Ultra abstention
+under trap pressure" entry updated to attribute the confirmed mechanism to
+Super instead, with the Ultra investigation folded in as a documented
+false lead and the reasoning (token-truncation masking) kept visible
+rather than deleted -- the retraction is itself part of the finding's
+credibility.
+
+---
+
 ## 2026-09-19 — DESIGN (pass 6) — the pass-5 composition system applied to the remaining eight pages
 
 Pass 5 proved the composition fix on the overview only and closed with a

@@ -774,9 +774,11 @@ def test_findings_page_lists_the_four_modes(tmp_path):
     assert "continuity" in page.lower() and "Nano" in page
     # Ultra protagonist-continuity pronoun bias
     assert "pronoun" in page.lower() and "Ultra" in page
-    # Ultra abstention under trap pressure
+    # Trap-pressure abstention: originally attributed to Ultra
+    # (needs-replication), replicated 2026-09-20 and found to actually
+    # belong to Super instead -- confirmed, not needs-replication.
     assert "abstention" in page.lower() or "abstain" in page.lower()
-    assert "needs-replication" in page.lower() or "needs replication" in page.lower()
+    assert "confirmed" in page.lower()
     # strategic result: escalation failed, trap-selection succeeded
     assert "trap" in page.lower()
     # retractions kept, collapsed
