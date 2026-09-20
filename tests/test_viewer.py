@@ -947,6 +947,12 @@ def test_atlas_survives_one_model_one_bucket_and_empty_selections(tmp_path):
     # One model, one bucket, one point: no polyline is drawn, but the page
     # still renders a cell and does not raise.
     assert page.count('class="heat-cell"') == 1
+    # ...and no legend: the toggle handler refuses to hide the last
+    # visible series, so a lone toggle could never act. A button that
+    # cannot act is the unfinished-interface tell. Asserted on the BUTTON
+    # markup, not the class name -- the stylesheet and the inline JS both
+    # mention `legend-toggle` / `data-toggle-model` on every page.
+    assert '<button type="button" class="legend-toggle"' not in page
 
     empty_pane = atlas_mod._build_pane(atlas_mod._campaign_records(store), "belief", "nope")
     assert empty_pane is None

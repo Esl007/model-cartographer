@@ -2026,6 +2026,19 @@ and additionally asserts `"<script>alert(" not in page`, so it still
 tests that attacker-controlled text cannot introduce a tag instead of
 silently degrading into "the app contains no JavaScript".
 
+**Follow-up (same day):** the atlas legend rendered a toggle even on a
+single-model pane, where the handler's "never blank the chart" guard makes
+it permanently inert — a control that cannot act, which is the exact
+unfinished-interface tell this pass set out to remove. `_legend_html` now
+returns "" below two models; a single-model chart is already narrowed,
+there is no comparison left to narrow. 360/360 passing.
+
+**Note on history:** the bulk of the work described above was swept into
+commit b5ab761 ("Rebuild /findings as a live per-model capability map")
+by a concurrent agent committing the shared worktree, so the atlas
+rebuild is not described by the message of the commit that carries it.
+This entry is its record.
+
 ---
 
 ## 2026-09-19 — BUG (critical, fixed) + FEATURE (shipped) — /findings could not see the store at all; rebuilt as a live per-model capability map

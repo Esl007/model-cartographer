@@ -661,7 +661,17 @@ def _curve_svg(pane: _Pane) -> str:
 
 def _legend_html(pane: _Pane) -> str:
     """Per-model show/hide. Buttons, not links: they change how the SAME
-    plotted data is displayed, which is a view state, not a new view."""
+    plotted data is displayed, which is a view state, not a new view.
+
+    Renders nothing for a single-model pane. The toggle handler refuses to
+    hide the last visible series (blanking the chart is never what the
+    reader meant), so with one model the control could never do anything
+    -- and a button that can't act is worse than no button, it's the
+    unfinished-interface tell. A single-model chart is already "narrowed";
+    there is no comparison to narrow.
+    """
+    if len(pane.models) < 2:
+        return ""
     focal = _focal_model(pane)
     neutral_i = 0
     items = []
