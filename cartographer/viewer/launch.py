@@ -52,6 +52,7 @@ from ..exec.evaluator import (
     run_full_map_campaign,
     run_order_campaign,
     run_state_campaign,
+    run_tool_planning_campaign,
     run_verify_failures,
 )
 from ..exec.keys import load_keys
@@ -75,6 +76,7 @@ CAMPAIGN_PRESETS: dict[str, dict[str, float]] = {
     "order": {"budget": 400, "cost_cap": 0.5},
     "breaking_point": {"budget": 350, "cost_cap": 0.75},
     "adversarial_belief": {"budget": 300, "cost_cap": 1.0},
+    "tool_planning": {"budget": 400, "cost_cap": 0.75},
     "full_map": {"budget": 600, "cost_cap": 2.0},
 }
 
@@ -148,6 +150,23 @@ CAMPAIGN_DESCRIPTIONS: dict[str, dict[str, object]] = {
         "typical_duration": "10-25 minutes",
         "new": True,
     },
+    "tool_planning": {
+        "query_kind": "tool_plan",
+        "summary": (
+            "SECOND CAPABILITY PROVINCE. Gives the model a devops-flavored "
+            "state machine, a goal, and a catalog of typed tools with real "
+            "preconditions (some decoys, some destructive, some gated behind "
+            "another tool's effect), and asks for a JSON plan of tool calls. "
+            "The verifier SIMULATES the plan step by step -- an unmet "
+            "precondition or an unreached goal is a hard FAIL. Sweeps plan "
+            "depth, decoy count, precondition-chain length, state obscurity, "
+            "and parallel goals. Ground truth is bounded search, never an LLM "
+            "judge."
+        ),
+        "typical_cost": "~$0.02-0.06",
+        "typical_duration": "10-25 minutes",
+        "new": True,
+    },
     "full_map": {
         "query_kind": "state, order, belief, adversarial_belief, breaking_point",
         "summary": (
@@ -169,6 +188,7 @@ _RUNNERS: dict[str, Callable] = {
     "order": run_order_campaign,
     "breaking_point": run_breaking_point_campaign,
     "adversarial_belief": run_adversarial_belief_campaign,
+    "tool_planning": run_tool_planning_campaign,
     "full_map": run_full_map_campaign,
 }
 

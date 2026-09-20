@@ -30,6 +30,12 @@ from ..store.store import ResultsStore
 from ..world.generate import DimParams, generate
 from ..world.measure import measure
 from ..world.search import search_adversarial_seeds
+from ..toolworld.generate import ToolDimParams
+from ..toolworld.generate import generate as tool_generate
+from ..toolworld.measure import measure as tool_measure
+from ..toolworld.render import render as tool_render
+from ..toolworld.search import search_adversarial_seeds as tool_search_adversarial_seeds
+from ..toolworld.verify import verify_plan
 from .client import Client
 from .pricing import cost_usd
 
@@ -1104,6 +1110,355 @@ def run_adversarial_belief_campaign(
         budget, cost_cap, parallelism, max_tokens, cancel_event, verify,
         adversarial=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# TOOL-CALL PLANNING province: a second capability family.
+#
+# Reuses the same generate -> render -> chat -> verify -> persist pipeline
+# shape as PipelineEvaluator, but over cartographer.toolworld (typed tool
+# catalog + precondition dependency chains) instead of cartographer.world
+# (narrative event log). Emits `kind=tool_plan` in verifier_detail so
+# /findings and /atlas pick the new query kind up automatically.
+# ---------------------------------------------------------------------------
+
+# Config keys that map onto integer-valued ToolDimParams fields.
+_TOOL_INT_KEYS = {"plan_depth", "decoy_tools", "precondition_chain", "parallel_goals"}
+# Config keys that map onto float-valued ToolDimParams fields.
+_TOOL_FLOAT_KEYS = {"state_obscurity"}
+# Config keys that map onto boolean ToolDimParams fields (0/1 in config space).
+_TOOL_BOOL_KEYS = {"irreversibility"}
+_TOOL_KNOWN_KEYS = _TOOL_INT_KEYS | _TOOL_FLOAT_KEYS | _TOOL_BOOL_KEYS
+
+
+def _default_tool_base() -> ToolDimParams:
+    return ToolDimParams(
+        plan_depth=3,
+        decoy_tools=2,
+        precondition_chain=1,
+        state_obscurity=0.0,
+        irreversibility=False,
+        parallel_goals=1,
+    )
+
+
+def _apply_tool_config(base: ToolDimParams, config: dict[str, float]) -> ToolDimParams:
+    overrides: dict[str, object] = {}
+    for key, value in config.items():
+        if key in _TOOL_INT_KEYS:
+            overrides[key] = int(round(value))
+        elif key in _TOOL_FLOAT_KEYS:
+            overrides[key] = float(value)
+        elif key in _TOOL_BOOL_KEYS:
+            overrides[key] = bool(round(value))
+        else:
+            raise ValueError(f"unknown tool config key: {key!r}")
+    return replace(base, **overrides)
+
+
+class ToolPlanningEvaluator:
+    """A `TaskEvaluator` backed by the toolworld generate -> render -> chat ->
+    verify pipeline, mirroring `PipelineEvaluator` (same cost-cap / cancel /
+    thread-safety discipline). Each trial persists a full `ExperimentRecord`
+    with `kind=tool_plan`; realized dims come from `toolworld.measure`.
+
+    When `adversarial=True`, the world used at each config point is the winner
+    of a `toolworld.search.search_adversarial_seeds` search over that config
+    (trap-dense selection at zero extra API cost).
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        model: str,
+        store: ResultsStore,
+        run_id: str,
+        cost_cap_usd: float,
+        base: ToolDimParams | None = None,
+        max_tokens: int | None = None,
+        max_tokens_retry: int | None = None,
+        cancel_event: threading.Event | None = None,
+        adversarial: bool = False,
+        adversarial_candidates: int = 40,
+    ) -> None:
+        self.client = client
+        self.model = model
+        self.store = store
+        self.run_id = run_id
+        self.query_kind = "tool_plan"
+        self.cost_cap_usd = cost_cap_usd
+        self.base = base if base is not None else _default_tool_base()
+        self.adversarial = adversarial
+        self.adversarial_candidates = adversarial_candidates
+
+        default_max_tokens, default_max_tokens_retry = default_token_budget(model)
+        self.max_tokens = max_tokens if max_tokens is not None else default_max_tokens
+        self.max_tokens_retry = (
+            max_tokens_retry if max_tokens_retry is not None else default_max_tokens_retry
+        )
+        if self.max_tokens_retry <= self.max_tokens:
+            self.max_tokens_retry = self.max_tokens * 2
+
+        self.cancel_event = cancel_event
+        self.spent_usd = 0.0
+        self.call_count = 0
+        self.error_count = 0
+        self.capped = False
+        self.cancelled = False
+        self._lock = threading.Lock()
+
+    def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
+        params = _apply_tool_config(self.base, config)
+        seed = _task_seed(config, trial_seed)
+
+        with self._lock:
+            if self.spent_usd >= self.cost_cap_usd:
+                self.capped = True
+                self._record_capped(params, seed, trial_seed, reason="cost_capped")
+                return False
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                self.cancelled = True
+                self._record_capped(params, seed, trial_seed, reason="cancelled")
+                return False
+
+        adversarial_note = ""
+        adversarial_n_diverging = 0.0
+        if self.adversarial:
+            winners = tool_search_adversarial_seeds(
+                params, seed, n_candidates=self.adversarial_candidates, top_k=1
+            )
+            if winners:
+                seed, profile = winners[0]
+                traps = ",".join(profile.trap_kinds)
+                adversarial_note = (
+                    f";adversarial=1;traps={traps}"
+                    f";foil_score={round(profile.divergence_score, 4)}"
+                )
+                adversarial_n_diverging = float(profile.n_diverging)
+            else:
+                adversarial_note = ";adversarial=1;traps=;foil_score=0"
+
+        world = tool_generate(params, seed)
+        rendered = tool_render(world, seed)
+        realized_dims = tool_measure(world)
+        if self.adversarial:
+            realized_dims = dict(realized_dims)
+            realized_dims["foil_divergence"] = adversarial_n_diverging
+
+        verifier_detail = f"kind=tool_plan;campaign=1{adversarial_note}"
+
+        result = self.client.chat(
+            model=self.model,
+            prompt=rendered.prompt,
+            max_tokens=self.max_tokens,
+            max_tokens_retry=self.max_tokens_retry,
+        )
+        cost = cost_usd(self.model, result.tokens_in, result.tokens_out)
+        with self._lock:
+            self.call_count += 1
+            self.spent_usd += cost
+
+        if result.error is not None:
+            retry = self.client.chat(
+                model=self.model,
+                prompt=rendered.prompt,
+                max_tokens=self.max_tokens,
+                max_tokens_retry=self.max_tokens_retry,
+            )
+            retry_cost = cost_usd(self.model, retry.tokens_in, retry.tokens_out)
+            cost += retry_cost
+            with self._lock:
+                self.call_count += 1
+                self.spent_usd += retry_cost
+            result = retry
+
+        if result.error is not None:
+            verdict = Verdict.ERROR
+            verifier_detail += f";error={result.error}"
+        else:
+            pv = verify_plan(result.text, world)
+            verdict = pv.verdict
+            verifier_detail += (
+                f";detail={pv.detail};n_calls={pv.n_calls}"
+                f";optimal_depth={pv.optimal_depth};overhead={pv.overhead}"
+            )
+            realized_dims = dict(realized_dims)
+            if pv.overhead >= 0:
+                realized_dims["plan_overhead"] = float(pv.overhead)
+            if result.finish_reason == "length":
+                verdict = Verdict.ERROR
+                verifier_detail += ";cap_hit=1"
+                if result.retried:
+                    verifier_detail += ";retry_exhausted=1"
+
+        record = ExperimentRecord(
+            run_id=self.run_id,
+            model_name=self.model,
+            latent_params={
+                "plan_depth": float(params.plan_depth),
+                "decoy_tools": float(params.decoy_tools),
+                "precondition_chain": float(params.precondition_chain),
+                "state_obscurity": float(params.state_obscurity),
+                "irreversibility": float(params.irreversibility),
+                "parallel_goals": float(params.parallel_goals),
+            },
+            realized_dims=realized_dims,
+            render_mode=RenderMode.TEMPLATE,
+            task_seed=seed,
+            trial_seed=trial_seed,
+            rendering_seed=seed,
+            prompt_text=rendered.prompt,
+            response_text=result.text,
+            verdict=verdict,
+            verifier_detail=verifier_detail,
+            tokens_in=result.tokens_in,
+            tokens_out=result.tokens_out,
+            cost_usd=cost,
+            latency_ms=result.latency_ms,
+            reasoning_text=result.reasoning,
+            finish_reason=result.finish_reason,
+        )
+        with self._lock:
+            if verdict == Verdict.ERROR:
+                self.error_count += 1
+            self.store.append(record)
+            if self.spent_usd >= self.cost_cap_usd:
+                self.capped = True
+
+        return verdict == Verdict.PASS
+
+    def _record_capped(
+        self,
+        params: ToolDimParams,
+        seed: int,
+        trial_seed: int,
+        reason: str = "cost_capped",
+    ) -> None:
+        self.error_count += 1
+        record = ExperimentRecord(
+            run_id=self.run_id,
+            model_name=self.model,
+            latent_params={
+                "plan_depth": float(params.plan_depth),
+                "decoy_tools": float(params.decoy_tools),
+                "precondition_chain": float(params.precondition_chain),
+                "state_obscurity": float(params.state_obscurity),
+                "irreversibility": float(params.irreversibility),
+                "parallel_goals": float(params.parallel_goals),
+            },
+            realized_dims={},
+            render_mode=RenderMode.TEMPLATE,
+            task_seed=seed,
+            trial_seed=trial_seed,
+            rendering_seed=seed,
+            prompt_text=None,
+            response_text=None,
+            verdict=Verdict.ERROR,
+            verifier_detail=f"kind=tool_plan;campaign=1;{reason}=1",
+            tokens_in=0,
+            tokens_out=0,
+            cost_usd=0.0,
+            latency_ms=0.0,
+            reasoning_text=None,
+            finish_reason=None,
+        )
+        self.store.append(record)
+
+
+def _tool_planning_scheduler_config(budget: int, parallelism: int = 6) -> SchedulerConfig:
+    dims = [
+        DimSpec("plan_depth", 1, 6, True),
+        DimSpec("decoy_tools", 0, 5, True),
+        DimSpec("precondition_chain", 0, 2, True),
+        DimSpec("state_obscurity", 0.0, 1.0, False),
+        DimSpec("parallel_goals", 1, 2, True),
+    ]
+    baseline = {d.name: d.lo for d in dims}
+    ceiling = {d.name: d.hi for d in dims}
+    return SchedulerConfig(
+        dims=dims,
+        baseline=baseline,
+        ceiling=ceiling,
+        k_trials=5,
+        ci_width_stop=2.0,
+        decompose_share=0.35,
+        budget=budget,
+        parallelism=parallelism,
+    )
+
+
+def run_tool_planning_campaign(
+    client: Client,
+    store: ResultsStore,
+    run_id: str,
+    model: str,
+    budget: int = 400,
+    cost_cap: float = 0.75,
+    parallelism: int | None = None,
+    max_tokens: int | None = None,
+    cancel_event: threading.Event | None = None,
+    verify: str = "manual",
+    adversarial: bool = False,
+) -> CampaignState:
+    """Run the TOOL-CALL PLANNING campaign: sweep plan_depth, decoy_tools,
+    precondition_chain, state_obscurity, and parallel_goals over the toolworld
+    generator. The model is asked to emit a JSON plan of tool calls; the
+    verifier simulates it against the latent state machine (kind=tool_plan).
+
+    `verify="manual"` is the default here (unlike the belief campaigns): a
+    tool-plan FAIL is a hard, deterministic verifier outcome (an unmet
+    precondition or an unreached goal), not the soft MoE-routing noise the
+    resample check was built for -- so auto-resampling adds cost without the
+    same payoff. Pass `verify="auto"` to resample FAILs anyway. `adversarial`
+    selects trap-dense worlds via the foil-model seed search at every config
+    point.
+
+    `parallelism=None` defaults to the client provider's suggested_parallelism.
+    `max_tokens=None` defaults to the model-heuristic budget.
+    `cancel_event`, when provided, cooperatively cancels between trials.
+    """
+    if verify not in ("auto", "manual"):
+        raise ValueError(f'verify must be "auto" or "manual", got {verify!r}')
+
+    evaluator = ToolPlanningEvaluator(
+        client=client,
+        model=model,
+        store=store,
+        run_id=run_id,
+        cost_cap_usd=cost_cap,
+        max_tokens=max_tokens,
+        cancel_event=cancel_event,
+        adversarial=adversarial,
+    )
+    if parallelism is None:
+        parallelism = _default_parallelism(client)
+    config = _tool_planning_scheduler_config(budget, parallelism)
+
+    def on_record(cfg: dict, passed: bool, seed: int) -> None:
+        pass  # ToolPlanningEvaluator persists every trial itself.
+
+    state = run_campaign(evaluator, config, on_record=on_record)
+    if evaluator.capped:
+        state.notes.append("cost_cap_hit")
+
+    if verify == "auto" and not (cancel_event is not None and cancel_event.is_set()):
+        vresult = run_verify_failures(
+            client=client,
+            model=model,
+            store=store,
+            run_id=run_id,
+            cost_cap_slice=cost_cap * _VERIFY_COST_CAP_SHARE,
+            max_tokens=max_tokens,
+            cancel_event=cancel_event,
+        )
+        evaluator.spent_usd += vresult.spent_usd
+        state.notes.append(
+            f"verify_failures: {vresult.n_verified} verified "
+            f"({vresult.n_stable} stable, {vresult.n_noise} noise)"
+        )
+
+    state.evaluator = evaluator  # type: ignore[attr-defined]
+    return state
 
 
 # ---------------------------------------------------------------------------

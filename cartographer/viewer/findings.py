@@ -77,7 +77,7 @@ WEAKNESS_PASS_RATE = 0.90
 WEAKNESS_MIN_N = 20
 
 # Capability map columns.
-CAPABILITY_KINDS = ("state", "order", "belief", "adversarial_belief")
+CAPABILITY_KINDS = ("state", "order", "belief", "adversarial_belief", "tool_plan")
 # The measured difficulty dimensions `cartographer.world.measure.measure`
 # emits. A dim column reports the pass rate in that dim's HIGH region (top
 # tercile of values observed across the whole store, so the column means the
