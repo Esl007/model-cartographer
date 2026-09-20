@@ -67,6 +67,71 @@ renders all sections + empty state, keys extension additive.
 
 ---
 
+## 2026-09-20 — FINDING (retraction risk) — "Ultra abstention under trap pressure" replication attempt found a token-budget truncation artifact instead
+
+User asked to replicate the "needs-replication" abstention finding
+(`docs/lab-log.md`, 2026-09-17: Ultra sometimes answers "unknown" under
+adversarial trap pressure instead of committing to a wrong-but-plausible
+foil, 2 stable cases observed, never replicated). The original finding's
+run_ids were destroyed in the 2026-09-19/20 data-loss incident, so the
+exact original cases can't be re-tested directly. Instead: ran a fresh
+`full_map` campaign on Ultra (`camp-full_map-ultra-002`, $1.0014, 426
+records) and its `adversarial_belief` stage surfaced one fresh candidate
+carrying the SAME trap signature as the original finding
+(`final_true_state,last_mentioned_location,last_witnessed_by_anyone`),
+record with answer `'unknown'` against answer_key `'the photo studio'`.
+
+**Auto-verify's 3 resamples (default 8000/16000 "ultra"-class token
+budget) all hit `finish_reason=length` and correctly routed to ERROR, not
+FAIL** — inconclusive by infrastructure, not by capability. Rather than
+report that as evidence either way, resampled the exact same stored
+prompt 5x more directly at `max_tokens=28000`. Every one of the 5
+completed cleanly (`finish_reason=stop`, 10k-16k tokens used — genuinely
+needing more than the "ultra" ceiling, not stalling):
+
+- 2/5 correct ("photo studio")
+- 3/5 wrong, but NOT abstaining — every wrong answer was `'archive room'`,
+  a specific, confidently-stated foil location
+- 0/5 answered "unknown"
+
+**Conclusion: this candidate does not replicate as abstention.** At
+adequate token budget, Ultra never abstains on this world — it either
+gets it right or commits confidently to a specific wrong foil, which is
+the ALREADY-confirmed belief-to-reality/foil-capture failure mode, not a
+distinct abstention mode. The apparent "unknown" in both the original
+campaign trial and the auto-verify resamples was very plausibly a
+truncation artifact: the naive answer-extraction logic reads the last
+line of a length-capped response, and a reasoning chain cut off
+mid-deliberation can spuriously contain or resemble "unknown" without the
+model having actually concluded that.
+
+**This casts real doubt on the original 2-case finding too** — it used
+the same 8000/16000 budget infrastructure, and the mechanism just
+demonstrated here (truncation masquerading as abstention) is a live,
+confirmed alternative explanation. The original cases can't be re-tested
+(evidence destroyed), so this can't be fully confirmed OR refuted — but
+"abstention under trap pressure" should not be presented as a standing
+capability finding without this caveat. Recommending status change from
+`needs-replication` to `retracted` (or at minimum a heavy caveat) in
+`cartographer/viewer/findings.py`'s curated set, pending a decision.
+
+**Actionable infra finding:** the highest-trap-density adversarial belief
+worlds on Ultra can need reasoning chains beyond the current 16000-token
+retry ceiling; 28000 resolved every case tried here. `default_token_budget`
+in `cartographer/exec/evaluator.py` may be worth raising for adversarial
+campaigns specifically (regular belief/state/order trials haven't shown
+this need). Not yet changed — flagging for a decision, since raising the
+ceiling raises per-trial cost too.
+
+Minor tooling note: `run_full_map_campaign`'s returned `FullMapResult`
+stage summaries (`n_pass`/`n_fail`/`n_error`) do not sum to `n_records`
+for stages with verify children (observed on this exact run: belief stage
+reported n_records=130 but n_pass+n_fail+n_error=27) — the printed
+summary is not reliable; direct-store SQL was used for every number in
+this entry instead. Worth a fix, not chased here.
+
+---
+
 ## 2026-09-19 — DESIGN (pass 6) — the pass-5 composition system applied to the remaining eight pages
 
 Pass 5 proved the composition fix on the overview only and closed with a
