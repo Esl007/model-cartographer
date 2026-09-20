@@ -69,34 +69,86 @@ def coverage_html() -> str:
     machinery_rows = _rows(ANALYSIS_MACHINERY)
     roadmap_items = "".join(f"<li>{__import__('html').escape(item)}</li>" for item in NOT_YET_COVERED)
 
+    # Pass 6 composition: each inventory is a card whose header bar names
+    # AND counts it (the counts used to be hard-coded into the h2 text --
+    # "Query kinds (3)" -- and could silently drift from the tuples right
+    # above). Paired two-up: query kinds beside foil traps (both describe
+    # what a trial ASKS), difficulty dims beside analysis machinery (both
+    # describe how a trial is VARIED and read). The roadmap is
+    # deliberately a DIFFERENT kind of card (`.card-gap`, dashed edge):
+    # it lists what this instrument can't do, and rendering it identical
+    # to the four capability cards above would flatten an honest gap into
+    # just another feature list.
     body = f"""
+    <div class="page-head"><div class="page-head-main">
     <h1>Coverage</h1>
     <p class="subtitle">What this instrument tests, and what it honestly
     doesn't yet -- the full inventory of query kinds, difficulty
     dimensions, foil traps, and analysis machinery, plus a roadmap of
     gaps.</p>
+    </div><div class="page-head-actions">
+      <a class="cta-primary" href="/launch">Map a model &rarr;</a>
+    </div></div>
 
-    <h2>Query kinds (3)</h2>
-    <table><thead><tr><th>kind</th><th>what it tests</th></tr></thead>
-    <tbody>{query_rows}</tbody></table>
+    <div class="stat-grid">
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(QUERY_KINDS)}</div></div><div class="stat-label">Query kinds</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(DIFFICULTY_DIMS)}</div></div><div class="stat-label">Difficulty dims</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(FOIL_TRAPS)}</div></div><div class="stat-label">Foil traps</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(NOT_YET_COVERED)}</div></div><div class="stat-label">Known gaps</div></div>
+    </div>
 
-    <h2>Difficulty dimensions (6)</h2>
-    <table><thead><tr><th>dim</th><th>what it varies</th></tr></thead>
-    <tbody>{dim_rows}</tbody></table>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Query kinds</span>
+          <span class="card-meta">{len(QUERY_KINDS)}</span>
+        </div>
+        <table><thead><tr><th>kind</th><th>what it tests</th></tr></thead>
+        <tbody>{query_rows}</tbody></table>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Foil traps</span>
+          <span class="card-meta">{len(FOIL_TRAPS)}</span>
+        </div>
+        <table><thead><tr><th>trap</th><th>mechanism</th></tr></thead>
+        <tbody>{foil_rows}</tbody></table>
+      </div>
+    </div>
 
-    <h2>Foil traps (5)</h2>
-    <p class="meta">Plausible-but-wrong answers a shallow reasoner might
-    give on a belief query, used by adversarial seed search to select the
-    world that most sharply pits a trap against the truth.</p>
-    <table><thead><tr><th>trap</th><th>mechanism</th></tr></thead>
-    <tbody>{foil_rows}</tbody></table>
+    <p class="meta">Foil traps are the plausible-but-wrong answers a
+    shallow reasoner might give on a belief query, used by adversarial
+    seed search to select the world that most sharply pits a trap against
+    the truth.</p>
 
-    <h2>Analysis machinery</h2>
-    <table><thead><tr><th>tool</th><th>what it does</th></tr></thead>
-    <tbody>{machinery_rows}</tbody></table>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Difficulty dimensions</span>
+          <span class="card-meta">{len(DIFFICULTY_DIMS)}</span>
+        </div>
+        <table><thead><tr><th>dim</th><th>what it varies</th></tr></thead>
+        <tbody>{dim_rows}</tbody></table>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Analysis machinery</span>
+          <span class="card-meta">{len(ANALYSIS_MACHINERY)}</span>
+        </div>
+        <table><thead><tr><th>tool</th><th>what it does</th></tr></thead>
+        <tbody>{machinery_rows}</tbody></table>
+      </div>
+    </div>
 
-    <h2>Not yet covered</h2>
-    <p class="meta">Roadmap -- capabilities this instrument does not probe today.</p>
-    <ul>{roadmap_items}</ul>
+    <div class="card card-gap">
+      <div class="card-head">
+        <span class="card-title">Not yet covered</span>
+        <span class="card-meta">{len(NOT_YET_COVERED)} known gaps</span>
+      </div>
+      <div class="card-body">
+        <p class="meta">Roadmap -- capabilities this instrument does not probe today.</p>
+        <ul>{roadmap_items}</ul>
+      </div>
+    </div>
     """
     return _shell("Coverage", "coverage", body)

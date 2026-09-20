@@ -348,6 +348,59 @@ h3 { font-size: var(--fs-body); font-weight: 650; margin: var(--sp-4) 0 var(--sp
 .card-body ul { margin: 0; padding-left: 1.05rem; }
 .card-body ul li + li { margin-top: var(--sp-2); }
 
+/* COMPOSITION, pass 6 -- the same system applied to the remaining eight
+   pages. Three additions the overview didn't need:
+   (a) `.page-head` has to hold a title PILL beside the title (run/record
+       pages) and MORE THAN ONE action on the right (a run with unverified
+       failures offers both "watch live" and "verify now"), so the left
+       and right halves each get their own flex wrapper;
+   (b) a card body can be a preformatted transcript or a nested
+       disclosure, which carry their own margins and would otherwise
+       double the card padding;
+   (c) /coverage's "not yet covered" roadmap is a different KIND of
+       content from the four capability inventories above it -- honest
+       gaps, not features -- so it gets a visibly distinct card rather
+       than a fifth identical one. */
+.page-head-main { min-width: 0; }
+.page-head-actions {
+  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.page-head .h1-row { margin-bottom: var(--sp-2); }
+.card-body > pre.block { margin: 0; }
+.card-body > details { margin: 0; }
+.card-body > details > pre.block { margin-top: var(--sp-2); margin-bottom: 0; }
+.card-body > .preset-cards { margin: 0; }
+/* Preset radio-cards now live INSIDE a card body, so they need a raised
+   surface to read as objects on it rather than dissolving into it, plus
+   a hover and a checked state strong enough to look selectable at a
+   glance (the hidden radio meant selection was communicated only by a
+   1px border tint). */
+.card-body .preset-card { background: var(--surface-instrument-2); border-color: var(--line-strong); }
+.preset-card:hover { border-color: var(--claim-belief-dim); }
+.preset-card:has(input:checked) { box-shadow: inset 0 0 0 1px var(--claim-belief); }
+/* A data grid revealed by a disclosure INSIDE a card must not draw a
+   second border on top of the card's -- the card is already the
+   enclosure, so the inner grid goes flat. */
+.card-body > details > table { background: none; border: none; border-radius: 0; margin: var(--sp-3) 0 0; }
+/* Cards nested inside a card body (retracted findings inside the
+   retractions card) sit on the raised surface and keep an even rhythm. */
+.card-body .card { margin: var(--sp-3) 0 0; background: var(--surface-instrument-2); }
+.card-body > .preset-cards + details { margin-top: var(--sp-3); }
+/* Roadmap card: dashed edge + muted surface, reading as an outline of
+   something not built rather than a panel of something that is. */
+/* A card whose title is a real NAME (a finding's claim), not a section
+   label. Uppercase 10px mono is right for "PROMPT" / "ALL RUNS"; it is
+   unreadable for "Belief-to-reality collapse (witness-rendering bug,
+   corrected)". Same header bar, sentence-case sans title. */
+.card-title-name {
+  font-family: var(--sans); font-size: var(--fs-body); font-weight: 650;
+  text-transform: none; letter-spacing: -0.005em; color: var(--ink);
+}
+.card-gap { background: transparent; border-style: dashed; border-color: var(--line-strong); }
+.card-gap .card-title { color: var(--ink-muted); }
+.card-gap .card-body ul li { color: var(--ink-secondary); }
+
 /* CARD -- pass 4. The structural fix behind "it still doesn't look like
    a SaaS app": content was sitting DIRECTLY on the page background. In
    every real reference (test-factory's REQUEST/RESPONSE/ASSERTIONS,
@@ -1092,25 +1145,54 @@ def _trial_count(store: ResultsStore) -> int:
 def runs_html(store: ResultsStore) -> str:
     """The raw per-run table (formerly the home page)."""
     rows_html, by_run = _runs_table_rows(store)
+    head = (
+        '<div class="page-head">'
+        '<div class="page-head-main"><h1>Runs</h1>'
+        '<p class="subtitle">Every campaign/pilot run recorded in this store, one row each '
+        '(full_map runs are grouped under their parent run_id). Click a run_id for the full '
+        "report and per-trial table.</p></div>"
+        '<div class="page-head-actions">'
+        '<a class="cta-primary" href="/launch">Map a model &rarr;</a>'
+        "</div></div>"
+    )
     if not rows_html:
         body = (
-            "<h1>Runs</h1>"
-            '<p class="subtitle">Every campaign or pilot run recorded in this store.</p>'
+            f"{head}"
             '<div class="empty-state"><p>No runs yet.</p>'
             '<p class="meta"><a href="/launch">Launch your first campaign &rarr;</a></p></div>'
         )
         return _shell("Runs", "runs", body, trial_count=_trial_count(store))
+
+    # KPI row, computed from the same grouped aggregate the table renders
+    # so the numbers can never disagree with the rows beneath them.
+    n_runs = len(by_run)
+    n_trials = sum(sum(agg["counts"].values()) for agg in by_run.values())
+    total_spend = sum(agg["cost"] for agg in by_run.values())
+    n_models = len({agg["model"] for agg in by_run.values() if agg["model"]})
+    stat_grid = (
+        '<div class="stat-grid">'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_runs}</div></div>'
+        '<div class="stat-label">Runs recorded</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_trials:,}</div></div>'
+        '<div class="stat-label">Total trials</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">${total_spend:.4f}</div></div>'
+        '<div class="stat-label">Total spend</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_models}</div></div>'
+        '<div class="stat-label">Models covered</div></div>'
+        "</div>"
+    )
     table = (
         "<table><thead><tr><th>run_id</th><th>model</th><th class=\"num\">records</th>"
         "<th class=\"num\">pass rate</th><th class=\"num\">cost</th><th>started</th><th>status</th>"
         "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
     )
     body = (
-        "<h1>Runs</h1>"
-        '<p class="subtitle">Every campaign/pilot run recorded in this store, one row each '
-        '(full_map runs are grouped under their parent run_id). Click a run_id for the full '
-        "report and per-trial table.</p>"
-        f"{table}"
+        f"{head}"
+        f"{stat_grid}"
+        '<div class="card"><div class="card-head">'
+        '<span class="card-title">All runs</span>'
+        f'<span class="card-meta">{n_runs} run{"" if n_runs == 1 else "s"}</span>'
+        f"</div>{table}</div>"
     )
     return _shell("Runs", "runs", body, trial_count=_trial_count(store))
 
@@ -1474,19 +1556,29 @@ def live_html(store: ResultsStore) -> str:
             (r.created_at for r in verify_records if r.created_at), default=None
         )
         verifying_html = f"""
-        <h2>Verifying failures</h2>
-        <p class="meta">A verification pass is re-testing prior failures against this
-        run &mdash; {v_total} resample{"s" if v_total != 1 else ""} so far
-        ({v_pass} passed on retest, i.e. noise), latest at
-        {html.escape(v_latest or "-")}.</p>
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">Verifying failures</span>
+            <span class="card-meta">{v_total} resample{"s" if v_total != 1 else ""}</span>
+          </div>
+          <div class="card-body">
+            <p class="meta">A verification pass is re-testing prior failures against this
+            run &mdash; {v_total} resample{"s" if v_total != 1 else ""} so far
+            ({v_pass} passed on retest, i.e. noise), latest at
+            {html.escape(v_latest or "-")}.</p>
+          </div>
+        </div>
         """
 
     if not records:
         body = f"""
-        <h1>Live: {safe_run_id}</h1>
-        <p class="meta">starting&hellip; 0 records</p>
+        <div class="page-head"><div class="page-head-main">
+          <h1>Live: {safe_run_id}</h1>
+          <p class="meta">starting&hellip; 0 records</p>
+        </div><div class="page-head-actions">
+          {_stop_button_html(active is not None, stopping)}
+        </div></div>
         <div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>
-        {_stop_button_html(active is not None, stopping)}
         {verifying_html}
         """
         return _shell(f"Live: {run_id}", "live", body, refresh=True, trial_count=_trial_count(store))
@@ -1539,14 +1631,20 @@ def live_html(store: ResultsStore) -> str:
     else:
         bar_html = f'<p class="meta">{total} records (budget unknown for this run_id)</p>'
 
+    # Hero KPI row, moved to the TOP of the page (it used to sit under an
+    # "<h2>Tallies</h2>" below the progress bar). Throughput rides as the
+    # cost box's inline delta rather than a seventh box, so the row stays
+    # a scannable KPI strip instead of a number wall.
     stat_grid = (
         '<div class="stat-grid">'
         f'<div class="stat-box"><div class="stat-num">{passn}</div><div class="stat-label">Pass</div></div>'
         f'<div class="stat-box"><div class="stat-num">{failn}</div><div class="stat-label">Fail</div></div>'
         f'<div class="stat-box"><div class="stat-num">{errn}</div><div class="stat-label">Error</div></div>'
-        f'<div class="stat-box"><div class="stat-num">{pass_rate:.1f}%</div><div class="stat-label">Pass rate</div></div>'
-        f'<div class="stat-box"><div class="stat-num">${total_cost:.4f}</div><div class="stat-label">Total cost</div></div>'
-        f'<div class="stat-box"><div class="stat-num">{overall_rate_per_min:.1f}/min</div><div class="stat-label">Rate</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{pass_rate:.1f}%</div>'
+        f'<div class="stat-delta">{passn}/{total}</div></div><div class="stat-label">Pass rate</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">${total_cost:.4f}</div>'
+        f'<div class="stat-delta">{overall_rate_per_min:.1f}/min</div></div>'
+        '<div class="stat-label">Total cost</div></div>'
         "</div>"
     )
 
@@ -1574,18 +1672,36 @@ def live_html(store: ResultsStore) -> str:
 
     is_active_run = active is not None and run_id == active["run_id"]
     stage_html = _stage_track_html(run_id, records)
+    # The progress block keeps a fixed slot regardless of which branch
+    # rendered it (bar vs. "RUN COMPLETE" vs. budget-unknown line), so the
+    # 5s meta-refresh can't shift everything below it.
     body = f"""
-    <h1>Live: {safe_run_id}</h1>
-    <p class="subtitle">Auto-refreshing monitor for an in-progress (or just-finished) campaign run.</p>
-    <p class="meta"><a href="/run/{safe_run_id}">full run detail &rarr;</a></p>
-    {stage_html}
-    {bar_html}
-    {_stop_button_html(is_active_run, stopping)}
-    {verifying_html}
-    <h2>Tallies</h2>
+    <div class="page-head"><div class="page-head-main">
+      <h1>Live: {safe_run_id}</h1>
+      <p class="subtitle">Auto-refreshing monitor for an in-progress (or just-finished) campaign run.</p>
+    </div><div class="page-head-actions">
+      <a href="/run/{safe_run_id}">full run detail &rarr;</a>
+      {_stop_button_html(is_active_run, stopping)}
+    </div></div>
     {stat_grid}
-    <h2>Last 15 records (newest first)</h2>
-    {recent_table}
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Progress</span>
+        <span class="card-meta">{total:,} records</span>
+      </div>
+      <div class="card-body">
+        {stage_html}
+        {bar_html}
+      </div>
+    </div>
+    {verifying_html}
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Recent records</span>
+        <span class="card-meta">last {len(recent)}, newest first</span>
+      </div>
+      {recent_table}
+    </div>
     """
     return _shell(f"Live: {run_id}", "live", body, refresh=not complete, trial_count=_trial_count(store))
 
@@ -1646,7 +1762,9 @@ def run_html(store: ResultsStore, run_id: str) -> str:
 
     if not records:
         body = (
-            f"<h1>Run {safe_run_id}</h1>"
+            '<div class="page-head"><div class="page-head-main">'
+            f"<h1>Run {safe_run_id}</h1></div>"
+            '<div class="page-head-actions"><a href="/runs">all runs &rarr;</a></div></div>'
             f"{verdict_panel_html(store, run_id)}"
             '<div class="empty-state"><p>No records found.</p></div>'
         )
@@ -1749,9 +1867,20 @@ def run_html(store: ResultsStore, run_id: str) -> str:
         and (not is_full_map_parent or _stage_from_run_id_local(r.run_id) != "breaking_point")
     )
     verify_now_html = ""
+    verify_action_html = ""
     if n_unverified_fails:
+        verify_action_html = (
+            f'<a class="cta-primary" href="#verify-failures">'
+            f'Verify {n_unverified_fails} failure(s) &rarr;</a>'
+        )
         verify_now_html = f"""
-        <details style="margin-top:1rem;">
+        <div class="card" id="verify-failures">
+          <div class="card-head">
+            <span class="card-title">Verify failures now</span>
+            <span class="card-meta">{n_unverified_fails} unverified</span>
+          </div>
+          <div class="card-body">
+          <details>
           <summary>Verify {n_unverified_fails} failure(s) now
             <span class="meta">(re-tests each ~3x against the model; est. a few percent of the original run's cost)</span>
           </summary>
@@ -1766,19 +1895,81 @@ def run_html(store: ResultsStore, run_id: str) -> str:
               <input name="model" value="{html.escape(records[0].model_name)}"></label></p>
             <p><button type="submit">Verify failures now</button></p>
           </form>
-        </details>
+          </details>
+          </div>
+        </div>
         """
 
+    # KPI row: the four numbers a reader wants before reading anything.
+    # The failure box carries the verified/noise split as its inline delta
+    # -- a raw FAIL count without it overstates the finding, since an
+    # unreproducible failure is noise, not evidence (see commit 271703e).
+    n_trials = len(records)
+    n_pass = sum(1 for r in records if r.verdict.name == "PASS")
+    n_fail = sum(1 for r in records if r.verdict.name == "FAIL")
+    n_error = n_trials - n_pass - n_fail
+    n_stable = sum(
+        1 for r in records
+        if r.verdict.name == "FAIL" and verify_status_by_record.get(r.record_id) == "stable"
+    )
+    n_noise = sum(
+        1 for r in records
+        if r.verdict.name == "FAIL" and verify_status_by_record.get(r.record_id) == "noise"
+    )
+    # Pass rate must be computed the SAME way the verdict panel directly
+    # below it computes its headline -- over SCORED trials only (PASS+FAIL,
+    # excluding infra ERRORs and excluding failures already classified as
+    # noise; see report/verdict.py's `_verified_only` + `_pass_rate`).
+    # Dividing by total trials instead puts "16%" in the KPI row directly
+    # above a panel saying "92% pass rate" on any error-heavy run (e.g.
+    # camp-adversarial_belief-minimax-m3-001: 115 of 140 trials ERRORed).
+    n_scored = n_pass + (n_fail - n_noise)
+    run_pass_rate = (n_pass / n_scored * 100.0) if n_scored else 0.0
+    run_cost = sum(r.cost_usd for r in records)
+    trials_delta = (
+        f'<div class="stat-delta">{n_error:,} error{"" if n_error == 1 else "s"}</div>'
+        if n_error
+        else ""
+    )
+    fail_delta = (
+        f'<div class="stat-delta">{n_stable} stable / {n_noise} noise</div>'
+        if (n_stable or n_noise)
+        else ""
+    )
+    stat_grid = (
+        '<div class="stat-grid">'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_trials:,}</div>{trials_delta}</div>'
+        '<div class="stat-label">Trials</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{run_pass_rate:.0f}%</div>'
+        f'<div class="stat-delta">{n_pass:,}/{n_scored:,} scored</div></div>'
+        '<div class="stat-label">Pass rate</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_fail:,}</div>{fail_delta}</div>'
+        '<div class="stat-label">Failures</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">${run_cost:.4f}</div></div>'
+        '<div class="stat-label">Run cost</div></div>'
+        "</div>"
+    )
+
     body = (
+        '<div class="page-head"><div class="page-head-main">'
         f'<div class="h1-row"><h1>Run {safe_run_id}</h1>{_title_pill_html(records)}</div>'
         '<p class="subtitle">What this run revealed, then every individual trial as evidence.</p>'
+        '</div><div class="page-head-actions">'
+        f'<a href="/live?run={safe_run_id}">watch live &rarr;</a>'
+        f'<a href="/atlas">compare across models &rarr;</a>'
+        f"{verify_action_html}"
+        "</div></div>"
+        f"{stat_grid}"
         f"{verdict_panel_html(store, run_id)}"
-        f'<p class="meta" style="margin-top:1.25rem;"><a href="/live?run={safe_run_id}">watch live &rarr;</a> &middot; '
-        f'<a href="/atlas">compare across models &rarr;</a></p>'
         f"{verify_now_html}"
+        '<div class="card"><div class="card-head">'
+        '<span class="card-title">Trials</span>'
+        f'<span class="card-meta">{len(records)} trial{"" if len(records) == 1 else "s"}</span>'
+        '</div><div class="card-body">'
         "<details><summary>Per-trial table "
         f'<span class="meta">({len(records)} trials -- prompt, reasoning, verdict, answer key)</span></summary>'
         f"{table}</details>"
+        "</div></div>"
     )
     return _shell(f"Run {run_id}", "runs", body, breadcrumb=breadcrumb, trial_count=_trial_count(store))
 
@@ -1872,9 +2063,25 @@ def record_html(store: ResultsStore, record_id: str) -> str:
         _r_evidence = html.escape(detail.get("error", "") or record.finish_reason or "infra failure")
 
     _r_pill_cls = {"PASS": "tp-pass", "FAIL": "tp-fail", "ERROR": "tp-error"}.get(record.verdict.name, "tp-error")
+    # Card-head metas mirror test-factory's REQUEST/RESPONSE cards, which
+    # carry size/status in the header bar rather than as body prose: the
+    # header answers "how big / how did it end" before you read a line.
+    _prompt_meta = f"{len(record.prompt_text or ''):,} chars &middot; {record.tokens_in:,} tokens in"
+    _response_meta = (
+        f"{record.tokens_out:,} tokens out &middot; finish: "
+        f"{html.escape(record.finish_reason or '-')}"
+    )
+    _reasoning_meta = (
+        f"{len(record.reasoning_text):,} chars" if record.reasoning_text else "not captured"
+    )
+
     body = f"""
+    <div class="page-head"><div class="page-head-main">
     <div class="h1-row"><h1>Record {safe_record_id}</h1><span class="title-pill {_r_pill_cls}">{html.escape(record.verdict.name)}</span></div>
     <p class="subtitle">Verdict and provenance first; raw prompt/response/reasoning below, collapsed.</p>
+    </div><div class="page-head-actions">
+      <a href="/run/{html.escape(record.run_id)}">back to run &rarr;</a>
+    </div></div>
 
     <div class="panel">
       <p style="margin:0 0 0.5rem;">
@@ -1894,21 +2101,46 @@ def record_html(store: ResultsStore, record_id: str) -> str:
 
     {prev_next_html}
 
-    <h2>Prompt</h2>
-    <pre class="block">{prompt_block}</pre>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Prompt</span>
+        <span class="card-meta">{_prompt_meta}</span>
+      </div>
+      <div class="card-body"><pre class="block">{prompt_block}</pre></div>
+    </div>
 
-    <h2>Response</h2>
-    <pre class="block">{response_block}</pre>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Response</span>
+        <span class="card-meta">{_response_meta}</span>
+      </div>
+      <div class="card-body"><pre class="block">{response_block}</pre></div>
+    </div>
 
-    <h2>Reasoning</h2>
-    {reasoning_html}
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Reasoning</span>
+        <span class="card-meta">{_reasoning_meta}</span>
+      </div>
+      <div class="card-body">{reasoning_html}</div>
+    </div>
 
-    <h2>Realized dims &amp; latent params</h2>
-    <h3>Realized dims</h3>
-    <table><thead><tr><th>dim</th><th>value</th></tr></thead><tbody>{realized_rows}</tbody></table>
-
-    <h3>Latent params</h3>
-    <table><thead><tr><th>param</th><th>value</th></tr></thead><tbody>{latent_rows}</tbody></table>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Realized dims</span>
+          <span class="card-meta">{len(record.realized_dims)}</span>
+        </div>
+        <table><thead><tr><th>dim</th><th>value</th></tr></thead><tbody>{realized_rows}</tbody></table>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Latent params</span>
+          <span class="card-meta">{len(record.latent_params)}</span>
+        </div>
+        <table><thead><tr><th>param</th><th>value</th></tr></thead><tbody>{latent_rows}</tbody></table>
+      </div>
+    </div>
     """
     return _shell(f"Record {record_id}", "runs", body, breadcrumb=breadcrumb, trial_count=_trial_count(store))
 

@@ -7,6 +7,74 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-19 — DESIGN (pass 6) — the pass-5 composition system applied to the remaining eight pages
+
+Pass 5 proved the composition fix on the overview only and closed with a
+note that the other eight pages still read as stacked documents. This
+entry closes that: `/runs`, `/run/<id>`, `/record/<id>`, `/live`,
+`/atlas`, `/findings`, `/coverage`, `/launch` now all use the same four
+primitives (`.page-head`, `.stat-grid` KPI row, `.grid-2`, `.card` +
+`.card-head`). No new primitives were invented; four small additions were
+needed to cover cases the overview didn't have:
+
+- `.page-head-main` / `.page-head-actions` — the overview's page-head
+  only had to hold ONE action. A run detail page has three (watch live,
+  compare across models, verify N failures), and /run and /record put a
+  title PILL beside the title, so each half of the header row needed its
+  own flex wrapper.
+- `.card-title-name` — uppercase 10px mono is right for "PROMPT" /
+  "ALL RUNS"; it is unreadable for a finding's actual claim
+  ("Belief-to-reality collapse (witness-rendering bug, corrected)").
+  Same header bar, sentence-case sans title.
+- `.card-gap` — /coverage's "not yet covered" roadmap and /findings'
+  retractions are a different KIND of content from the capability cards
+  around them (honest gaps and withdrawn claims, not features). Dashed
+  edge, transparent fill. Rendering them identically to the capability
+  cards flattens self-skepticism into just another feature list.
+- Containment rules for content that carries its own enclosure:
+  `.card-body > details > table` goes flat (the card is already the
+  border), `.card-body pre.block` loses its margin, `.card-body .card`
+  sits on surface-2, and preset radio-cards get a raised surface, a hover
+  state and an inset checked ring so they read as selectable inside a
+  card body.
+
+**A real bug the KPI row surfaced.** Putting "pass rate" in /run's hero
+row exposed that total-trials is the wrong denominator: on
+`camp-adversarial_belief-minimax-m3-001` (115 of 140 trials ERRORed on
+infra) a naive `n_pass / n_trials` renders **16%** directly above a
+verdict panel headline saying **92% pass rate**. The KPI now mirrors
+`report/verdict.py`'s `_verified_only` + `_pass_rate` exactly — scored
+trials only (PASS+FAIL, minus failures already classified as noise) — and
+carries the error count as the Trials box's inline delta. Measured after
+the fix: minimax `92%` / `115 errors` / `23/25 scored` against panel
+"92% pass rate"; `camp-belief-nemotron-super-001` `47%` / `123/264
+scored` against panel "47%".
+
+**Measured rendered, not asserted from the markup.** A parser walked
+`<main>`'s direct-child sequence on every page against the real store
+(1,959 records, real run_ids and record_ids). Per page: page-head is the
+first child of `<main>` (index 1 where a breadcrumb `.page-strip`
+legitimately precedes it, on /run and /record); the KPI row is the child
+immediately after it and above the first card on every page that has one;
+**zero** `h2`-then-table patterns anywhere (the defining pattern of the
+rejected passes); **zero** tables, `<pre>` blocks or bare lists left as
+direct children of `<main>`. Cards/grid-2 per page: overview 3/1, runs
+1/0, run 2/0, record 5/1, live 2/0, atlas 20/3, findings 8/0, coverage
+5/2, launch 2/0 — and card-head, card-title and card-meta counts equal
+the card count on every page (no card shipped without a real header bar).
+Every page 200; every page's tag tree balanced with nothing unclosed at
+EOF; verdict-panel-before-first-table ordering re-confirmed on three real
+runs including a full_map parent.
+
+The three surviving `h2`s (atlas's per-query-kind group headings, the
+verdict panel's own headline, the overview's "Where to go") are real
+hierarchy sitting above a GRID of cards, not the rejected
+title-floating-above-one-block pattern.
+
+320/320 green.
+
+---
+
 ## 2026-09-19 — DESIGN (pass 5) — composition, not surfaces: the actual "doesn't look like SaaS" cause
 
 User on pass 4: "it just changed the font and font color no structural

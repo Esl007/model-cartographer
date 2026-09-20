@@ -314,11 +314,20 @@ def launch_form_html() -> str:
     (including adversarial_belief, the newest mode) before even loading
     models."""
     return f"""
+    <div class="page-head"><div class="page-head-main">
     <h1>Launch a campaign</h1>
     <p class="subtitle">Pick a provider, load its models, then choose one of the
     campaign presets described below. full_map is the recommended default --
     one budget, one report on everything this model can and can't do.</p>
-    <div class="panel">
+    </div><div class="page-head-actions">
+      <span class="meta">step 1 of 2 &middot; provider</span>
+    </div></div>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Configure campaign</span>
+        <span class="card-meta">step 1 &middot; provider + key</span>
+      </div>
+      <div class="card-body">
       <form method="post" action="/launch">
         <input type="hidden" name="step" value="models">
         <p><label>Provider:
@@ -328,9 +337,15 @@ def launch_form_html() -> str:
           <span class="meta">leave empty to use env/ key file</span></p>
         <p><button type="submit" class="btn-primary">Load models</button></p>
       </form>
+      </div>
     </div>
-    <h2>Campaign presets</h2>
-    {_preset_cards_html()}
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Campaign presets</span>
+        <span class="card-meta">{len(CAMPAIGN_PRESETS)} presets</span>
+      </div>
+      <div class="card-body">{_preset_cards_html()}</div>
+    </div>
     """
 
 
@@ -367,10 +382,19 @@ def models_step_html(provider_name: str, token: str, models: list[str]) -> str:
     default_desc = CAMPAIGN_DESCRIPTIONS.get(DEFAULT_CAMPAIGN_TYPE, {})
     return f"""
     <p class="breadcrumb"><a href="/launch">&larr; start over</a></p>
+    <div class="page-head"><div class="page-head-main">
     <h1>Launch a campaign &mdash; {html.escape(provider_name)}</h1>
     <p class="subtitle">{len(models)} chat-capable models found. Pick a model and a campaign
     type below -- cost/duration expectations are shown before you submit.</p>
-    <div class="panel">
+    </div><div class="page-head-actions">
+      <span class="meta">step 2 of 2 &middot; {len(models)} models loaded</span>
+    </div></div>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Configure campaign</span>
+        <span class="card-meta">step 2 &middot; model + budget</span>
+      </div>
+      <div class="card-body">
       <form method="post" action="/launch">
         <input type="hidden" name="step" value="start">
         <input type="hidden" name="token" value="{html.escape(token)}">
@@ -387,9 +411,15 @@ def models_step_html(provider_name: str, token: str, models: list[str]) -> str:
            <span class="meta">{html.escape(VERIFY_FAILURES_COST_NOTE)}</span></p>
         <p><button type="submit" class="btn-primary">Start mapping</button></p>
       </form>
+      </div>
     </div>
-    <h2>What each campaign type tests</h2>
-    {_preset_cards_html()}
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">What each campaign type tests</span>
+        <span class="card-meta">{len(CAMPAIGN_PRESETS)} presets</span>
+      </div>
+      <div class="card-body">{_preset_cards_html()}</div>
+    </div>
     """
 
 

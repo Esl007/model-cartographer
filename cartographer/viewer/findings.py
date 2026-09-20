@@ -179,12 +179,23 @@ def _finding_card(f: Finding) -> str:
         if f.run_ids
         else "-"
     )
+    # Pass 6: a finding is a CARD whose header bar carries the claim's
+    # name on the left and its trust status on the right -- the same
+    # enclosure every other page now uses. It was previously a `.panel`
+    # whose "title" was just the first bolded line of an undifferentiated
+    # stack of paragraphs, so nothing separated "what this claim is" from
+    # "why we believe it".
     return f"""
-    <div class="panel">
-      <p style="margin:0 0 0.35rem;"><strong>{html.escape(f.name)}</strong> {_status_pill(f.status)}</p>
-      <p class="meta" style="margin:0 0 0.4rem;">{html.escape(f.mechanism)}</p>
-      <p class="meta" style="margin:0;">evidence: {html.escape(f.evidence)}</p>
-      <p class="meta" style="margin:0.3rem 0 0;">date: {html.escape(f.date)} &middot; run_id(s): {run_ids_html}</p>
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title card-title-name">{html.escape(f.name)}</span>
+        <span class="card-meta">{_status_pill(f.status)}</span>
+      </div>
+      <div class="card-body">
+        <p style="margin:0 0 0.4rem;">{html.escape(f.mechanism)}</p>
+        <p class="meta" style="margin:0;">evidence: {html.escape(f.evidence)}</p>
+        <p class="meta" style="margin:0.3rem 0 0;">date: {html.escape(f.date)} &middot; run_id(s): {run_ids_html}</p>
+      </div>
     </div>
     """
 
@@ -200,28 +211,52 @@ def findings_html() -> str:
     cards = "".join(_finding_card(f) for f in FINDINGS)
     retracted_cards = "".join(_finding_card(f) for f in RETRACTED)
 
+    n_confirmed = sum(1 for f in FINDINGS if f.status == "confirmed")
+    n_open = sum(1 for f in FINDINGS if f.status == "needs-replication")
+    n_run_ids = len({r for f in FINDINGS for r in f.run_ids})
+
     body = f"""
+    <div class="page-head"><div class="page-head-main">
     <h1>Findings</h1>
     <p class="subtitle">The capability map: every confirmed (or still-open)
     result this instrument has produced so far, sourced from
     <span class="mono">docs/lab-log.md</span>. Each card names its
     run_id(s) so you can go verify it in the results store yourself.</p>
+    </div><div class="page-head-actions">
+      <a class="cta-primary" href="/launch">Map a model &rarr;</a>
+    </div></div>
+
+    <div class="stat-grid">
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(FINDINGS)}</div></div><div class="stat-label">Findings</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_confirmed}</div></div><div class="stat-label">Confirmed</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_open}</div></div><div class="stat-label">Needs replication</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(RETRACTED)}</div><div class="stat-delta">{n_run_ids} run_ids cited</div></div><div class="stat-label">Retracted</div></div>
+    </div>
+
     <p class="meta">Note (2026-09-19): campaigns now auto-verify failures by
     default (resampling each FAIL 3x against the exact stored prompt before
     trusting it) -- see run detail pages for per-failure verified-stable /
-    noise / unverified status. This page's curated findings above predate
+    noise / unverified status. This page's curated findings below predate
     that change and are unaffected (each was already resample-confirmed by
     hand at the time, per its own evidence line).</p>
 
     {cards}
 
-    <details>
-      <summary>Retractions ({len(RETRACTED)})</summary>
-      <p class="meta">Kept deliberately, not deleted -- self-skepticism is
-      a feature of this instrument, not a blemish. A retracted finding
-      means the audit trail caught its own mistake before it shipped as a
-      public claim.</p>
-      {retracted_cards}
-    </details>
+    <div class="card card-gap">
+      <div class="card-head">
+        <span class="card-title">Retractions</span>
+        <span class="card-meta">{len(RETRACTED)} withdrawn</span>
+      </div>
+      <div class="card-body">
+        <details>
+          <summary>Retractions ({len(RETRACTED)})</summary>
+          <p class="meta">Kept deliberately, not deleted -- self-skepticism is
+          a feature of this instrument, not a blemish. A retracted finding
+          means the audit trail caught its own mistake before it shipped as a
+          public claim.</p>
+          {retracted_cards}
+        </details>
+      </div>
+    </div>
     """
     return _shell("Findings", "findings", body)

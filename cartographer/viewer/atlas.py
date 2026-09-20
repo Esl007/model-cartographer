@@ -122,6 +122,7 @@ def _svg_chart(
     title: str,
     series: dict[str, list[tuple[float, float, int]]],
     boundaries: dict[str, float],
+    draw_title: bool = True,
 ) -> str:
     """Build one inline SVG line chart: pass rate (y, 0..1) vs dim value (x).
 
@@ -152,8 +153,12 @@ def _svg_chart(
         f'y2="{_CHART_H - _MARGIN}" stroke="{_CHART_AXIS}"/>',
         f'<line x1="{_MARGIN}" y1="{_MARGIN}" x2="{_MARGIN}" '
         f'y2="{_CHART_H - _MARGIN}" stroke="{_CHART_AXIS}"/>',
-        f'<text x="{_MARGIN}" y="20" font-size="14" fill="{_CHART_TEXT}" font-family="sans-serif">'
-        f'{html.escape(title)}</text>',
+        (
+            f'<text x="{_MARGIN}" y="20" font-size="14" fill="{_CHART_TEXT}" '
+            f'font-family="sans-serif">{html.escape(title)}</text>'
+            if draw_title
+            else ""
+        ),
         f'<text x="{_MARGIN - 10}" y="{_MARGIN - 5}" font-size="10" fill="{_CHART_AXIS}" '
         'text-anchor="start" font-family="sans-serif">1.0</text>',
         f'<text x="{_MARGIN - 10}" y="{_CHART_H - _MARGIN + 5}" font-size="10" fill="{_CHART_AXIS}" '
@@ -217,10 +222,19 @@ def atlas_html(store: ResultsStore) -> str:
     all_records = [_row_to_record(row) for row in cur.fetchall()]
     records = [r for r in all_records if r.run_id.startswith(_CAMPAIGN_RUN_PREFIX)]
 
+    page_head = (
+        '<div class="page-head"><div class="page-head-main">'
+        "<h1>Cross-model atlas</h1>"
+        '<p class="subtitle">Pass rate vs. difficulty, per query kind and dimension, '
+        "compared across every model with campaign data in this store.</p>"
+        '</div><div class="page-head-actions">'
+        '<a class="cta-primary" href="/launch">Map another model &rarr;</a>'
+        "</div></div>"
+    )
+
     if not records:
         body = (
-            "<h1>Cross-model atlas</h1>"
-            '<p class="subtitle">Pass rate vs. difficulty, compared across models.</p>'
+            f"{page_head}"
             '<div class="empty-state"><p>No campaign data.</p>'
             '<p class="meta"><a href="/launch">Launch a campaign to populate this page &rarr;</a></p></div>'
         )
@@ -243,10 +257,16 @@ def atlas_html(store: ResultsStore) -> str:
                 dims.update(r.realized_dims.keys())
         all_dims[kind] = dims
 
+    # Charts are composed as a two-up grid of cards per query kind, each
+    # card's header bar naming the dimension it plots and carrying the
+    # model count / how many of those models actually have a fitted
+    # boundary -- the chart's headline fact, which previously the reader
+    # had to infer from line color alone.
     chart_sections = []
+    n_boundaries_total = 0
     for kind in sorted(by_kind_model):
         by_model = by_kind_model[kind]
-        chart_sections.append(f"<h2>Query kind: {html.escape(kind)}</h2>")
+        kind_cards: list[str] = []
         for dim in sorted(all_dims[kind]):
             series: dict[str, list[tuple[float, float, int]]] = {}
             boundaries: dict[str, float] = {}
@@ -272,8 +292,25 @@ def atlas_html(store: ResultsStore) -> str:
 
             if not series:
                 continue
-            svg = _svg_chart(f"{kind}: {dim}", series, boundaries)
-            chart_sections.append(f'<div style="overflow-x:auto;">{svg}</div>')
+            svg = _svg_chart(f"{kind}: {dim}", series, boundaries, draw_title=False)
+            n_models_here = len(series)
+            n_bounds_here = len(boundaries)
+            n_boundaries_total += n_bounds_here
+            meta = f'{n_models_here} model{"" if n_models_here == 1 else "s"}'
+            if n_bounds_here:
+                meta += f" &middot; {n_bounds_here} boundary fit"
+            kind_cards.append(
+                '<div class="card"><div class="card-head">'
+                f'<span class="card-title">{html.escape(dim)}</span>'
+                f'<span class="card-meta">{meta}</span>'
+                '</div><div class="card-body">'
+                f'<div style="overflow-x:auto;">{svg}</div>'
+                "</div></div>"
+            )
+        if not kind_cards:
+            continue
+        chart_sections.append(f"<h2>Query kind: {html.escape(kind)}</h2>")
+        chart_sections.append(f'<div class="grid-2">{"".join(kind_cards)}</div>')
 
     # Summary table: model x query_kind -> pass rate, n, total cost.
     summary_rows: dict[tuple[str, str], dict] = {}
@@ -307,12 +344,33 @@ def atlas_html(store: ResultsStore) -> str:
         + "</tbody></table>"
     )
 
+    n_models_total = len({model for (model, _kind) in summary_rows})
+    n_pass_total = sum(agg["pass"] for agg in summary_rows.values())
+    n_total = sum(agg["n"] for agg in summary_rows.values())
+    atlas_rate = (n_pass_total / n_total * 100.0) if n_total else 0.0
+    stat_grid = (
+        '<div class="stat-grid">'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_models_total}</div></div>'
+        '<div class="stat-label">Models compared</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(by_kind_model)}</div></div>'
+        '<div class="stat-label">Query kinds</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{atlas_rate:.0f}%</div>'
+        f'<div class="stat-delta">{n_pass_total:,}/{n_total:,}</div></div>'
+        '<div class="stat-label">Campaign pass rate</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_boundaries_total}</div></div>'
+        '<div class="stat-label">Boundaries fitted</div></div>'
+        "</div>"
+    )
+
     body = (
-        "<h1>Cross-model atlas</h1>"
-        '<p class="subtitle">Pass rate vs. difficulty, per query kind and dimension, '
-        "compared across every model with campaign data in this store.</p>"
+        page_head
+        + stat_grid
         + "".join(chart_sections)
-        + "<h2>Summary</h2>"
+        + '<div class="card"><div class="card-head">'
+        + '<span class="card-title">Summary &middot; model x query kind</span>'
+        + f'<span class="card-meta">{len(summary_rows)} pairs</span>'
+        + "</div>"
         + summary_table
+        + "</div>"
     )
     return _shell("Cross-model atlas", "atlas", body)
