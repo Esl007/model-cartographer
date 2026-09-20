@@ -56,8 +56,49 @@ results store.
 | 17:40:51–17:41:30 | R `camp-state-nvidia-nemotron-3-nano-30b-a3b-001` | 30 calls, $0.0046 — **run via `/launch`, not yet analyzed** |
 | 19:13:13 | C `0cb65c1` | /live active-run + ETA fixes, shared nav shell, dark theme (viewer redesign track; also carried the new order/breaking_point launch presets) |
 | 19:16:54 | C `813ac8e` | Escalation mode (`schedule/escalate.py`: ray ramp → bisect → logistic t* → decompose → confirm), order campaign preset, witness_cutoff in the belief sweep; 5 Super belief failures verified real against regenerated ground truth (1 continuity over-generalization, 4 pronoun misresolution — first recorded Super failures) |
+| 19:24:57 | C `7d58049` | Logged first order-campaign results: Super 100%, Nano ~96% — no boundary found on either tier |
+| 19:43:25 | C `de733ad` | Ultra-model token budgets (`default_token_budget` heuristic, 8000/16000 for "ultra"-class models) + cooperative stop button for `/launch` |
+| 20:29:48 | C `19d4eeb` | Ultra pronoun-ablation done live: isolates a real protagonist-continuity bug (6/6 pronoun-vs-name separation on the Dexter case); retracts the earlier "confirmed in all 3 tiers" claim after the Priya case failed to reproduce on resample (4/5 correct — MoE sampling noise, not a capability gap) |
+| 20:48:10 | C `7658a81` | Logged Ultra breaking-point escalation result: the full ray ramped to the generator's hard ceiling and pass rate never dropped below 0.86 — an honest, well-powered no-boundary-found, not a bug |
 
-**Total spend to date across all providers: ≈ $0.31.**
+## 2026-09-18
+
+| Time (UTC) | Type | Event |
+|---|---|---|
+| 09:36:19 | C `08162f6` | Foil model + adversarial seed search (`world/foils.py`, `world/search.py`): redefines difficulty as trap salience (what a shallow reasoner would answer) instead of knob magnitude, at zero API cost; verified ~1.5x trap concentration vs. unselected seeds |
+| 09:36:59 | C `fb7febe` | Automates the manual Ultra pronoun-ablation loop (`cartographer/ablate/`): resample-gate (catches MoE noise before it's reported), answer-key-preserving ablation catalog, Holm–Bonferroni causal attribution — validated against planted sensitivities in fake models |
+| 09:51:18 | C `ef6b928` | Logged the first live adversarial-belief campaign on Ultra: trap-selection at *minimal* structural complexity (chain_length=2) broke Ultra (94% pass, 6 failures) where the full magnitude-escalation ray could not; 3 of 6 failures survived resampling, surfacing a new failure mode (belief-attribution abstention under trap pressure) distinct from the belief→reality collapse |
+| 13:44:24 | C `d152913` | Viewer IA redesign #1: overview dashboard, `/findings`, `/coverage` pages, self-explaining `/launch` preset cards (the `adversarial_belief` mode gets a NEW badge) |
+
+## 2026-09-19
+
+| Time (UTC) | Type | Event |
+|---|---|---|
+| 06:13:34 | C `dadd5ac` | `modelcart` launcher command (`~/.local/bin/modelcart`, outside the repo); fixed the viewer's default db path (was pointing at stale `pilot.sqlite`, not the live `campaign.sqlite`) and added auto-open-browser on start |
+| 18:43:29 | C `f9ef93a` | One-button `full_map` campaign chaining state → order → belief → adversarial_belief → breaking_point under one budget; plain-English verdict panels computed from stored data (saturation/boundary/failure-mode language, not hand-written) |
+| 19:10:49 | C `ea16334` | Adversarial proposer (`cartographer/propose/`): Nemotron proposes trap *configs*, never answers; every proposal passes a deterministic validation gauntlet before any subject-model spend, and a mandatory random-control arm reports whether the proposer actually beats random search (first live run: it didn't — an honest negative result, logged plainly) |
+| 19:15:40 | C `6568762` | Viewer redesign #2: research-driven UX/IA pass (Shneiderman "overview → zoom/filter → details on demand", Nielsen heuristics), `docs/design-notes.md` created |
+| 19:24:50 | C `271703e` | Automatic FAIL verification: resample-noise gate with explicit auto/manual modes (cost-conscious by design — verification only ever touches the 2–14% of trials that fail), append-only `/verify` child runs, verdict copy reports verified-vs-noise counts instead of raw unfiltered failure counts |
+| 19:44:02 | C `21a16a8` | Fixed `/live` showing "0 records" for the entire duration of `full_map` and verify-now runs — the page queried the exact registered run_id, but those campaigns write all real trials under child run_ids (`.../state`, `.../verify`) that can never match; confirmed against a real run with 366 trials + 18 verify resamples that had been fully invisible |
+| 20:37:35 | C `a4df298` | Viewer redesign #3: domain-derived signature system (the "claim strip" verdict component) + sidebar restructure, informed by real showcase examples from the `interface-design` Claude Code plugin |
+
+## 2026-09-20
+
+| Time (UTC) | Type | Event |
+|---|---|---|
+| 00:43:03 | C `642643b` | Viewer pass 4: every table had been a direct child of `<main>` with no enclosing container — the strongest "unstyled document, not an application" tell; enclosed all of them in cards, loosened density (34px→42px rows) past what pass 3 had deliberately chosen as "workbench-tight", loaded Manrope + JetBrains Mono in place of the system font stack |
+| 03:01:24 | C `ad9e7fe` | Viewer pass 5: dashboard composition on the overview page (hero KPI row, 2-column grid, card header bars) |
+| 03:17:12 | C `1668114` | Viewer pass 6: the pass-5 composition system applied to the remaining eight pages (`/runs`, `/run/<id>`, `/record/<id>`, `/live`, `/atlas`, `/findings`, `/coverage`, `/launch`) |
+| 03:21:56 | C `c954e28` | **Incident fix**: untracked `results/campaign.sqlite` after ~1,180 real trial records (~$0.84 of API spend) were destroyed when a `git stash` reverted the tracked live database to its last commit — see the dedicated INCIDENT entry in `docs/lab-log.md` for the full account and recovery attempt |
+| 04:53:14 | C `b5ab761` | Rebuilt `/findings` as a live, per-model capability map — the page had taken no store argument at all; every "finding" was a hardcoded dataclass transcribed by hand from this log, which is why it could never switch models, show a strength, or update after a replication |
+| 04:58:07 | C `f7b29a8` | Atlas: dropped an inert legend toggle on single-model panes (a "never blank the chart" guard made the only toggle permanently unable to do anything — a control that cannot act) |
+
+**Total spend to date across all providers: at least ≈$1.7–2** (precise
+reconstruction is no longer possible past 2026-09-19 — the underlying
+records for ~$0.84 of that spend were destroyed by the git incident
+logged above before a final total could be tallied from the store
+directly; this figure is a floor, summed only from the dollar amounts
+each entry above and in `docs/lab-log.md` states explicitly).
 
 ---
 

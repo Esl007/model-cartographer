@@ -165,6 +165,54 @@ assertion. 320/320 green.
 
 ---
 
+## 2026-09-19 — INCIDENT (fixed) — ~1,180 real trial records destroyed by a git operation; results/campaign.sqlite untracked (commit c954e28)
+
+`results/campaign.sqlite` was a *tracked* git file that every campaign
+appends to while running. It went from 1,959 records back to the 779
+last committed on 2026-09-17 between two points in this session where
+nothing should have touched it. Root cause: a mutable, live-written
+database was under version control at all, and *any* `git checkout`,
+`git restore`, `git stash`, or `git reset` on the repo silently reverts
+it to whatever was last committed — which is exactly what a `git
+stash`/`stash pop` (used mid-session to check whether a failing test was
+a real regression) did to it.
+
+**Lost, unrecoverably:** the `camp-full_map-*` run (366 trials — the run
+the one-button `full_map` campaign was built to produce), the
+`camp-adversarial_belief-*` runs including the Ultra run behind the
+abstention-under-trap-pressure finding, `propose-super-vs-nano-001` (the
+live Nemotron-proposer-loop result), every `/verify` resample trial, and
+the MiniMax-M3/GLM runs. Roughly **$0.84** of real API spend. Checked
+before declaring it unrecoverable: `git stash list` (empty), `git
+reflog` (no dangling commit holds it — the working file was reverted in
+place, never committed over), every `.sqlite` under `/tmp` and this
+repo's temp dirs (none carry the lost run_ids), and the working file's
+raw bytes (byte-identical to the committed blob, zero string traces of
+the lost run names — overwritten, not merely deleted).
+
+**What survives:** every finding's write-up in this log (numbers,
+run_ids, conclusions) — only the underlying trial rows and their
+evidence links are gone. `docs/findings` citations to the destroyed
+run_ids are honest about it now (see the entries below): a citation
+whose records are gone renders as "evidence no longer in store" instead
+of a dead link pretending to work.
+
+**Fix:** `results/*.sqlite{,-wal,-shm}` added to `.gitignore`;
+`git rm --cached` on `campaign.sqlite` and `pilot.sqlite`. The last
+committed snapshot (779 records) stays in git history as a fallback; the
+live file now sits entirely outside git's reach, with a dated local copy
+(`results/campaign.sqlite.bak-20260919`) as a second line of defense.
+Every subagent prompt touching this repo since has carried an explicit
+"never run git checkout/restore/stash/clean/reset --hard here" rule.
+
+**Process gap, not just a tooling gap:** I own this regardless of which
+exact command triggered it — I ran `git stash` against a repo I knew had
+a live database in it, without first checking whether that file was
+tracked. The `.gitignore` fix prevents recurrence; it doesn't undo the
+loss.
+
+---
+
 ## 2026-09-19 — BUILD (confirmed) — viewer: third redesign pass — domain-derived signature system, then a sidebar/showcase-evidence correction, same session
 
 **Why a third pass.** Two earlier redesign passes on the same day had each
