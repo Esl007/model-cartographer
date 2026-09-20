@@ -7,6 +7,66 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-20 — FEATURE (shipped) — the Evidence Analyst: Nemotron writes the diagnosis, a deterministic audit keeps it honest
+
+**What we built:** `cartographer/analyst/` — the Phase 9 centerpiece that
+turns the model from a test subject into a worker. Three layers under one
+credibility rule: *all numbers come from the deterministic store; the LLM
+only narrates and interprets; the literature layer only corroborates.*
+
+1. **Evidence pack** (`evidence.py`) — a JSON-able digest computed straight
+   from the store, reusing `viewer/findings.derive` so per-model /
+   per-kind pass rates, weak regions, trap fire rates, verification stats,
+   spend/trials, and the curated findings all obey the SAME
+   scored-only/noise-excluded denominator as every other surface (no new
+   arithmetic). Curated findings carry `evidence_resolves` so a diagnosis
+   can't lean on run_ids the 2026-09-19 incident destroyed.
+2. **Analyst call + audit** (`analyst.py`) — prompts the analyst model
+   (Nemotron Super by default) with strict "cite only pack numbers"
+   instructions, parses the reply into sections (robust to fences /
+   preamble). Then the signature move: `audit_diagnosis` extracts every
+   numeric token the model wrote (percents / counts / dollars), diffs each
+   against the pack at the pack's own rounding precision (0.5pt on
+   percents, exact on counts), and returns every unsupported figure as an
+   "unverified figure" flag. The narrator can say anything; only the
+   store's numbers are trusted.
+3. **Tavily corroboration** (`corroborate.py`) — for each confirmed /
+   needs-replication finding, forms focused literature queries, searches
+   Tavily (stdlib urllib), and has the analyst model classify the relation
+   (corroborates / contradicts / no_clear_signal) with snippets retained
+   for human checking. NO key → whole layer degrades to "literature check
+   not run (no Tavily key)". Responses cached to scratch JSON so re-renders
+   don't re-bill.
+
+**Surfaces:** `/report` viewer page (diagnosis, PROMINENT audit flags,
+linked corroborations, provenance footer, empty state) under the RESULTS
+nav group; `scripts/write_report.py` writes `docs/capability-report.{md,json}`.
+
+**Safety:** every store access is `ResultsStore.open_read_only()` (new
+additive `mode=ro` URI opener; append disabled on a read-only store) —
+the live gitignored `campaign.sqlite` is never write-locked or schema-
+altered by a reader. `keys.py` additively loads a Tavily key; existing key
+tests untouched.
+
+**Live run (authorized, READ-ONLY, one analyst call, hard-capped $0.20):**
+diagnosed 3 models. Executive summary opened: *"The evidence shows a clear
+performance tier: the Nano model achieves a very high overall pass rate
+(94.1%)… the Super and GPT-OSS models sit in a lower tier (overall pass
+rates 63.4% and 58.6%)… belief pass rates dropping to roughly 60% (Super)
+and 53% (GPT-OSS)."* The audit flagged **2 unverified figures** — both the
+model's own soft-hedge phrasing ("low-80% range", "mid-90% range") that
+maps to no exact pack value, caught deterministically and rendered as
+flags rather than passing silently. No Tavily key present, so the degrade
+path is what actually rendered (as expected — the user hasn't signed up).
+
+**Tests:** +47, zero network (fake client + mocked Tavily transport):
+evidence-pack rates match SQL by hand, audit catches a planted invented
+number AND passes a faithful diagnosis, rounding tolerance, Tavily parse /
+classify / degrade / cache-hit, read-only store refuses append, `/report`
+renders all sections + empty state, keys extension additive.
+
+---
+
 ## 2026-09-19 — DESIGN (pass 6) — the pass-5 composition system applied to the remaining eight pages
 
 Pass 5 proved the composition fix on the overview only and closed with a
@@ -2212,6 +2272,92 @@ Two existing assertions updated rather than weakened:
 now pass a store (the signature change is the fix) and the latter asserts
 the curated section is present AND labelled as curated, which is the new
 truth — the page it used to describe no longer exists.
+
+---
+
+## 2026-09-20 — FEATURE (shipped) — second capability province: TOOL-CALL PLANNING (`cartographer/toolworld`)
+
+**What we built:** a whole second task family alongside the narrative
+state/belief/order province, following the same architecture contract
+(deterministic seeded generation, latent representation as ground truth,
+`validate()` before use, foil model + adversarial seed search, campaign
+preset + `/launch` wiring, realized-dim measurement).
+
+The latent world is a small devops-flavored state machine: services on a
+fixed ladder (`down → provisioned → configured → deployed → healthy`),
+artifacts with an `absent → built → published` lifecycle, and boolean
+flags. A tool catalog of 3–11 typed tools each carries preconditions over
+that state and a deterministic effect. Tools come in three
+adversarially-relevant flavors: **decoys** (no-op housekeeping tools that
+never change goal-relevant state), **destructive** (`teardown_service`
+knocks a service all the way back to `down`, so a wrong call under a tight
+budget dead-ends the goal), and **gated** (a rung's advance tool requires a
+flag set / an artifact published by *another* tool first — real dependency
+chains). The goal is a conjunction of clauses; `parallel_goals=2` adds a
+second subgoal sharing the same tool pool.
+
+**Ground truth is bounded BFS, never an LLM judge.** `optimal_depth`
+exhaustively searches the enumerated state space (finite ladders + booleans,
+total precondition/effect functions) for the shortest valid plan;
+`validate()` proves a generated world is solvable within its budget and that
+the recorded optimal depth is correct. The verifier parses the model's JSON
+plan robustly (strips markdown fences and reasoning preamble; unparseable →
+FAIL `malformed_plan`), then **simulates it step by step**: the first call
+whose preconditions aren't met → FAIL `precondition_violation` with the
+step/tool; goal predicate satisfied at the end → PASS. Inefficient-but-
+correct plans PASS (we measure capability, not style) and the overhead
+(plan length − optimal) is logged as a realized dim.
+
+**Difficulty knobs** (`ToolDimParams`): `plan_depth`, `decoy_tools`,
+`precondition_chain`, `state_obscurity` (fraction of the initial state
+phrased indirectly as narrated history the reader must fold forward, plus
+scrambled presentation order), `irreversibility`, `parallel_goals`. Verified
+across the full grid that these raise measured `optimal_depth` monotonically
+where structurally expected — note `plan_depth` saturates at the ladder
+height (4 advancement rungs), so beyond that, depth is driven by
+`precondition_chain` and `parallel_goals`.
+
+**Foil model** (`greedy_goal_tool` = jump straight to the goal-producing
+advance tool ignoring preconditions; `narration_order` = call every offered
+tool once in catalog order; `decoy_bait` = lead with the highest-surface
+decoy then the greedy tool). A foil "diverges" when its plan fails to reach
+the goal; adversarial seed search picks trap-dense worlds at zero API cost.
+The zoo-validation test proves the foil bookkeeping (`n_diverging`) matches
+independent verification of each foil plan on 30 seeds.
+
+**Campaign:** `run_tool_planning_campaign` (`kind=tool_plan`) sweeps
+plan_depth/decoy_tools/precondition_chain/state_obscurity/parallel_goals via
+`ToolPlanningEvaluator` (same cost-cap/cancel/thread-safety as
+`PipelineEvaluator`). It defaults `verify="manual"` — unlike belief, a
+tool-plan FAIL is a hard deterministic verifier outcome (an unmet
+precondition, an unreached goal), not the soft MoE expert-routing noise the
+resample check was built for, so auto-resampling would add cost without the
+payoff. `/launch` gets a NEW preset card; `/findings` and `/atlas` pick the
+kind up automatically because they already derive it from
+`verifier_detail kind=`.
+
+**Zoo validation** (this repo's discipline): synthetic "models" with planted
+failure rules — a perfect planner (BFS solve) scores 100%; a
+precondition-ignoring greedy planner FAILs exactly the gated worlds and
+PASSes only the trivial 1-step ones; a decoy-only planner FAILs everything
+(`goal_not_reached`); a prose-only planner always FAILs `malformed_plan`.
+All recover ground truth.
+
+**Which dims look most likely to discriminate tiers (a priori, pre-live):**
+`precondition_chain` and `parallel_goals` — they force genuine ordering
+under dependencies and the longest optimal plans (up to depth 10 in the
+sweep), where a shallow planner's shortcut is provably wrong; the foils
+diverge hardest there. `state_obscurity` is the sleeper: it doesn't change
+the optimal plan at all, only how much of the initial state must be inferred
+from indirect narration — so it isolates *reading/inference* from *planning*,
+the tool-planning analog of the belief province's continuity-of-observation
+trap. `decoy_tools` mostly scales search-space breadth (easy to ignore for a
+capable model); `plan_depth` alone saturates at the ladder height. `budget_
+exceeded` and `malformed_plan` FAIL details will separate "can't plan" from
+"can't format," which the narrative province can't distinguish.
+
+Full suite: 613/613 passing (+253 in the new `tests/test_toolworld.py` plus
+`tests/test_launch.py` preset tests). Zero changes to the narrative province.
 
 ---
 
