@@ -7,6 +7,44 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-19 — DESIGN (pass 5) — composition, not surfaces: the actual "doesn't look like SaaS" cause
+
+User on pass 4: "it just changed the font and font color no structural
+changes." Correct, and the sharpest note of the four passes. Passes 3-4
+fixed SURFACES (sidebar, tokens, card borders, density, typeface) but
+never touched COMPOSITION. Every page was still a single stacked column:
+h1 -> panel -> h2 -> table -> h2 -> list -> h2 -> grid.
+
+No reference composes that way. Measured against them, the overview had
+three specific faults:
+- **KPI stats buried mid-page.** admin-dashboard and Numra both OPEN
+  with a KPI row; ours sat below the models table, and carried only 2
+  stats where references carry 4.
+- **Nothing two-column.** Every reference pairs a list beside a chart
+  (Services|Requests, Onboarding Funnel|Active Signals). Ours was 100%
+  full-width stacked, which reads as a document regardless of how good
+  the borders are.
+- **Section titles as h2 ABOVE content** instead of inside a card header
+  bar (admin-dashboard's "Tenants", test-factory's "REQUEST"/
+  "ASSERTIONS" -- title left, contextual meta right, hairline beneath).
+
+Fixed on the overview: `.page-head` (title left / primary action right,
+per test-factory's top-right "Run Test"), a 4-up KPI row moved to the
+top (added Models mapped + Overall pass rate), a real `.grid-2` two-column
+row pairing "What we've found" against "What recent runs revealed", and
+the models table moved inside a `.card` with its title in the header bar
+and a live "N models" meta on the right.
+
+Verified rendered at 1400px: 4 KPI cards at y=167 (top of content), two
+482px columns, CTA at x=1110/y=32, 3 card header bars, no dead gutter.
+320/320 green.
+
+Remaining pages (/runs, /run, /record, /live, /atlas, /findings,
+/coverage, /launch) still need the same primitives applied -- the
+primitives now exist and are proven on the overview.
+
+---
+
 ## 2026-09-19 — DESIGN (pass 4, by Fable directly) — the three measured defects behind "still doesn't look like a SaaS app"
 
 Pass 3 delivered the sidebar, the claim-strip signature, and a

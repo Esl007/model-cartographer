@@ -323,6 +323,31 @@ h3 { font-size: var(--fs-body); font-weight: 650; margin: var(--sp-4) 0 var(--sp
 }
 .panel-grid .panel { padding: var(--sp-4); }
 
+/* COMPOSITION (pass 5). Passes 3-4 fixed surfaces but left every page as
+   one stacked column: h1 -> panel -> h2 -> table -> h2 -> list. No
+   reference composes that way. admin-dashboard and Numra both open with
+   a KPI row across the top, then a TWO-COLUMN row (list beside chart /
+   funnel beside signals), then a full-width table card. The grid IS the
+   dashboard; without it, better borders and type still read as a
+   document. `.page-head` also gives every page the reference's
+   title-left / primary-action-right header row (test-factory's "Run
+   Test" sits top-right, not inline in the body). */
+.page-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--sp-5); margin-bottom: var(--sp-5); flex-wrap: wrap;
+}
+.page-head .subtitle { margin-bottom: 0; max-width: 62ch; }
+.page-head h1 { margin-bottom: var(--sp-2); }
+.grid-2 {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: var(--sp-3); margin: var(--sp-3) 0 var(--sp-6);
+}
+.grid-2 > .card { margin: 0; }
+/* A card's body list shouldn't carry a browser default indent on top of
+   the card's own padding. */
+.card-body ul { margin: 0; padding-left: 1.05rem; }
+.card-body ul li + li { margin-top: var(--sp-2); }
+
 /* CARD -- pass 4. The structural fix behind "it still doesn't look like
    a SaaS app": content was sitting DIRECTLY on the page background. In
    every real reference (test-factory's REQUEST/RESPONSE/ASSERTIONS,
@@ -1128,11 +1153,15 @@ def index_html(store: ResultsStore) -> str:
         if kind != "-"
     )
     model_kind_table = (
-        "<table><thead><tr><th>model</th><th>query kind</th><th>pass/total</th>"
-        "<th>rate</th></tr></thead><tbody>"
+        '<table><thead><tr><th>model</th><th>query kind</th><th class="num">pass/total</th>'
+        '<th class="num">rate</th></tr></thead><tbody>'
         + (model_kind_rows or '<tr><td colspan="4" class="meta">No trials recorded yet.</td></tr>')
         + "</tbody></table>"
     )
+    n_models = len({model for (model, kind) in by_model_kind if kind != "-"})
+    n_scored = sum(agg["n"] for (_, kind), agg in by_model_kind.items() if kind != "-")
+    n_passed = sum(agg["pass"] for (_, kind), agg in by_model_kind.items() if kind != "-")
+    overall_rate = (n_passed / n_scored * 100.0) if n_scored else 0.0
 
     findings_summary = "".join(
         f"<li>{html.escape(f.name)} <span class=\"meta\">({html.escape(f.status)})</span></li>"
@@ -1167,33 +1196,52 @@ def index_html(store: ResultsStore) -> str:
     # else (raw stat counts, per-model matrix, quick links) is demoted
     # below as "see evidence" / "where to go" material.
     body = f"""
-    <h1>Model Cartographer</h1>
-    <p class="subtitle">A synthetic story world with a known ground truth
-    is used to probe a model's grasp of object state, belief, and event
-    order -- so capability boundaries and failure modes can be mapped and
-    audited, not just guessed at.</p>
-
-    <div class="panel">
-      <p class="eyebrow">What we've found so far</p>
-      <ul style="margin:0.5rem 0 0; padding-left: 1.1rem;">{findings_summary or '<li class="meta">No confirmed findings yet -- launch a campaign to start mapping.</li>'}</ul>
-      <p class="meta" style="margin-top:0.75rem;"><a href="/findings">see the full capability map &rarr;</a></p>
-    </div>
-
-    <div class="cta-row">
+    <div class="page-head">
+      <div>
+        <h1>Model Cartographer</h1>
+        <p class="subtitle">A synthetic story world with a known ground truth
+        is used to probe a model's grasp of object state, belief, and event
+        order -- so capability boundaries and failure modes can be mapped and
+        audited, not just guessed at.</p>
+      </div>
       <a class="cta-primary" href="/launch">Map a model &rarr;</a>
     </div>
 
-    <h2>Models tested &middot; pass rates by query kind</h2>
-    {model_kind_table}
-
     <div class="stat-grid">
       <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{total_trials:,}</div></div><div class="stat-label">Total trials</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_models}</div></div><div class="stat-label">Models mapped</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{overall_rate:.0f}%</div><div class="stat-delta">{n_passed:,}/{n_scored:,} scored</div></div><div class="stat-label">Overall pass rate</div></div>
       <div class="stat-box"><div class="stat-num-row"><div class="stat-num">${total_spend:.4f}</div></div><div class="stat-label">Total spend</div></div>
     </div>
 
-    <h2>What recent runs revealed</h2>
-    <ul style="margin:0; padding-left: 1.1rem;">{recent_verdicts_html}</ul>
-    <p class="meta" style="margin-top:0.5rem;"><a href="/runs">all runs &rarr;</a></p>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">What we've found</span>
+          <a class="card-meta" href="/findings">capability map &rarr;</a>
+        </div>
+        <div class="card-body">
+          <ul>{findings_summary or '<li class="meta">No confirmed findings yet -- launch a campaign to start mapping.</li>'}</ul>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">What recent runs revealed</span>
+          <a class="card-meta" href="/runs">all runs &rarr;</a>
+        </div>
+        <div class="card-body">
+          <ul>{recent_verdicts_html}</ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Models tested &middot; pass rate by query kind</span>
+        <span class="card-meta">{n_models} model{"" if n_models == 1 else "s"}</span>
+      </div>
+      {model_kind_table}
+    </div>
 
     <h2>Where to go</h2>
     <div class="panel-grid">
