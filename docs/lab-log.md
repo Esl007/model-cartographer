@@ -7,6 +7,55 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-20 — FINDING (confirmed) — the structural traps found tool-planning's first real cross-tier failure mode: deep-plan id-binding collapse on Ultra
+
+The trap-mutation escalation (`run_tool_breaking_point_campaign`) ran on
+Super (`camp-tool_bp-super-001`, $0.035) and Ultra
+(`camp-tool_bp-ultra-001`, $0.178), 56 trials each, sequential.
+
+**Neither tier hard-breaks (found=False, pass rate never <= 0.3), but the
+traps ended the province's total saturation**: Super dipped to 71% at
+t=0.9; Ultra to 71% at t=0.6/0.9 and 86% at t=1.0 — the first
+tool-planning failures ever recorded on either tier (both were 40/40 on
+every previous campaign incl. adversarial selection).
+
+**Ultra's failures resample-verified (3x each, exact stored prompts,
+against byte-identically reconstructed trap worlds): 3 of 5 stable, and
+the stable three are DETERMINISTIC — 3/3 identical failure at the
+identical step on the identical tool.** The mode: at step 8-9 of a
+9-call optimal plan (zero-slack, all traps on), Ultra calls a
+near-collision id (`advance_o1`, `adva-nce_1` — the id_collision
+mutator's confusables) instead of the intended tool. The confusable
+EXISTS in the catalog (so it isn't `unknown_tool`) but its precondition
+doesn't hold at that point -> `precondition_violation`. Deep into a long
+plan, under id-confusability pressure, Ultra's binding of intent to
+interface identifier degrades -- the plan STRUCTURE is right (n_calls=9,
+overhead=0, correct step ordering) and the failure is purely in
+addressing the right tool id. The other 2 of 5 were MoE sampling noise
+(0/3 and 1/3 on resample) -- the noise-gate discipline catching
+single-trial phantoms yet again.
+
+This is a genuinely distinct failure class from anything the narrative
+province can measure, and distinct from "can't plan": call it
+**deep-plan identifier-binding collapse**. Nano's earlier name-for-id
+failure was the shallow version (step 1 of a 1-step plan); Ultra survives
+shallow binding but degrades at depth 8-9. Discriminates by DEPTH x
+CONFUSABILITY, not by tier alone.
+
+**Provenance bug found during verification (open, needs fix):**
+`ToolBreakingPointEvaluator` records only the scalar dims in
+`latent_params`; the five trap 0/1 dims live only inside the
+`verifier_detail` string (`traps=...`). World reconstruction from a
+record therefore FAILS silently if you use `latent_params` alone -- my
+first resample round verified against un-mutated worlds and produced 15
+invalid verdicts (all spurious unknown_tool; caught because the failure
+codes didn't match the originals, ~$0.15 of Ultra calls wasted, redone
+correctly). Trap dims belong in `latent_params`/`realized_dims` proper
+so the standard reconstruction path works. Flagged for fix, not patched
+here.
+
+---
+
 ## 2026-09-20 — FINDING (confirmed) — adversarial selection alone cannot break tool-planning: the generator has no traps to select
 
 Follow-up to the tool-planning saturation diagnosis (Nano 39/40, Super
