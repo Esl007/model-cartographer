@@ -111,10 +111,50 @@ def foil_decoy_bait(world: ToolWorld) -> list[Call]:
     return plan
 
 
+def foil_greedy_lookahead0(world: ToolWorld, max_steps: int = 64) -> list[Call]:
+    """Simulate the literal greedy policy with zero lookahead: repeatedly
+    call the FIRST currently-valid non-decoy tool by catalog order (default
+    arg binding toward the primary service goal), applying its effect, until
+    either the goal is satisfied or no non-decoy tool is currently valid (or
+    `max_steps` is hit). This is the trap-salience foil for the structural
+    mutators (`poison_ladder`, `interleaved_goals`): a planner that commits
+    to "any currently-valid advance is safe" without checking whether it
+    forecloses later steps. On an un-mutated world this greedy policy is
+    exactly the safe strategy the province's generator guarantees (every
+    state's valid tools only ever advance toward the goal), so it should
+    reach the goal; on poison_ladder/interleaved_goals worlds it should not.
+    """
+    clause = _primary_service_goal(world)
+    target = _default_service_arg(world, clause)
+
+    state = world.initial_state
+    plan: list[Call] = []
+    for _ in range(max_steps):
+        if world.goal.satisfied(state):
+            break
+        fired = False
+        for tool in world.catalog:
+            if tool.decoy:
+                continue
+            args = _tool_arg_for(world, tool, target)
+            if not all(p.name in args for p in tool.params):
+                continue
+            if not tool.preconditions(state, args):
+                continue
+            state = tool.effect(state, args)
+            plan.append(Call(tool=tool.id, args=args))
+            fired = True
+            break
+        if not fired:
+            break
+    return plan
+
+
 FOILS = {
     "greedy_goal_tool": foil_greedy_goal_tool,
     "narration_order": foil_narration_order,
     "decoy_bait": foil_decoy_bait,
+    "greedy_lookahead0": foil_greedy_lookahead0,
 }
 
 
