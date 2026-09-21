@@ -7,6 +7,33 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-20 — FINDING (confirmed) — adversarial selection alone cannot break tool-planning: the generator has no traps to select
+
+Follow-up to the tool-planning saturation diagnosis (Nano 39/40, Super
+40/40). Ran the free probe first: `run_tool_planning_campaign` with
+`adversarial=True` (foil-driven seed search ON) on both Super
+(`camp-tool_planning-adv-super-001`) and Ultra
+(`camp-tool_planning-adv-ultra-001`), 40 trials each, sequential (not
+parallel -- see the rate-limit diagnosis entry).
+
+**Result: 40/40 PASS on both. $0.0434 total.** Adversarial selection
+moved nothing -- in sharp contrast to the narrative province, where
+switching on foil-driven selection broke Ultra at chain_length=2.
+
+**Why this is expected and what it proves:** seed search can only pick
+the most trap-dense world the generator can PRODUCE. The current
+toolworld generator produces no real traps: decoys self-identify ("Has
+no effect on deployment state"), every precondition is spelled out in
+the tool's own description, and every world is greedy-solvable (no
+locally-valid call is ever globally wrong). Selection over trap-free
+worlds is selection over nothing. This isolates the bottleneck to the
+GENERATOR's structure, not the selection machinery -- the exact
+motivating evidence for the trap-mutation build now in progress
+(toolworld/mutate.py: poison_ladder, dishonest_decoys,
+implicit_preconditions, zero_slack, id_collision, interleaved_goals).
+
+---
+
 ## 2026-09-20 — FEATURE (shipped) — the Evidence Analyst: Nemotron writes the diagnosis, a deterministic audit keeps it honest
 
 **What we built:** `cartographer/analyst/` — the Phase 9 centerpiece that
