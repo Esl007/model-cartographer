@@ -104,6 +104,14 @@ logged above before a final total could be tallied from the store
 directly; this figure is a floor, summed only from the dollar amounts
 each entry above and in `docs/lab-log.md` states explicitly).
 
+## 2026-09-21
+
+| Time (UTC) | Type | Event |
+|---|---|---|
+| 12:21:01 | C `7c3cdb9` | Toolworld structural trap mutators (Tasks 1+2): `poison_ladder`, `dishonest_decoys`, `implicit_preconditions`, `zero_slack`, `id_collision`, `interleaved_goals` in new `cartographer/toolworld/mutate.py` (mirrors `world/mutate.py`'s ANSWER_PRESERVING/ANSWER_CHANGING contract); `foils.foil_greedy_lookahead0` (zero-lookahead simulated policy) wired into `FOILS`/`foil_divergence`. 17 new tests, zero live calls. |
+| 12:21:06 | C `86fe1c1` | `render.render()` gains `style="implicit"` (strips per-tool "Precondition:" sentences into one general-rules paragraph); `verify.verify_plan()` gains an additive `budget_exceeded_plan` detail code for zero-slack worlds (`budget == optimal_depth`) — ordinary budget-exceeded worlds unaffected. |
+| 12:21:12 | C `222a4c7` | `default_tool_ray()` + `run_tool_breaking_point_campaign` (budget=250, cost_cap=0.5) in `exec/evaluator.py`, mirroring `run_breaking_point_campaign`'s shape over five 0/1 structural-trap toggles + existing `precondition_chain`/`parallel_goals`; wired into `/launch` as a NEW preset card. Pure-simulation signal: `greedy_lookahead0` fails 100% (50/50 seeds) at full-ceiling trap-stacked config, up from saturating (Nano 39/40, Super 40/40) under scalar-only escalation. 630/630 tests passing. |
+
 ---
 
 ## Glossary: the three query kinds

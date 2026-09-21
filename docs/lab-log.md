@@ -2623,6 +2623,98 @@ Full suite: 613/613 passing (+253 in the new `tests/test_toolworld.py` plus
 
 ---
 
+## 2026-09-21 — FEATURE (shipped) — tool-planning province: structural trap mutators (`cartographer/toolworld/mutate.py`)
+
+**What we saw:** the tool-planning province's scalar knobs saturate too
+easily — reading a rendered max-difficulty prompt showed three concrete
+tells: (a) decoy tools literally announce "(Has no effect on deployment
+state.)" in their own description; (b) every precondition is spelled out in
+prose per-tool, so nothing has to be inferred from general rules; (c) the
+world is greedy-solvable at every reachable state — calling any currently-
+valid advance tool is always globally safe, so "call whatever's valid" never
+loses. The narrative province already proved magnitude-escalation (bigger
+numbers) fails to trap capable models while structural traps (plausible
+wrong shortcuts) succeed; this mirrors that lesson into the tool-planning
+province.
+
+**Fix / decision:** six deterministic mutators in
+`cartographer/toolworld/mutate.py`, mirroring `world/mutate.py`'s
+ANSWER_PRESERVING / ANSWER_CHANGING contract:
+
+- `poison_ladder` (ANSWER_CHANGING) — plants a goal-sounding trap tool
+  (`sync_release_state`, always fireable) whose effect clears a flag a real
+  advance step needs, with no re-setter in the catalog. World stays solvable
+  (trap is avoidable) — the greedy no-lookahead foil walks into it on 24/30
+  seeds; a lookahead planner never does.
+- `dishonest_decoys` (ANSWER_PRESERVING) — rewrites every decoy's name +
+  description to reference the goal service by name and deletes the
+  "(Has no effect...)" confession; effects stay genuine no-ops, so
+  `optimal_depth` is provably unchanged (asserted across 20+ seeds).
+- `implicit_preconditions` (ANSWER_PRESERVING, render-level) — implemented
+  as `render.render(world, seed, style="implicit")` rather than a world
+  mutation, to keep the world/render split clean per the build spec: every
+  tool's own "Precondition: ..." sentence is stripped and replaced by ONE
+  "environment mechanics" paragraph up top stating the general rules; the
+  model must map the general rule to the specific call.
+- `zero_slack` (ANSWER_CHANGING) — tightens `budget` to exactly
+  `optimal_depth`; `verify.py` gained an additive branch emitting the new
+  `budget_exceeded_plan` detail code specifically when budget==optimal_depth
+  (existing worlds with normal slack are provably untouched — same detail
+  string as before).
+- `id_collision` (ANSWER_PRESERVING) — re-ids every tool to a deterministic
+  near-collision confusable (`advance_0` → `advance_o0`-style) while names
+  stay distinct; targets the `unknown_tool` interface-binding failure class
+  Nano already showed once live.
+- `interleaved_goals` (ANSWER_CHANGING, `parallel_goals==2` only) — adds a
+  shared window flag required by BOTH subgoals' final rung, one-way closed
+  by subgoal A's own completion step. "Finish all of A, then all of B" (the
+  natural union-of-two-independent-plans a no-lookahead planner produces)
+  dead-ends B every time; a real interleaved plan (open window → B's final
+  rung → THEN close via A's final rung) exists and is asserted solvable.
+
+**Task 2 — foil:** `foils.foil_greedy_lookahead0` simulates the literal
+zero-lookahead policy (first currently-valid non-decoy tool, catalog order,
+repeat until stuck or goal) and is wired into `FOILS`/`foil_divergence`.
+PASSes every un-mutated world (20/20 seeds — confirms the base generator's
+"any valid tool is safe" property the diagnosis flagged). On
+`interleaved_goals` worlds it fails 100% of the time (30/30 applicable
+seeds); on `poison_ladder` it falls into the trap on the large majority
+(24/30) but not all — the trap's catalog position is seeded, so on some
+seeds the greedy scan happens to reach a real advance tool first.
+
+**Task 3 — escalation:** `default_tool_ray()` in `exec/evaluator.py` ramps
+five 0/1 trap toggles (`poison_traps`, `dishonest_decoys_on`,
+`implicit_preconditions_on`, `zero_slack_on`, `id_collisions_on`) plus the
+existing `precondition_chain`/`parallel_goals` scalars from off/easy to
+all-on/ceiling. `interleaved_goals` did NOT map onto its own RayDim — it
+only ever applies when `parallel_goals==2` (see
+`mutate.interleaved_goals_applicable`), so it rides the existing
+`parallel_goals` dim for free rather than needing a synthetic toggle with
+nothing to represent. `run_tool_breaking_point_campaign` (budget=250,
+cost_cap=0.5) mirrors `run_breaking_point_campaign`'s shape exactly
+(`find_breaking_point` + decompose + confirm), wired into `/launch` as a
+new NEW-badged preset card.
+
+**Pure-simulation signal (free, zero API calls):** greedy-lookahead0 fails
+50/50 (100%) at full ceiling config (all five traps stacked +
+precondition_chain=2 + parallel_goals=2) across 50 seeds — up from 0%
+divergence on the un-mutated province's greedy foil at the same scalar
+settings. That's the trap-density signal this build set out to produce:
+worth spending live budget on `tool_breaking_point` once escalated.
+
+**Verification:** 630/630 tests passing (613 prior + 17 new in
+`tests/test_toolworld_mutate.py`) — zoo validation with `GreedyPlanner`
+(lookahead 0, PASSes normal/FAILs poison_ladder+interleaved_goals),
+`PerfectPlanner` (bounded BFS, PASSes every mutated-but-solvable world
+including zero_slack), `VerbosePlanner` (perfect + 2 redundant decoy calls,
+PASSes normal/FAILs zero_slack with `budget_exceeded_plan`), `NameCaller`
+(uses tool names not ids, FAILs id_collision with `unknown_tool`).
+Determinism + ANSWER_PRESERVING invariants asserted across 20+ seeds each.
+Zero live API calls anywhere in this build — the live escalation run
+happens later, separately, after human review.
+
+---
+
 ## Template for new entries
 
 ```
