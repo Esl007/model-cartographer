@@ -50,7 +50,7 @@ def extract_facts_tokens(
         temperature=0.0,
     )
     tokens = result.tokens_in + result.tokens_out
-    if result.error is not None:
+    if result.error is not None or result.text is None:
         return None, tokens
 
     text = result.text

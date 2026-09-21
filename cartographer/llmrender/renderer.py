@@ -59,7 +59,7 @@ def render_llm_tokens(
         temperature=temperature,
     )
     tokens = result.tokens_in + result.tokens_out
-    if result.error is not None:
+    if result.error is not None or result.text is None:
         return None, tokens
     story = result.text.strip()
     if not story:
