@@ -40,13 +40,43 @@ def _goal_clause_prose(clause: GoalClause, world: ToolWorld) -> str:
     raise ValueError(f"unknown goal clause kind {clause.target_kind!r}")
 
 
-def _tool_catalog_prose(world: ToolWorld) -> str:
+import re
+
+_PRECONDITION_SENTENCE_RE = re.compile(r"\s*Precondition:[^.]*\.")
+
+
+def _strip_precondition_sentences(description: str) -> str:
+    """Remove every "Precondition: ..." sentence from a tool description
+    (used by `style="implicit"` rendering -- see `render`)."""
+    return _PRECONDITION_SENTENCE_RE.sub("", description).strip()
+
+
+_MECHANICS_PARAGRAPH = (
+    "ENVIRONMENT MECHANICS (apply these general rules to the specific tools "
+    "below -- individual tool descriptions do not restate them): a service "
+    "can only be configured once it has been provisioned, can only be "
+    "deployed once configured, and can only be health-checked once deployed "
+    "-- i.e. each rung of the down -> provisioned -> configured -> deployed "
+    "-> healthy ladder requires the previous rung. An artifact can only be "
+    "published once it has been built. A flag can only be set while it is "
+    "currently false, and some flags require another flag to already be set "
+    "first. Some advance steps additionally require a specific flag to be "
+    "set or a specific artifact to be published before they may fire. Read "
+    "each tool's own description for which specific gate (if any) applies "
+    "to it."
+)
+
+
+def _tool_catalog_prose(world: ToolWorld, style: str = "explicit") -> str:
     lines: list[str] = []
     for tool in world.catalog:
         param_str = ", ".join(f"{p.name}: {p.kind}" for p in tool.params) or "(no args)"
+        desc = tool.description
+        if style == "implicit":
+            desc = _strip_precondition_sentences(desc)
         lines.append(
             f"- id: {tool.id} | name: {tool.name} | params: {param_str}\n"
-            f"    {tool.description}"
+            f"    {desc}"
         )
     return "\n".join(lines)
 
@@ -69,20 +99,35 @@ def _entity_reference_prose(world: ToolWorld) -> str:
     return "\n".join(parts)
 
 
-def render(world: ToolWorld, seed: int) -> RenderedToolTask:
+def render(world: ToolWorld, seed: int, style: str = "explicit") -> RenderedToolTask:
+    """Render `world` to a prompt. `style="explicit"` (default) is the
+    original rendering: every tool spells out its own "Precondition: ..."
+    sentence. `style="implicit"` strips those sentences from every tool
+    description and instead states the general rules ONCE, in a single
+    "environment mechanics" paragraph up top -- the model must map the
+    general rule to the specific call itself. The underlying `world` (and
+    therefore ground truth / verification) is identical either way; only the
+    prose changes -- see `mutate.implicit_preconditions`, which documents
+    this as a render-level mutator to keep the world/render split clean."""
+    if style not in ("explicit", "implicit"):
+        raise ValueError(f'style must be "explicit" or "implicit", got {style!r}')
+
     state_lines = "\n".join(f"- {line}" for line in world.state_narration)
     goal_lines = "\n".join(
         f"- {_goal_clause_prose(c, world)}" for c in world.goal.clauses
     )
-    catalog = _tool_catalog_prose(world)
+    catalog = _tool_catalog_prose(world, style=style)
     legend = _entity_reference_prose(world)
+
+    mechanics = f"\n{_MECHANICS_PARAGRAPH}\n\n" if style == "implicit" else "\n"
 
     prompt = (
         "You are an operations planner. Below is the current state of a small "
         "deployment environment, a goal, and a catalog of tools you may call. "
         "Each tool has typed parameters and PRECONDITIONS that must hold at the "
         "moment you call it; calling a tool whose preconditions are not met is "
-        "an error and your plan fails.\n\n"
+        "an error and your plan fails."
+        f"{mechanics}"
         "CURRENT STATE:\n"
         f"{state_lines}\n\n"
         "GOAL (all conditions must hold at the end):\n"
@@ -105,6 +150,7 @@ def render(world: ToolWorld, seed: int) -> RenderedToolTask:
         "budget": world.budget,
         "n_tools": len(world.catalog),
         "n_decoys": sum(1 for t in world.catalog if t.decoy),
+        "style": style,
     }
     return RenderedToolTask(
         prompt=prompt,

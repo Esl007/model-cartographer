@@ -155,9 +155,22 @@ def verify_plan(response: str, world: ToolWorld) -> PlanVerification:
         )
 
     if len(plan) > world.budget:
+        # Additive zero-slack extension (see `mutate.zero_slack`): when the
+        # world's budget has been tightened to exactly its optimal_depth (no
+        # slack for a redundant/no-op call), a too-long plan gets its own
+        # detail code so callers/decompose can distinguish "genuinely no
+        # slack" worlds from the ordinary generous-budget overrun above.
+        # Existing worlds (budget with the usual generator slack) are
+        # completely unaffected -- this branch only differs in its `detail`
+        # string, never in verdict/overhead/other fields.
+        detail = (
+            "budget_exceeded_plan"
+            if world.optimal_depth is not None and world.budget == world.optimal_depth
+            else f"budget_exceeded:{len(plan)}>{world.budget}"
+        )
         return PlanVerification(
             verdict=Verdict.FAIL,
-            detail=f"budget_exceeded:{len(plan)}>{world.budget}",
+            detail=detail,
             n_calls=len(plan),
             optimal_depth=optimal,
             overhead=len(plan) - optimal,
