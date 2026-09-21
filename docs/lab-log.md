@@ -7,6 +7,27 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-21 — BUGFIX (fixed) — ToolBreakingPointEvaluator now persists trap dims in latent_params
+
+Fixes the provenance bug flagged open in the 2026-09-20 entry below
+("deep-plan id-binding collapse" verification session). `ToolBreakingPointEvaluator`
+now writes all five trap 0/1 dims (`poison_traps`, `dishonest_decoys_on`,
+`implicit_preconditions_on`, `zero_slack_on`, `id_collisions_on`) into both
+`latent_params` and `realized_dims` for every record it persists, in
+addition to the existing `verifier_detail` string (kept for back-compat
+and human readability). World reconstruction from a record's
+`latent_params` alone now round-trips: regression test builds a
+`ToolBreakingPointEvaluator` against a fake client + tmp store, runs one
+config with all traps on, reads the record back, reconstructs the world
+from `latent_params` alone via `ToolDimParams` + `_apply_tool_trap_config`,
+and asserts the re-rendered prompt is byte-identical to the record's
+stored `prompt_text`. Additive change only; existing records in
+`camp-tool_bp-super-001`/`camp-tool_bp-ultra-001` predate the fix and are
+left as-is (append-only store) -- they still rely on the `verifier_detail`
+fallback for trap provenance. Commit `1827e06`. 631/631 tests passing.
+
+---
+
 ## 2026-09-20 — FINDING (confirmed) — the structural traps found tool-planning's first real cross-tier failure mode: deep-plan id-binding collapse on Ultra
 
 The trap-mutation escalation (`run_tool_breaking_point_campaign`) ran on
@@ -42,7 +63,7 @@ failure was the shallow version (step 1 of a 1-step plan); Ultra survives
 shallow binding but degrades at depth 8-9. Discriminates by DEPTH x
 CONFUSABILITY, not by tier alone.
 
-**Provenance bug found during verification (open, needs fix):**
+**Provenance bug found during verification (fixed 2026-09-21, see entry above):**
 `ToolBreakingPointEvaluator` records only the scalar dims in
 `latent_params`; the five trap 0/1 dims live only inside the
 `verifier_detail` string (`traps=...`). World reconstruction from a
