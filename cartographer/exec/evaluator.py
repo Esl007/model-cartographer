@@ -1610,10 +1610,20 @@ class ToolBreakingPointEvaluator:
         rendered = tool_render(world, seed, style=style)
         realized_dims = tool_measure(world)
 
+        trap_dim_names = (
+            "poison_traps", "dishonest_decoys_on", "implicit_preconditions_on",
+            "zero_slack_on", "id_collisions_on",
+        )
+        # Trap 0/1 dims, needed in latent_params/realized_dims (in addition
+        # to verifier_detail below) so world reconstruction from a record's
+        # latent_params alone is possible -- see docs/lab-log.md "Provenance
+        # bug" entry. Additive only; verifier_detail kept for back-compat.
+        trap_dims = {
+            k: float(1.0 if config.get(k, 0.0) >= 0.5 else 0.0) for k in trap_dim_names
+        }
         trap_note = ";".join(
             f"{k}={int(round(config[k]))}"
-            for k in ("poison_traps", "dishonest_decoys_on", "implicit_preconditions_on",
-                      "zero_slack_on", "id_collisions_on")
+            for k in trap_dim_names
             if k in config
         )
         verifier_detail = f"kind=tool_plan;campaign=1;traps={trap_note}"
@@ -1672,8 +1682,9 @@ class ToolBreakingPointEvaluator:
                 "state_obscurity": float(params.state_obscurity),
                 "irreversibility": float(params.irreversibility),
                 "parallel_goals": float(params.parallel_goals),
+                **trap_dims,
             },
-            realized_dims=realized_dims,
+            realized_dims={**realized_dims, **trap_dims},
             render_mode=RenderMode.TEMPLATE,
             task_seed=seed,
             trial_seed=trial_seed,

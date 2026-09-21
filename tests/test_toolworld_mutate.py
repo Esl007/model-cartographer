@@ -332,3 +332,125 @@ def test_ordinary_budget_exceeded_detail_unchanged():
     assert pv.verdict == Verdict.FAIL
     assert pv.detail.startswith("budget_exceeded:")
     assert pv.detail != "budget_exceeded_plan"
+
+
+# ---------------------------------------------------------------------------
+# Provenance-bug regression: ToolBreakingPointEvaluator must persist the five
+# trap 0/1 dims IN latent_params/realized_dims proper, not just inside the
+# verifier_detail string. See docs/lab-log.md "Provenance bug found during
+# verification" entry -- a live resample round was wasted (~$0.15 of Ultra
+# calls) because reconstructing a world from latent_params alone silently
+# yielded the UN-mutated world when the trap dims lived only in
+# verifier_detail. This test builds a record with traps on, then
+# reconstructs the world from latent_params ALONE (mirroring exactly what a
+# downstream /atlas or /findings resample tool would do) and asserts the
+# re-rendered prompt is byte-identical to the one actually sent to the
+# model. Against the pre-fix code (latent_params missing the five trap
+# keys), the reconstructed world has no traps applied and this assertion
+# fails.
+#
+# NOTE: existing records in camp-tool_bp-super-001 / camp-tool_bp-ultra-001
+# predate this fix and still need the verifier_detail fallback for trap
+# provenance -- do NOT migrate/rewrite them (the store is append-only).
+# ---------------------------------------------------------------------------
+
+
+class _FixedPlanClient:
+    """Fake client that always returns a fixed plan JSON. Zero network."""
+
+    def __init__(self, text="[]"):
+        self._text = text
+        self.calls = 0
+
+    def chat(self, model, prompt, max_tokens=1500, max_tokens_retry=4000, **kwargs):
+        from cartographer.exec.client import ChatResult
+
+        self.calls += 1
+        return ChatResult(text=self._text, tokens_in=10, tokens_out=2, latency_ms=1.0,
+                          finish_reason="stop")
+
+
+def test_tool_breaking_point_evaluator_latent_params_carry_trap_dims(tmp_path):
+    """The regression test for the provenance bug: reconstruct the world
+    from a persisted record's latent_params ALONE and check the re-rendered
+    prompt matches byte-for-byte."""
+    from cartographer.exec.evaluator import (
+        ToolBreakingPointEvaluator,
+        ToolDimParams,
+        _apply_tool_trap_config,
+        _default_tool_base,
+    )
+    from cartographer.toolworld.generate import generate as tool_generate
+    from cartographer.toolworld.render import render as tool_render
+    from cartographer.store.store import ResultsStore
+
+    store = ResultsStore(str(tmp_path / "camp.sqlite"))
+    client = _FixedPlanClient()
+    evaluator = ToolBreakingPointEvaluator(
+        client=client,
+        model="fake/Model",
+        store=store,
+        run_id="camp-tool-bp-test-001",
+        cost_cap_usd=10.0,
+    )
+
+    config = {
+        "poison_traps": 1.0,
+        "dishonest_decoys_on": 1.0,
+        "implicit_preconditions_on": 1.0,
+        "zero_slack_on": 1.0,
+        "id_collisions_on": 1.0,
+        "precondition_chain": 2.0,
+        "parallel_goals": 2.0,
+    }
+    trial_seed = 7
+
+    evaluator(config, trial_seed)
+
+    records = store.by_run("camp-tool-bp-test-001")
+    assert len(records) == 1
+    record = records[0]
+
+    # The whole point: every trap dim must be present in latent_params
+    # (not just buried in verifier_detail).
+    trap_keys = {
+        "poison_traps", "dishonest_decoys_on", "implicit_preconditions_on",
+        "zero_slack_on", "id_collisions_on",
+    }
+    assert trap_keys <= set(record.latent_params.keys())
+    for k in trap_keys:
+        assert record.latent_params[k] == 1.0
+    # Also surfaced in realized_dims so /atlas and /findings can bucket on
+    # them like any other dim.
+    assert trap_keys <= set(record.realized_dims.keys())
+    for k in trap_keys:
+        assert record.realized_dims[k] == 1.0
+
+    # Reconstruct the world from latent_params ALONE (as a downstream
+    # resample tool would): scalars feed ToolDimParams, latent_params
+    # itself is the trap config for _apply_tool_trap_config.
+    base = _default_tool_base()
+    recon_params = ToolDimParams(
+        plan_depth=int(record.latent_params["plan_depth"]),
+        decoy_tools=int(record.latent_params["decoy_tools"]),
+        precondition_chain=int(record.latent_params["precondition_chain"]),
+        state_obscurity=record.latent_params["state_obscurity"],
+        irreversibility=bool(record.latent_params["irreversibility"]),
+        parallel_goals=int(record.latent_params["parallel_goals"]),
+    )
+    assert recon_params == ToolDimParams(
+        plan_depth=base.plan_depth,
+        decoy_tools=base.decoy_tools,
+        precondition_chain=2,
+        state_obscurity=base.state_obscurity,
+        irreversibility=base.irreversibility,
+        parallel_goals=2,
+    )
+
+    recon_world = tool_generate(recon_params, record.task_seed)
+    recon_world, recon_style = _apply_tool_trap_config(
+        recon_world, record.latent_params, record.task_seed
+    )
+    recon_rendered = tool_render(recon_world, record.task_seed, style=recon_style)
+
+    assert recon_rendered.prompt == record.prompt_text
