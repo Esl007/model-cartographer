@@ -7,6 +7,43 @@ Status values: `open`, `fixed`, `confirmed`, `retracted`, `decided`.
 
 ---
 
+## 2026-09-21 — FINDING (confirmed) — FIRST FOUND BREAKING POINT: Nano breaks at t*=0.55 on the tool-planning trap ray
+
+`camp-tool_bp-nano-001` (154 records incl. bisection, tracked $0.068 ~
+$0.26 real): **found=True, t*=0.55** — the first time `find_breaking_point`
+has ever returned a boundary in this project (every narrative-province
+escalation on every tier, and the tool escalations on Super/Ultra,
+returned found=False). The provenance fix (commit 1827e06) is confirmed
+working in live data: trap dims present in `latent_params` on every
+record.
+
+**The cliff is sharp**: pass rate 100% at t=0.45 and t=0.4875, 43% at
+t=0.5063 and t=0.525, 29% at t=0.6. A genuine phase transition, not a
+gradual slide — exactly the boundary shape the escalation machinery was
+built to localize (ramp -> bisect to <=0.03).
+
+**Failure composition (49 FAILs)**: 28 precondition_violation, 20
+unknown_tool, 1 missing_arg. Nano fails BOTH ways: it addresses tools
+that don't exist (unknown_tool — the shallow id-binding mode it showed
+at step 1 in its very first smoke test) AND calls real tools out of
+order (precondition_violation). Contrast the verified Ultra mode
+(structure perfect, only deep id-binding slips): the three-tier gradient
+on this province is now Nano breaks-at-t*=0.55 with mixed
+structural+binding failures / Super grazes (1 FAIL total) / Ultra
+degrades to 71-86% only at max traps with pure deep-binding slips.
+
+Caveats, stated plainly: (1) tool_bp campaigns don't auto-verify, and
+per the credit-rationing plan no bulk resample was run — the evidence
+for this finding is the SHARP REPRODUCIBLE CLIFF (100% -> 43% across
+adjacent t values, n=7 per point, replicated at two nearby t's on each
+side), which single-trial MoE noise cannot produce, rather than
+per-failure resampling. A bounded resample-verification pass (~$0.25
+real) is the natural hardening step if this becomes a submission
+headline. (2) 10 ERRORs are the known token-cap-under-escalation
+mechanism, correctly routed to ERROR.
+
+---
+
 ## 2026-09-21 — BUGFIX (fixed) — ToolBreakingPointEvaluator now persists trap dims in latent_params
 
 Fixes the provenance bug flagged open in the 2026-09-20 entry below
