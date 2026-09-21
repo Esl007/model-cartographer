@@ -149,6 +149,7 @@ def propose_configs(
     n: int = 6,
     seed: int = 0,
     max_tokens: int = 2000,
+    schema: str = _SCHEMA_TEXT,
 ) -> list[Proposal]:
     """Call `proposer_model` via `client.chat(...)` (same `Client` interface
     as `cartographer.exec.client.Client`) for `n` candidate proposals.
@@ -158,7 +159,7 @@ def propose_configs(
     fails to parse, returns `[]` (never raises -- a failed proposer round
     should degrade to "no proposals," not crash the loop).
     """
-    prompt = PROPOSAL_PROMPT.format(digest=digest, schema=_SCHEMA_TEXT, n=n)
+    prompt = PROPOSAL_PROMPT.format(digest=digest, schema=schema, n=n)
     result = client.chat(model=proposer_model, prompt=prompt, max_tokens=max_tokens)
     if result.error is None:
         parsed = _parse_proposals(result.text)

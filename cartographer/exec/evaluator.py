@@ -1651,7 +1651,7 @@ class ToolBreakingPointEvaluator:
         scalar_cfg = {
             k: v
             for k, v in config.items()
-            if k in ("precondition_chain", "parallel_goals")
+            if k in _TOOL_KNOWN_KEYS
         }
         params = _apply_tool_config(self.base, scalar_cfg)
         seed = _task_seed(config, trial_seed)
