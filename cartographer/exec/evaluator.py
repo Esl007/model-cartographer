@@ -22,6 +22,8 @@ import threading
 from dataclasses import dataclass, field, replace
 from typing import Callable
 
+from ..llmrender.gate import gated_render, record_gate_rejection
+from ..llmrender.renderer import assemble_prompt
 from ..render import build_name_map, render, verify
 from ..schedule.escalate import BreakingPoint, EscalationRay, RayDim, find_breaking_point
 from ..schedule.scheduler import CampaignState, DimSpec, SchedulerConfig, run_campaign
@@ -158,6 +160,8 @@ class PipelineEvaluator:
         cancel_event: threading.Event | None = None,
         adversarial: bool = False,
         adversarial_candidates: int = 40,
+        renderer_model: str | None = None,
+        extractor_model: str | None = None,
     ) -> None:
         self.client = client
         self.model = model
@@ -168,6 +172,16 @@ class PipelineEvaluator:
         self.base = base if base is not None else _default_base(query_kind)
         self.adversarial = adversarial
         self.adversarial_candidates = adversarial_candidates
+        # Phase 4 LLM-rendered pathway: when `renderer_model` is set, each
+        # trial's world is narrated as prose by `renderer_model` behind the
+        # mandatory fidelity gate (`extractor_model` verifies), instead of
+        # the deterministic template renderer. Both must be set together.
+        if (renderer_model is None) != (extractor_model is None):
+            raise ValueError(
+                "renderer_model and extractor_model must be set together"
+            )
+        self.renderer_model = renderer_model
+        self.extractor_model = extractor_model
 
         default_max_tokens, default_max_tokens_retry = default_token_budget(model)
         if max_tokens is not None:
@@ -244,9 +258,44 @@ class PipelineEvaluator:
 
         verifier_detail = f"kind={self.query_kind};campaign=1{adversarial_note}"
 
+        prompt = rendered.prompt
+        render_mode = RenderMode.TEMPLATE
+        if self.renderer_model is not None:
+            gate = gated_render(
+                world,
+                name_map,
+                self.client,
+                renderer_model=self.renderer_model,
+                extractor_model=self.extractor_model,
+                subject_model=self.model,
+                seed=seed,
+            )
+            # GateResult only reports total tokens across renderer+extractor
+            # calls; charge them all at the pricier of the two models' output
+            # rate -- a conservative upper bound that keeps the cost cap honest.
+            gate_rate = max(
+                cost_usd(self.renderer_model, 0, gate.tokens_spent),
+                cost_usd(self.extractor_model, 0, gate.tokens_spent),
+            )
+            with self._lock:
+                self.call_count += gate.attempts
+                self.spent_usd += gate_rate
+                if self.spent_usd >= self.cost_cap_usd:
+                    self.capped = True
+            if not gate.accepted:
+                with self._lock:
+                    self.error_count += 1
+                record_gate_rejection(
+                    self.store, self.run_id, world, name_map, gate, task_seed=seed
+                )
+                return False
+            prompt = assemble_prompt(gate.story, world, name_map)
+            render_mode = RenderMode.NEMOTRON
+            verifier_detail += f";gate_attempts={gate.attempts}"
+
         result = self.client.chat(
             model=self.model,
-            prompt=rendered.prompt,
+            prompt=prompt,
             max_tokens=self.max_tokens,
             max_tokens_retry=self.max_tokens_retry,
         )
@@ -259,7 +308,7 @@ class PipelineEvaluator:
             # Retry once on error before giving up.
             retry = self.client.chat(
                 model=self.model,
-                prompt=rendered.prompt,
+                prompt=prompt,
                 max_tokens=self.max_tokens,
                 max_tokens_retry=self.max_tokens_retry,
             )
@@ -300,11 +349,12 @@ class PipelineEvaluator:
                 "witness_cutoff": float(params.witness_cutoff),
             },
             realized_dims=realized_dims,
-            render_mode=RenderMode.TEMPLATE,
+            render_mode=render_mode,
             task_seed=seed,
             trial_seed=trial_seed,
             rendering_seed=seed,
-            prompt_text=rendered.prompt,
+            renderer_model=self.renderer_model,
+            prompt_text=prompt,
             response_text=result.text,
             verdict=verdict,
             verifier_detail=verifier_detail,
@@ -826,6 +876,8 @@ def _run_campaign_with_verification(
     cancel_event: threading.Event | None,
     verify: str = "auto",
     adversarial: bool = False,
+    renderer_model: str | None = None,
+    extractor_model: str | None = None,
 ) -> CampaignState:
     """Shared body for the state/order/belief/adversarial_belief presets:
     run the main scheduler loop, then -- if `verify == "auto"` -- an
@@ -860,6 +912,8 @@ def _run_campaign_with_verification(
         max_tokens=max_tokens,
         cancel_event=cancel_event,
         adversarial=adversarial,
+        renderer_model=renderer_model,
+        extractor_model=extractor_model,
     )
     if parallelism is None:
         parallelism = _default_parallelism(client)
@@ -905,8 +959,14 @@ def run_state_campaign(
     max_tokens: int | None = None,
     cancel_event: threading.Event | None = None,
     verify: str = "auto",
+    renderer_model: str | None = None,
+    extractor_model: str | None = None,
 ) -> CampaignState:
     """Run the "state" query-kind campaign: sweep chain_length from 2 to 30.
+
+    `renderer_model`/`extractor_model` (set together) switch every trial to
+    the Phase 4 LLM-rendered pathway behind the mandatory fidelity gate; the
+    default (None) keeps the deterministic template renderer.
 
     `parallelism=None` defaults to the client provider's
     `suggested_parallelism` (Groq 2, Nebius 6 -- rate-limit-aware).
@@ -925,6 +985,7 @@ def run_state_campaign(
     return _run_campaign_with_verification(
         "state", _state_scheduler_config, client, store, run_id, model,
         budget, cost_cap, parallelism, max_tokens, cancel_event, verify,
+        renderer_model=renderer_model, extractor_model=extractor_model,
     )
 
 
