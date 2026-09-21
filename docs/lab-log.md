@@ -2822,6 +2822,78 @@ happens later, separately, after human review.
 
 ---
 
+## 2026-09-21 — FEATURE (shipped) + FINDING (confirmed) — first judged data through the Nemotron-rendered prose pathway; fidelity gate rejects 11/46
+
+**What we saw:** The Phase 4 LLM-rendered pathway (Nemotron narrates the
+world as prose behind the mandatory fidelity gate) existed in code but had
+never produced a single judged record. `camp-nemrender-showcase-001` fixes
+that: a 36-budget `state` campaign on Super with renderer =
+Nemotron-3.5-Lightning and extractor = Nano (contamination guard satisfied:
+renderer != subject, extractor != renderer). SQL-verified results: 46
+records, all `render_mode=NEMOTRON` — **34 PASS / 1 FAIL** on scored trials
+(97%) plus **11 REJECTED_BY_FIDELITY_GATE**, tracked cost $0.0079 of a
+$0.15 cap. Accepted renders averaged 1.34 gate attempts.
+
+**Root cause / reasoning:** Two latent bugs surfaced the moment the pathway
+ran for real. (1) `run_state_campaign` had no way to pass
+`renderer_model`/`extractor_model` down — plumbed through in `de091d2`.
+(2) `llmrender/extract.py` crashed with `AttributeError: 'NoneType' object
+has no attribute 'find'` whenever the extractor's API call errored (text is
+None) — guarded in `e4a8d4f`. Both fixes came out of the first live run's
+stack trace, i.e. the pathway was untestable-in-principle until someone
+paid for one real campaign.
+
+**Fix / decision / next step:** Comparison against the template pathway:
+Super's template-rendered `state` baseline across the store is 60/66 (91%),
+vs 34/35 (97%) prose-rendered — natural-language wording does not degrade
+Super on state tracking (small n; not a confirmed wording-sensitivity
+finding, just an absence-of-effect observation). The headline is the gate
+itself doing real work: 11 of 46 rendering attempts dropped a fact and were
+rejected *deterministically, before any subject tokens were spent on a
+corrupted world*. Nemotron now has a judged **renderer** role in the
+narrative province.
+
+## 2026-09-21 — FEATURE (shipped) + FINDING (confirmed) — Nemotron proposes toolworld traps; one hypothesis-confirmed hit at 75% fail on Nano; beats random configs narrowly
+
+**What we saw:** New `cartographer/propose/toolworld.py` (commit `1af8bec`)
+points the adversarial proposer loop at the tool province: Super proposes
+configs over the five structural trap dims + scalar `ToolDimParams` knobs,
+an offline gauntlet (generate → mutate → BFS `validate` → greedy-foil
+salience vs a random-config median) filters them for free, survivors are
+measured with real Nano trials through `ToolBreakingPointEvaluator`.
+`camp-propose-toolworld-001` (4 rounds, $0.15 cap): rounds 0–2 produced
+0/6/6 proposals with 100% gauntlet rejection; round 3 got 4 of 6 through,
+19 measured trials (SQL: 15 PASS / 4 FAIL / 1 ERROR, $0.0090). **One
+library hit**: `{plan_depth: 6, parallel_goals: 2, state_obscurity: 0.5,
+implicit_preconditions_on: 1, id_collisions_on: 1}` → **75% fail rate
+(3/4)**, and the proposer's stated hypothesis ("model must infer
+dependencies; likely misses a hidden precondition") is exactly what the
+verifier shows: all three FAILs are `precondition_violation` at confusable
+ids (`adva-nce_1`, `advance_o1`, `adva-nce_0`) at steps 5–6 of 7-call
+plans.
+
+**Root cause / reasoning:** The round-0 control arm never ran (round 0
+yielded no parseable proposals, and the control triggers only in round 0),
+leaving `beat_random=None`. A supplementary control arm was run under
+`camp-propose-toolworld-001/control` — 4 sha256-derived random configs × 5
+Nano trials, $0.0105: control mean failure rate **0.20** (one random config
+also cleared the 30% hit threshold) vs proposer mean **0.2375** →
+`beat_random=True`, but narrowly and at small n. Honest read: the proposer
+found a *sharper, hypothesis-backed* trap than any random config did (75%
+vs the best random 40%), but its average edge over random configs is thin —
+mostly because the gauntlet rejected everything it proposed for two
+straight rounds.
+
+**Fix / decision / next step:** Nemotron now has a **proposer** role in the
+tool province, closing the "zero Nemotron involvement beyond test subject"
+gap. The proposed trap config independently corroborates the Nano t*=0.55
+escalation finding from the same day: both point at implicit preconditions
+× id collisions as Nano's soft spot. Two loose ends logged, not chased:
+(a) rounds 0–2's total gauntlet wipeout suggests the digest gives the
+proposer too little tool-province context to aim well until FAIL evidence
+accumulates; (b) the control config that hit 0/0 measured trials burned its
+5 attempts as ERRORs (excluded from rates by design).
+
 ## Template for new entries
 
 ```
