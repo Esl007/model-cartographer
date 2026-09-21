@@ -1462,6 +1462,323 @@ def run_tool_planning_campaign(
 
 
 # ---------------------------------------------------------------------------
+# tool_breaking_point: escalation over the toolworld's STRUCTURAL trap
+# mutators (cartographer.toolworld.mutate), not just the scalar ToolDimParams
+# knobs -- mirrors run_breaking_point_campaign's shape (find_breaking_point +
+# decompose + confirm) but the ray's dims include 0/1 toggles for the trap
+# mutators plus the existing precondition_chain/parallel_goals scalars.
+#
+# Every mutator maps cleanly onto a 0/1 RayDim (is_int=True) EXCEPT
+# `interleaved_goals`, which isn't a separate toggle at all: it only ever
+# applies when parallel_goals==2 (see mutate.interleaved_goals_applicable),
+# so it rides the existing `parallel_goals` dim for free rather than needing
+# its own knob -- there is nothing to represent it as.
+# ---------------------------------------------------------------------------
+
+# t=0 baseline: no traps active, current-easy scalar values. t=1 ceiling:
+# every structural trap on, scalars at their hard-but-generator-valid values.
+_TOOL_TRAP_LIMITS: dict[str, tuple[float, float, bool]] = {
+    # name -> (base_value, limit_value, is_int)
+    "poison_traps": (0, 1, True),
+    "dishonest_decoys_on": (0, 1, True),
+    "implicit_preconditions_on": (0, 1, True),
+    "zero_slack_on": (0, 1, True),
+    "id_collisions_on": (0, 1, True),
+    "precondition_chain": (0, 2, True),
+    "parallel_goals": (1, 2, True),
+}
+
+
+def default_tool_ray() -> EscalationRay:
+    """The default escalation ray for the tool-planning province's trap
+    structures: t=0 is the current-easy baseline (no traps, low scalars),
+    t=1 ramps every structural mutator on simultaneously (poison_ladder,
+    dishonest_decoys, implicit_preconditions, zero_slack, id_collision) plus
+    precondition_chain and parallel_goals up to their generator ceilings
+    (interleaved_goals comes along for free once parallel_goals hits 2).
+    """
+    return EscalationRay(
+        dims=tuple(
+            RayDim(name, base, limit, is_int)
+            for name, (base, limit, is_int) in _TOOL_TRAP_LIMITS.items()
+        )
+    )
+
+
+def _apply_tool_trap_config(
+    world, config: dict[str, float], seed: int
+):
+    """Apply the trap mutators indicated by `config` (each a 0.5-threshold
+    0/1 dim) to `world`, in a fixed deterministic order so composing several
+    at once is reproducible. Returns the (possibly) mutated world; also
+    returns the render `style` to use (implicit vs explicit), since that
+    mutator lives at the render layer, not the world layer."""
+    from ..toolworld.mutate import (
+        dishonest_decoys as _dishonest_decoys,
+    )
+    from ..toolworld.mutate import id_collision as _id_collision
+    from ..toolworld.mutate import interleaved_goals as _interleaved_goals
+    from ..toolworld.mutate import interleaved_goals_applicable
+    from ..toolworld.mutate import poison_ladder as _poison_ladder
+    from ..toolworld.mutate import zero_slack as _zero_slack
+
+    style = "implicit" if config.get("implicit_preconditions_on", 0.0) >= 0.5 else "explicit"
+
+    if config.get("poison_traps", 0.0) >= 0.5:
+        world = _poison_ladder(world, seed)
+    if config.get("dishonest_decoys_on", 0.0) >= 0.5:
+        world = _dishonest_decoys(world, seed)
+    if config.get("id_collisions_on", 0.0) >= 0.5:
+        world = _id_collision(world, seed)
+    if interleaved_goals_applicable(world):
+        world = _interleaved_goals(world, seed)
+    # zero_slack tightens budget to optimal_depth -- apply LAST so every
+    # other structural addition above is already reflected in the plan
+    # length the tightened budget has to accommodate.
+    if config.get("zero_slack_on", 0.0) >= 0.5:
+        world = _zero_slack(world, seed)
+
+    return world, style
+
+
+class ToolBreakingPointEvaluator:
+    """A `find_breaking_point` `Evaluator` over the toolworld's structural
+    trap mutators, mirroring `ToolPlanningEvaluator`'s cost-cap / cancel /
+    thread-safety discipline and persisting through the same
+    `ExperimentRecord` shape (kind=tool_plan). Config keys are the
+    `_TOOL_TRAP_LIMITS` dim names above; scalar dims (`precondition_chain`,
+    `parallel_goals`) feed `ToolDimParams` exactly like `_apply_tool_config`,
+    the 0/1 trap dims drive `_apply_tool_trap_config`.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        model: str,
+        store: ResultsStore,
+        run_id: str,
+        cost_cap_usd: float,
+        base: ToolDimParams | None = None,
+        max_tokens: int | None = None,
+        max_tokens_retry: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        self.client = client
+        self.model = model
+        self.store = store
+        self.run_id = run_id
+        self.cost_cap_usd = cost_cap_usd
+        self.base = base if base is not None else _default_tool_base()
+
+        default_max_tokens, default_max_tokens_retry = default_token_budget(model)
+        self.max_tokens = max_tokens if max_tokens is not None else default_max_tokens
+        self.max_tokens_retry = (
+            max_tokens_retry if max_tokens_retry is not None else default_max_tokens_retry
+        )
+        if self.max_tokens_retry <= self.max_tokens:
+            self.max_tokens_retry = self.max_tokens * 2
+
+        self.cancel_event = cancel_event
+        self.spent_usd = 0.0
+        self.call_count = 0
+        self.error_count = 0
+        self.capped = False
+        self.cancelled = False
+        self._lock = threading.Lock()
+
+    def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
+        scalar_cfg = {
+            k: v
+            for k, v in config.items()
+            if k in ("precondition_chain", "parallel_goals")
+        }
+        params = _apply_tool_config(self.base, scalar_cfg)
+        seed = _task_seed(config, trial_seed)
+
+        with self._lock:
+            if self.spent_usd >= self.cost_cap_usd:
+                self.capped = True
+                self._record_capped(params, seed, trial_seed, reason="cost_capped")
+                return False
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                self.cancelled = True
+                self._record_capped(params, seed, trial_seed, reason="cancelled")
+                return False
+
+        world = tool_generate(params, seed)
+        world, style = _apply_tool_trap_config(world, config, seed)
+        rendered = tool_render(world, seed, style=style)
+        realized_dims = tool_measure(world)
+
+        trap_note = ";".join(
+            f"{k}={int(round(config[k]))}"
+            for k in ("poison_traps", "dishonest_decoys_on", "implicit_preconditions_on",
+                      "zero_slack_on", "id_collisions_on")
+            if k in config
+        )
+        verifier_detail = f"kind=tool_plan;campaign=1;traps={trap_note}"
+
+        result = self.client.chat(
+            model=self.model,
+            prompt=rendered.prompt,
+            max_tokens=self.max_tokens,
+            max_tokens_retry=self.max_tokens_retry,
+        )
+        cost = cost_usd(self.model, result.tokens_in, result.tokens_out)
+        with self._lock:
+            self.call_count += 1
+            self.spent_usd += cost
+
+        if result.error is not None:
+            retry = self.client.chat(
+                model=self.model,
+                prompt=rendered.prompt,
+                max_tokens=self.max_tokens,
+                max_tokens_retry=self.max_tokens_retry,
+            )
+            retry_cost = cost_usd(self.model, retry.tokens_in, retry.tokens_out)
+            cost += retry_cost
+            with self._lock:
+                self.call_count += 1
+                self.spent_usd += retry_cost
+            result = retry
+
+        if result.error is not None:
+            verdict = Verdict.ERROR
+            verifier_detail += f";error={result.error}"
+        else:
+            pv = verify_plan(result.text, world)
+            verdict = pv.verdict
+            verifier_detail += (
+                f";detail={pv.detail};n_calls={pv.n_calls}"
+                f";optimal_depth={pv.optimal_depth};overhead={pv.overhead}"
+            )
+            realized_dims = dict(realized_dims)
+            if pv.overhead >= 0:
+                realized_dims["plan_overhead"] = float(pv.overhead)
+            if result.finish_reason == "length":
+                verdict = Verdict.ERROR
+                verifier_detail += ";cap_hit=1"
+                if result.retried:
+                    verifier_detail += ";retry_exhausted=1"
+
+        record = ExperimentRecord(
+            run_id=self.run_id,
+            model_name=self.model,
+            latent_params={
+                "plan_depth": float(params.plan_depth),
+                "decoy_tools": float(params.decoy_tools),
+                "precondition_chain": float(params.precondition_chain),
+                "state_obscurity": float(params.state_obscurity),
+                "irreversibility": float(params.irreversibility),
+                "parallel_goals": float(params.parallel_goals),
+            },
+            realized_dims=realized_dims,
+            render_mode=RenderMode.TEMPLATE,
+            task_seed=seed,
+            trial_seed=trial_seed,
+            rendering_seed=seed,
+            prompt_text=rendered.prompt,
+            response_text=result.text,
+            verdict=verdict,
+            verifier_detail=verifier_detail,
+            tokens_in=result.tokens_in,
+            tokens_out=result.tokens_out,
+            cost_usd=cost,
+            latency_ms=result.latency_ms,
+            reasoning_text=result.reasoning,
+            finish_reason=result.finish_reason,
+        )
+        with self._lock:
+            if verdict == Verdict.ERROR:
+                self.error_count += 1
+            self.store.append(record)
+            if self.spent_usd >= self.cost_cap_usd:
+                self.capped = True
+
+        return verdict == Verdict.PASS
+
+    def _record_capped(
+        self,
+        params: ToolDimParams,
+        seed: int,
+        trial_seed: int,
+        reason: str = "cost_capped",
+    ) -> None:
+        self.error_count += 1
+        record = ExperimentRecord(
+            run_id=self.run_id,
+            model_name=self.model,
+            latent_params={
+                "plan_depth": float(params.plan_depth),
+                "decoy_tools": float(params.decoy_tools),
+                "precondition_chain": float(params.precondition_chain),
+                "state_obscurity": float(params.state_obscurity),
+                "irreversibility": float(params.irreversibility),
+                "parallel_goals": float(params.parallel_goals),
+            },
+            realized_dims={},
+            render_mode=RenderMode.TEMPLATE,
+            task_seed=seed,
+            trial_seed=trial_seed,
+            rendering_seed=seed,
+            prompt_text=None,
+            response_text=None,
+            verdict=Verdict.ERROR,
+            verifier_detail=f"kind=tool_plan;campaign=1;{reason}=1",
+            tokens_in=0,
+            tokens_out=0,
+            cost_usd=0.0,
+            latency_ms=0.0,
+            reasoning_text=None,
+            finish_reason=None,
+        )
+        self.store.append(record)
+
+
+def run_tool_breaking_point_campaign(
+    client: Client,
+    store: ResultsStore,
+    run_id: str,
+    model: str,
+    budget: int = 250,
+    cost_cap: float = 0.5,
+    max_tokens: int | None = None,
+    cancel_event: threading.Event | None = None,
+    verify: str = "auto",
+) -> BreakingPoint:
+    """Escalation mode over the toolworld's STRUCTURAL trap mutators (see
+    `default_tool_ray`): walk the ray from no-traps baseline to full-trap
+    ceiling (poison_ladder, dishonest_decoys, implicit_preconditions,
+    zero_slack, id_collision all on, plus precondition_chain/parallel_goals
+    up) and find where the model actually breaks. Mirrors
+    `run_breaking_point_campaign`'s shape (find_breaking_point + decompose +
+    confirm), budget/cost_cap defaults chosen to match its sibling.
+
+    `verify` is accepted for signature symmetry with the other campaign
+    runners (so /launch's generic kwarg-forwarding in `_campaign_thread`
+    keeps working unchanged) but is currently unused -- escalation's FAILs
+    are hard deterministic simulation outcomes, same rationale as
+    `run_tool_planning_campaign`'s `verify="manual"` default.
+    """
+    evaluator = ToolBreakingPointEvaluator(
+        client=client,
+        model=model,
+        store=store,
+        run_id=run_id,
+        cost_cap_usd=cost_cap,
+        max_tokens=max_tokens,
+        cancel_event=cancel_event,
+    )
+    bp = find_breaking_point(evaluator, default_tool_ray(), budget=budget)
+    bp_note = f"spent=${evaluator.spent_usd:.4f}"
+    if evaluator.capped:
+        bp_note += ";cost_cap_hit"
+    bp.note = f"{bp.note}; {bp_note}" if bp.note else bp_note
+    return bp
+
+
+# ---------------------------------------------------------------------------
 # full_map: the one-button profile -- chains every preset as stages under one
 # parent run, one shared cost budget.
 # ---------------------------------------------------------------------------

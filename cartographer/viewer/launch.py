@@ -52,6 +52,7 @@ from ..exec.evaluator import (
     run_full_map_campaign,
     run_order_campaign,
     run_state_campaign,
+    run_tool_breaking_point_campaign,
     run_tool_planning_campaign,
     run_verify_failures,
 )
@@ -77,6 +78,7 @@ CAMPAIGN_PRESETS: dict[str, dict[str, float]] = {
     "breaking_point": {"budget": 350, "cost_cap": 0.75},
     "adversarial_belief": {"budget": 300, "cost_cap": 1.0},
     "tool_planning": {"budget": 400, "cost_cap": 0.75},
+    "tool_breaking_point": {"budget": 250, "cost_cap": 0.5},
     "full_map": {"budget": 600, "cost_cap": 2.0},
 }
 
@@ -167,6 +169,22 @@ CAMPAIGN_DESCRIPTIONS: dict[str, dict[str, object]] = {
         "typical_duration": "10-25 minutes",
         "new": True,
     },
+    "tool_breaking_point": {
+        "query_kind": "tool_plan",
+        "summary": (
+            "Escalation over the tool-planning province's STRUCTURAL traps "
+            "(not just scalar difficulty): decoys rewritten to sound "
+            "load-bearing, preconditions collapsed into one general-rules "
+            "paragraph, a poisoned tool that forecloses the goal, near-"
+            "collision tool ids, a zero-slack budget, and interleaved "
+            "parallel goals -- walked from off to all-on to find where the "
+            "model actually breaks. Built because the tool-planning province "
+            "saturated (Nano 39/40, Super 40/40) under scalar-only escalation."
+        ),
+        "typical_cost": "~$0.02-0.08",
+        "typical_duration": "10-25 minutes",
+        "new": True,
+    },
     "full_map": {
         "query_kind": "state, order, belief, adversarial_belief, breaking_point",
         "summary": (
@@ -189,6 +207,7 @@ _RUNNERS: dict[str, Callable] = {
     "breaking_point": run_breaking_point_campaign,
     "adversarial_belief": run_adversarial_belief_campaign,
     "tool_planning": run_tool_planning_campaign,
+    "tool_breaking_point": run_tool_breaking_point_campaign,
     "full_map": run_full_map_campaign,
 }
 
