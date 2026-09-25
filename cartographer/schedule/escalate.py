@@ -125,12 +125,20 @@ class _RayProbe:
     accumulated (t, outcome) trial points the logistic fit runs over.
     """
 
-    def __init__(self, evaluator: Evaluator, ray: EscalationRay, budget: int, seed_base: int) -> None:
+    def __init__(
+        self,
+        evaluator: Evaluator,
+        ray: EscalationRay,
+        budget: int,
+        seed_base: int,
+        parallelism: int = 1,
+    ) -> None:
         self.evaluator = evaluator
         self.ray = ray
         self.budget = budget
         self.spent = 0
         self.seed_base = seed_base
+        self.parallelism = max(1, parallelism)
         self.points: list[tuple[float, bool]] = []
         self.pass_curve: list[tuple[float, float]] = []
 
@@ -140,13 +148,26 @@ class _RayProbe:
     def probe(self, t: float, k: int) -> float:
         """Run k trials at config_at(t); records every (t, outcome) point and
         appends (t, pass_rate) to the pass curve. Caller must check `can(k)`.
+
+        The k trials of one probe are independent (same config, distinct
+        deterministic seeds), so with `parallelism > 1` they run concurrently
+        on a thread pool. Seeds are assigned up front from the same
+        seed_base+spent counter the sequential path uses, so the trial set is
+        identical at any parallelism; `points` keeps seed order so the
+        logistic fit and pass rate are unaffected by completion order.
         """
         config = self.ray.config_at(t)
+        seeds = [self.seed_base + self.spent + i for i in range(k)]
+        self.spent += k
+        if self.parallelism == 1 or k <= 1:
+            outcomes = [self.evaluator(config, seed) for seed in seeds]
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=min(self.parallelism, k)) as pool:
+                outcomes = list(pool.map(lambda s: self.evaluator(config, s), seeds))
         passes = 0
-        for _ in range(k):
-            seed = self.seed_base + self.spent
-            self.spent += 1
-            ok = self.evaluator(config, seed)
+        for ok in outcomes:
             self.points.append((t, ok))
             passes += ok
         rate = passes / k if k else 0.0
@@ -163,6 +184,7 @@ def find_breaking_point(
     budget: int = 350,
     seed_base: int = 0,
     t_step: float = 0.15,
+    parallelism: int = 1,
 ) -> BreakingPoint:
     """Ramp t from 0 to 1 along `ray`, bisect the first pass->fail frontier,
     fit a logistic t*, then decompose + confirm at the frontier.
@@ -182,8 +204,13 @@ def find_breaking_point(
        config_at(0), with the remaining budget capped at 40% of the total.
     5. CONFIRM a non-unexplained hypothesis on fresh seeds
        (seed_base >= 10_000 convention).
+
+    `parallelism` runs each probe's k_trials concurrently (the evaluators
+    are thread-safe and the trial set is seed-deterministic at any worker
+    count); the ramp/bisect STAGES stay sequential by nature -- each depends
+    on the previous probe's rate. Default 1 preserves the old behavior.
     """
-    rp = _RayProbe(evaluator, ray, budget, seed_base)
+    rp = _RayProbe(evaluator, ray, budget, seed_base, parallelism=parallelism)
 
     def result(**kw) -> BreakingPoint:
         return BreakingPoint(
