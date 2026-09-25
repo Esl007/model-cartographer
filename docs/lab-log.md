@@ -2927,6 +2927,50 @@ point, since Ultra already fails deterministically at steps 8–9 of
 cross-run comparability if done casually; needs its own commit + tests +
 a fresh calibration sweep.
 
+## 2026-09-21 — BUG (fixed) — `plan_depth` saturation at 4 fixed: excess depth now adds strictly-chained steps
+
+Fixes the open **"`plan_depth` silently saturates at 4"** bug logged above.
+Commit `38efd97` (`cartographer/toolworld/generate.py` + `tests/test_toolworld.py`).
+
+**What we saw:** As diagnosed in the prior entry, `plan_depth` 6/8/12/16 all
+realized optimal depth 7 — identical to `plan_depth=4` — because
+`ladder_steps = min(params.plan_depth, ladder_height)` caps the ladder climb at
+4 and the "excess depth" gate was actually wired to the separate
+`precondition_chain` knob.
+
+**Root cause / reasoning:** No mechanism translated `plan_depth > ladder_height`
+into additional *required* plan steps. The fix adds one strictly-chained step
+per unit of excess depth: a fresh `depth_flag_j` whose `set_depth_flag_j` tool
+(built from the existing `_set_flag_tool`) requires the previous chain element,
+and the top ladder rung is gated on the deepest flag of the *combined* chain
+(precondition_chain flags followed by depth flags). Each added step strictly
+depends on the previous, so bounded BFS cannot skip or reorder around it, and
+each contributes exactly +1 to the realized optimal depth. All determinism uses
+the existing sha256 `_stable_*` idioms — no new randomness. When
+`plan_depth <= ladder_height` the block is a strict no-op (no new entities,
+tools, or gates), so worlds stay byte-identical to the pre-fix generator and
+past campaign records reproduce from `latent_params`.
+
+**Measured realized optimal depth (defaults, seed 20240), before → after:**
+
+| plan_depth | before | after |
+|---|---|---|
+| 2  | 5 | 5  |
+| 4  | 7 | 7  |
+| 6  | 7 | 9  |
+| 8  | 7 | 11 |
+| 10 | 7 | 13 |
+| 12 | 7 | 15 |
+| 16 | 7 | 19 |
+
+`plan_depth <= 4` is byte-identical (render(world, seed).prompt SHA256 unchanged
+across 8 param combos × 4 seeds); beyond 4 the depth grows ~1:1 as intended
+(pd=10 → 13). Validated solvable + deterministic for `plan_depth` 1..16 across
+30 seeds (480/480 clean), and all five structural trap mutators compose solvably
+at `plan_depth=10` over 30 seeds. Full suite 653 passed (was 638; +15 new
+tests). This unlocks the depth-escalation ray (depth × id_collisions) flagged as
+the next step in the original bug entry.
+
 ## Template for new entries
 
 ```
