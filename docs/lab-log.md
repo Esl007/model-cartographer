@@ -2894,6 +2894,39 @@ proposer too little tool-province context to aim well until FAIL evidence
 accumulates; (b) the control config that hit 0/0 measured trials burned its
 5 attempts as ERRORs (excluded from rates by design).
 
+## 2026-09-21 — BUG (open) — `plan_depth` silently saturates at 4: values 5+ are a no-op
+
+**What we saw:** During a zero-API rigor sweep (638/638 tests green,
+generator ceiling configs valid and deterministic across 200 seeds in both
+provinces), measuring realized vs requested depth exposed a hard ceiling:
+`plan_depth=1..4` realize optimal depths 4..7 as expected, but
+`plan_depth=6, 8, 12, 16` ALL realize optimal depth 7 — identical to 4.
+
+**Root cause / reasoning:** `generate()` sets
+`ladder_steps = min(params.plan_depth, ladder_height)` where
+`ladder_height=4` (the 5-rung service ladder), and the comment's promised
+"remaining required depth is added as a precondition_chain of
+artifact/flag steps" is actually wired to the *separate*
+`precondition_chain` knob, not to plan_depth's excess. The docstring's
+contract ("min tool calls on the optimal plan") is false above 4.
+Consequences: (a) every past sweep over plan_depth 1..6 sampled duplicate
+difficulty at 5 and 6 (redundant, not wrong — verdicts at those points are
+real trials of depth-4-equivalent worlds); (b) the province currently
+cannot pose genuinely deep plans — the deepest reachable optimal plan is
+~10 calls (ladder + chains + 2 interleaved goals), which is exactly where
+Ultra's id-binding slips were observed (steps 8–9). We have no way to push
+past the region where the strongest tier starts to wobble.
+
+**Fix / decision / next step:** Extend `generate()` so plan_depth beyond
+the ladder height appends genuinely chained steps (e.g. per-excess-step
+artifact build→publish gates feeding the next rung), keeping the BFS
+ground-truth and validate() contracts. This unlocks a depth-escalation ray
+(depth × id_collisions) — the most direct shot at a Super/Ultra breaking
+point, since Ultra already fails deterministically at steps 8–9 of
+~10-call plans. Not fixed in this pass: generator changes invalidate
+cross-run comparability if done casually; needs its own commit + tests +
+a fresh calibration sweep.
+
 ## Template for new entries
 
 ```
