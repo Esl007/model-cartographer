@@ -2971,6 +2971,45 @@ at `plan_depth=10` over 30 seeds. Full suite 653 passed (was 638; +15 new
 tests). This unlocks the depth-escalation ray (depth × id_collisions) flagged as
 the next step in the original bug entry.
 
+## 2026-09-25 — FINDING (confirmed) — depth × id-collisions orders ALL three tiers; FIRST-EVER Super breaking point at t*=0.88
+
+**What we saw:** With plan_depth saturation fixed (`38efd97`), the
+depth-escalation ray (plan_depth 4→16 × id_collisions 0→1) ran on all
+three tiers (`camp-tool-depth-{nano,super,ultra}-002`, probes parallelized
+6-wide via `899ef28`, total $0.41 tracked). SQL-verified from the store:
+
+- **Nano** — collapses. depth ≤ 8 no-collisions: 100%. Decompose isolates
+  a multiplicative interaction: depth 10 alone 88%, collisions alone (at
+  depth 4) 64%, **both: 15% at depth 10, 0/7 at depth 11**. 29 of 33
+  FAILs are `unknown_tool`.
+- **Super** — **breaks for the first time in the project's history**:
+  `found=True, t*=0.883, CI (0.825, 0.967)`, config_at_break = depth 15 +
+  collisions. 100% through depth 9; with collisions: 86% @11 → 67% @13 →
+  68% @15 → 50% @16. All 12 FAILs `unknown_tool`. Unlike Nano's cliff,
+  Super's frontier is a gradual slope — the decompose stage's frontier
+  re-probe passed 71% ("failing config did not fail under probing"), so
+  t* is a logistic fit over a noisy gradient, not a sharp transition.
+- **Ultra** — honest no-break (`found=False`, "model exceeds generator
+  limits"): 100% through depth 11+collisions, wobbles 57% @13 / 71% @15,
+  then **7/7 at depth 16** — non-monotonic at k=7, so the depth-13–15 dip
+  reads as a noisy weak spot, not a frontier. All 5 FAILs `unknown_tool`.
+
+**Root cause / reasoning:** Every failure on every tier is the same
+verifier code: `unknown_tool` — id-binding errors against near-collision
+tool ids in long plans. One failure mode, three ordered thresholds: Nano
+~depth 10, Super ~depth 15, Ultra beyond the generator's current ceiling
+(16). Depth alone breaks nobody; collisions alone break nobody; the
+*product* of "many similar ids" × "long plan over them" is what
+discriminates the tiers.
+
+**Fix / decision / next step:** The cleanest capability-ordering result
+the project has produced — same axis, same failure mode, three tiers
+separated only by threshold. Candidate submission headline alongside the
+Nano trap-ray t*=0.55. Possible hardening (not run, needs approval):
+resample Super's frontier FAILs; extend the generator past depth 16 to
+chase Ultra's boundary (the 13–15 wobble suggests it is not far past the
+current ceiling).
+
 ## Template for new entries
 
 ```

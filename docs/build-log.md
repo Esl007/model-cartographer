@@ -119,6 +119,13 @@ each entry above and in `docs/lab-log.md` states explicitly).
 | ~16:55 | R | **`camp-propose-toolworld-001`** (+`/control`) — Super proposes vs Nano subject, 4 rounds, $0.0195 tracked total. One trap-library hit at 75% fail (implicit_preconditions + id_collisions at depth 6, parallel_goals 2), hypothesis confirmed by verifier detail codes. Supplementary control arm: proposer mean fail 0.2375 vs random-config mean 0.20 → `beat_random=True` (narrow, small n). See lab-log. |
 | ~later | C `38efd97` | Bugfix: `plan_depth` no longer saturates at the ladder height (`cartographer/toolworld/generate.py`). Each unit of `plan_depth` past `ladder_height`=4 now appends one strictly-chained `set_depth_flag_j` step (built from existing `_set_flag_tool`) gating the top ladder rung, so realized optimal depth grows ~1:1 (pd=10→13, pd=16→19) instead of plateauing at 7. `plan_depth <= 4` is a strict no-op — byte-identical renders, past records reproduce from `latent_params`. Validated solvable+deterministic pd 1..16 × 30 seeds; all five trap mutators compose solvably at pd=10. 15 new tests; 653/653 passing. See lab-log. |
 
+## 2026-09-25
+
+| Time (UTC) | Type | Event |
+|---|---|---|
+| ~18:30 | C `899ef28` | Parallelized escalation probes: `find_breaking_point` gains `parallelism` (default 1); each probe's k_trials run concurrently on a thread pool with seeds assigned up front, so trial set / t* / pass curve are provably identical at any worker count. Cuts probe wall clock ~k-fold (a 30-min sequential Nano ramp became ~12 min at parallelism 6). |
+| ~18:35–19:40 | R | **`camp-tool-depth-{nano,super,ultra}-002`** — depth-escalation ray (plan_depth 4→16 × id_collisions), $0.41 tracked total. **Nano**: multiplicative collapse (depth 10 alone 88%, collisions alone 64%, both 15% → 0/7 at depth 11). **Super**: FIRST-EVER breaking point, `found=True t*=0.883 CI (0.825, 0.967)` at depth 15 + collisions, gradual frontier. **Ultra**: honest no-break — wobbles 57%/71% at depth 13/15 but 7/7 at 16. Every FAIL on every tier is `unknown_tool` (id binding). Three tiers, one failure mode, ordered thresholds. See lab-log. (A `-001` Nano partial exists: 42 trials, killed pre-parallelization, $0.031.) |
+
 ---
 
 ## Glossary: the three query kinds
