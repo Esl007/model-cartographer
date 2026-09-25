@@ -271,8 +271,10 @@ def _decoy_tool(tool_id: str, idx: int) -> Tool:
 def generate(params: ToolDimParams, seed: int) -> ToolWorld:
     # Entity pools sized to the difficulty. plan_depth advancement steps need
     # up to plan_depth service rungs; we cap the target service's required
-    # ladder climb at len(SERVICE_LADDER)-1 and use artifact/flag gates to
-    # extend depth beyond the ladder height.
+    # ladder climb at len(SERVICE_LADDER)-1 and add one strictly-chained
+    # flag-set step per unit of plan_depth beyond the ladder height (see the
+    # "excess plan depth" block below) so realized optimal depth grows ~1:1
+    # with plan_depth instead of saturating at the ladder height.
     n_services = max(2, 1 + params.parallel_goals)
     n_artifacts = max(2, params.precondition_chain + 1)
     n_flags = max(2, params.precondition_chain + 1)
@@ -326,6 +328,29 @@ def generate(params: ToolDimParams, seed: int) -> ToolWorld:
         gate_artifact_id = artifacts[0].id
         catalog.append(_build_artifact_tool("build_art_0", gate_artifact_id))
         catalog.append(_publish_artifact_tool("publish_art_0", gate_artifact_id))
+
+    # --- Excess plan depth beyond the ladder height ------------------------
+    # The service ladder tops out at `ladder_height` advancement steps, so a
+    # `plan_depth` above that would otherwise realize the same optimal depth
+    # (the "plan_depth silently saturates at 4" bug: docs/lab-log.md). For each
+    # unit of excess depth we add ONE more genuinely-required, strictly-chained
+    # step: a fresh flag whose set_flag tool depends on the previous chain
+    # element, so BFS cannot skip or reorder around it. The top ladder rung is
+    # then gated on the deepest flag of the *combined* chain (precondition_chain
+    # flags followed by these depth flags), forcing every added step onto the
+    # optimal plan. When `plan_depth <= ladder_height` (excess == 0) this block
+    # is a strict no-op -- no new entities, tools, or gates -- so worlds stay
+    # byte-identical to the pre-fix generator (back-compat guard).
+    excess_depth = max(0, params.plan_depth - ladder_height)
+    for j in range(excess_depth):
+        fidx = n_flags + j  # fresh flag ids past the precondition_chain pool
+        depth_flag = Flag(id=f"depth_flag_{j}", name=_FLAG_NAMES[fidx % len(_FLAG_NAMES)])
+        flags.append(depth_flag)
+        requires = chain_flag_ids[-1] if chain_flag_ids else None
+        catalog.append(
+            _set_flag_tool(f"set_depth_flag_{j}", depth_flag.id, requires_flag=requires)
+        )
+        chain_flag_ids.append(depth_flag.id)
 
     # The advance tools for the primary service's ladder climb. Distribute the
     # gates: the last rung requires the deepest flag (if any) AND the published

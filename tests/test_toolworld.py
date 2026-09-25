@@ -113,6 +113,97 @@ def test_difficulty_knobs_raise_optimal_depth():
     assert hard.optimal_depth > easy.optimal_depth
 
 
+# --- plan_depth no longer saturates at the ladder height -------------------
+# Regression for the "plan_depth silently saturates at 4" bug (docs/lab-log.md):
+# once plan_depth exceeds the 4-step SERVICE_LADDER, each extra unit used to
+# realize the SAME optimal depth. The fix adds one strictly-chained required
+# step per excess unit, so realized optimal depth grows ~1:1 with plan_depth.
+
+
+def test_plan_depth_grows_optimal_depth_past_ladder_height():
+    # optimal_depth must strictly increase for every plan_depth step past 4,
+    # not plateau (the pre-fix behavior plateaued at 7 for pd >= 4).
+    depths = {
+        pd: generate(ToolDimParams(plan_depth=pd), 20240).optimal_depth
+        for pd in (2, 4, 6, 8, 10, 12, 16)
+    }
+    # pd=4 is the ladder-height boundary; beyond it, each +2 in plan_depth adds
+    # +2 required steps (one chained flag-set per excess unit).
+    assert depths[4] == 7
+    assert depths[6] == 9
+    assert depths[8] == 11
+    assert depths[10] == 13
+    assert depths[12] == 15
+    assert depths[16] == 19
+    # Strictly monotonic past the ladder height (no saturation).
+    beyond = [depths[pd] for pd in (4, 6, 8, 10, 12, 16)]
+    assert beyond == sorted(beyond)
+    assert len(set(beyond)) == len(beyond)
+
+
+@pytest.mark.parametrize("pd", [6, 8, 10, 12, 16])
+def test_excess_plan_depth_worlds_validate_across_seeds(pd):
+    # Solvable via bounded BFS AND deterministic for plan_depth well past the
+    # ladder height, over many seeds.
+    for seed in range(30):
+        w = generate(ToolDimParams(plan_depth=pd), seed)
+        assert validate(w) == []
+        assert w.optimal_depth is not None and w.optimal_depth >= 1
+        assert w.budget >= w.optimal_depth
+        w2 = generate(ToolDimParams(plan_depth=pd), seed)
+        assert w.optimal_depth == w2.optimal_depth
+        assert render(w, seed).prompt == render(w2, seed).prompt
+
+
+_BACKCOMPAT_COMBOS = [
+    dict(plan_depth=1),
+    dict(plan_depth=2),
+    dict(plan_depth=3),
+    dict(plan_depth=4),
+    dict(plan_depth=4, decoy_tools=3, precondition_chain=2),
+    dict(plan_depth=3, decoy_tools=0, precondition_chain=1, parallel_goals=2,
+         irreversibility=True),
+    dict(plan_depth=2, precondition_chain=2, state_obscurity=0.6, parallel_goals=2),
+    dict(plan_depth=4, precondition_chain=0, decoy_tools=2, irreversibility=True),
+]
+
+
+@pytest.mark.parametrize("combo", _BACKCOMPAT_COMBOS)
+def test_plan_depth_le_ladder_height_is_a_strict_noop(combo):
+    # Back-compat guard: for plan_depth <= 4 the excess-depth machinery must be
+    # a strict no-op -- no extra flag entities and no extra tools vs. the same
+    # world built with excess-depth structurally impossible. We assert the
+    # generated world introduces NO `depth_flag_*` entities or `set_depth_flag_*`
+    # tools, so past campaign records reproduce byte-for-byte from latent_params.
+    for seed in (20240, 5, 777, 999):
+        w = generate(ToolDimParams(**combo), seed)
+        assert not any(f.id.startswith("depth_flag_") for f in w.flags)
+        assert not any(t.id.startswith("set_depth_flag_") for t in w.catalog)
+
+
+def test_trap_mutators_compose_at_high_plan_depth():
+    # All five structural trap dims applied at plan_depth=10 must still leave a
+    # world that validates as solvable (docs/lab-log.md trap-composition guard).
+    from cartographer.exec.evaluator import _apply_tool_trap_config
+
+    cfg = {
+        "poison_traps": 1.0,
+        "dishonest_decoys_on": 1.0,
+        "implicit_preconditions_on": 1.0,
+        "zero_slack_on": 1.0,
+        "id_collisions_on": 1.0,
+    }
+    for seed in range(30):
+        w = generate(
+            ToolDimParams(plan_depth=10, precondition_chain=1, parallel_goals=2,
+                          decoy_tools=2),
+            seed,
+        )
+        mutated, style = _apply_tool_trap_config(w, cfg, seed)
+        assert style in ("explicit", "implicit")
+        assert validate(mutated) == []
+
+
 # --- the verifier PASSES a correct plan (inc. inefficient) -----------------
 
 
