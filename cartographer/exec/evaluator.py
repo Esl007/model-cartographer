@@ -1590,6 +1590,30 @@ def default_tool_count_ray() -> EscalationRay:
     return EscalationRay(dims=(RayDim("decoy_tools", 2, _TOOL_COUNT_CEILING, True),))
 
 
+def default_tool_confusability_ray() -> EscalationRay:
+    """The corrected catalog-size ray: same `decoy_tools` 2 -> 60 sweep, but
+    with `dishonest_decoys_on` pinned ON for every probe point.
+
+    `default_tool_count_ray` produced a flat 100% on Super (see docs/lab-log
+    "Super is untouched by a 66-tool catalog"): the plain `decoy_tools`
+    decoys self-label ("no effect on state"), so a 66-tool catalog is really
+    an 8-way choice with 58 entries that say ignore-me -- prompt length, not
+    selection pressure. `mutate.dishonest_decoys` renames decoys to sound
+    load-bearing and strips the confession, making all 66 tools look real.
+    That is the honest analogue of the published large-catalog condition, and
+    it isolates SEMANTIC CONFUSABILITY at scale rather than raw tool count.
+
+    The pinned dim uses base == limit, so `RayDim.value_at` returns 1.0 at
+    every t and the sweep stays effectively single-dim in `decoy_tools`.
+    """
+    return EscalationRay(
+        dims=(
+            RayDim("decoy_tools", 2, _TOOL_COUNT_CEILING, True),
+            RayDim("dishonest_decoys_on", 1, 1, True),
+        )
+    )
+
+
 def _apply_tool_trap_config(
     world, config: dict[str, float], seed: int
 ):
