@@ -3010,6 +3010,79 @@ resample Super's frontier FAILs; extend the generator past depth 16 to
 chase Ultra's boundary (the 13–15 wobble suggests it is not far past the
 current ceiling).
 
+> **RETRACTED 2026-09-25 (same day).** The Super `t*=0.883` breaking point
+> in this entry is an artifact of token truncation, not a capability
+> boundary. See the correction entry below. Nano's break survives and is
+> strengthened; Ultra's "wobble" is confirmed noise. Do not cite the
+> "three ordered thresholds" framing from this entry.
+
+## 2026-09-25 — BUG (fixed) + RETRACTION — token caps manufactured Super's "breaking point"; only Nano actually breaks
+
+**What we saw:** Investigating why the depth runs had 15 ERROR records
+(Nano 5, Super 10, Ultra 0) showed every one was a `cap_hit` — token
+truncation, *not* rate-limit failure from the new 6-wide parallelism. They
+clustered at deep configs, and `_RayProbe` counts a non-PASS as a failure,
+so truncations were being scored as capability failures. Super's t=1.0
+probe was 2 PASS / 2 FAIL / **3 ERROR** — a 29% "ceiling pass rate"
+resting on four scored trials.
+
+Replaying those 10 capped Super trials against the **exact same worlds**
+(config + trial_seed replayed from the store; `_task_seed` asserted to
+reproduce the stored `task_seed`) at `max_tokens=16000`: **6 of 10 were
+actually PASSes.** Corrected, Super's depth-16 point moves 29% → 71% and
+its curve becomes non-monotonic — it *recovers* at the deepest config.
+
+Token-demand audit over all clean (`finish=stop`) tool_plan completions:
+Nano median 2239 / p99 6540 / **max 7429**; Super max 5149; Ultra max
+4368. The run had used `max_tokens=4000` for Nano and Super — below
+Nano's legitimate maximum, truncating **55 Nano trials** historically.
+Ultra had zero errors only because `default_token_budget()` grants
+"ultra"-class models 8000/16000.
+
+**Root cause / reasoning:** A measurement cap set below the task's
+legitimate output length converts "model was still writing" into "model
+failed," and the bias is *correlated with difficulty* (deep plans need
+more tokens), so it fabricates exactly the monotonic decline an
+escalation searches for. This is the most dangerous class of artifact
+this project can produce: it looks like the finding you are hunting.
+
+**Fix / decision / next step:** Caps lifted to 32000/48000 for all tiers
+(~4x Nano's observed legitimate max; not unbounded, because `cost_cap` is
+only checked *between* trials and one runaway Ultra trial at $2.20/M-out
+would escape it — at 32000 the worst single trial is bounded at $0.07).
+Re-ran the full ray on all three tiers (`camp-tool-depth-*-003`, $0.373
+tracked, **zero ERRORs across all 210 trials**; observed max tokens_out
+Nano 8456 — above the old cap *and* above its previous observed max,
+confirming the cap was still binding). Corrected results:
+
+- **Nano — BREAKS, and more sharply than before.** `found=True,
+  t*=0.500, CI (0.450, 0.575)`, config_at_break = depth 10 + collisions.
+  Ramp: 100% at t=0.4875 → 43% at t=0.5063 → **0% at t=0.525 and
+  t=0.6**. depth 11 = **0/7**, CI [0.00, 0.35]. Fisher exact vs depth 9
+  (7/7): **p = 0.0006**. 29 of 34 FAILs are `unknown_tool`.
+- **Super — NO BREAK.** `found=False` ("model exceeds generator limits").
+  100% through depth 9, then 71% / 71% / 86% / 57% — never approaches the
+  0.3 fail threshold, all CIs wide and overlapping. **The t*=0.883 result
+  is retracted.**
+- **Ultra — NO BREAK, dip confirmed as noise.** 100% through depth 11,
+  71% / 86% at depth 13/15, **100% at depth 16**. Prior analysis had
+  already shown this: exact permutation test across depth points
+  p = 0.121, Fisher depth-15-vs-16 p = 0.462, and a fresh-seed top-up at
+  depth 15 returned 6/7, moving the combined estimate to 11/14 = 79%.
+
+**Standing methodology rule adopted:** never set `max_tokens` below the
+observed p99 of clean completions for that model and task family; audit
+`finish_reason='length'` counts before reporting any escalation result.
+A cap-hit at a *generous* budget is a legitimate finding (the model
+cannot emit a bounded plan); a cap-hit at a tight budget is an artifact.
+
+**Honest current state:** one defensible breaking point (Nano), now
+independently replicated across two different rays — the trap ray gave
+t*=0.55 and the depth ray gives t*=0.500 with CI (0.450, 0.575), which
+**contains** 0.55. Super and Ultra degrade into a noisy 57–86% band at
+depth ≥ 11 without a locatable frontier; the generator's depth-16 ceiling
+is not high enough to break either.
+
 ## Template for new entries
 
 ```
