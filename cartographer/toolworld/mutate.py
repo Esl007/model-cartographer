@@ -432,6 +432,80 @@ def interleaved_goals_applicable(world: ToolWorld) -> bool:
     return len(service_clauses) == 2
 
 
+# ---------------------------------------------------------------------------
+# 7. make_unsolvable -- ANSWER_ELIMINATING
+# ---------------------------------------------------------------------------
+#
+# A different SHAPE of mutator from the six above. Those keep the world
+# solvable and ask "does the model still find the plan?". This one removes
+# the plan's existence and asks the opposite question: "does the model
+# NOTICE that no plan exists, or does it confidently fabricate one?"
+#
+# That is the irrelevance/unanswerable axis the tool-calling literature
+# treats as a first-class failure mode (BFCL devotes a whole scored category
+# to it; the general finding is that models invent plausible calls rather
+# than decline). Nothing in this province tested it before -- every world we
+# had ever rendered was solvable, so a model that ALWAYS emits a confident
+# plan scored identically to one that can tell the difference.
+
+
+def make_unsolvable(world: ToolWorld, seed: int) -> ToolWorld | None:
+    """Remove exactly one load-bearing tool so the goal becomes provably
+    unreachable, leaving everything else (entities, narration, decoys, the
+    rest of the catalog) untouched.
+
+    The returned world has `optimal_depth=None`, the canonical "no solution
+    exists" signal: `simulate.optimal_depth` returns None for it and
+    `verify.verify_plan` reads it to decide that declining is correct.
+    Returns None -- "not applicable to this world" -- if no single-tool
+    removal makes the goal unreachable (redundant paths exist); callers
+    should re-draw a seed rather than force it.
+
+    Unreachability is proven by exhaustive BFS over the reachable state
+    space with a generous depth bound, not merely "not within budget": a
+    task the model could solve given more calls would make declining the
+    WRONG answer and would silently invert the grading.
+
+    NOTE: `validate()` deliberately reports an unsolvable world as a
+    violation (proving solvability is its whole job), so do NOT call it on
+    the result. Assert unsolvability with `optimal_depth(...) is None`.
+    """
+    # Only real (non-decoy) tools can be load-bearing; removing a decoy
+    # cannot by definition change reachability.
+    candidates = [t for t in world.catalog if not t.decoy]
+    if not candidates:
+        return None
+
+    # Deterministic, seed-dependent probe order so different seeds lose
+    # different tools -- otherwise every unsolvable world in a campaign
+    # would be missing the same rung, an obvious tell.
+    order = sorted(
+        range(len(candidates)),
+        key=lambda i: (_stable_int(str(seed), candidates[i].id, modulus=10_000), i),
+    )
+
+    # Generous bound: prove unreachable across the reachable state space,
+    # not merely outside the plan budget.
+    search_depth = max(world.budget, world.optimal_depth or 0) + 6
+
+    for i in order:
+        victim = candidates[i]
+        pruned = [t for t in world.catalog if t.id != victim.id]
+        if not pruned:
+            continue
+        probe = replace(world, catalog=pruned, optimal_depth=None)
+        if _optimal_depth(probe, max_depth=search_depth) is None:
+            return probe
+    return None
+
+
+def unsolvable_applicable(world: ToolWorld, seed: int) -> bool:
+    """True iff `make_unsolvable` can produce an unreachable variant of
+    `world`. Exposed so callers can filter seeds without building the world
+    twice."""
+    return make_unsolvable(world, seed) is not None
+
+
 ANSWER_PRESERVING = {
     "dishonest_decoys",
     "implicit_preconditions",
@@ -441,4 +515,8 @@ ANSWER_CHANGING = {
     "poison_ladder",
     "zero_slack",
     "interleaved_goals",
+}
+# Removes the answer entirely: the correct response becomes "decline".
+ANSWER_ELIMINATING = {
+    "make_unsolvable",
 }

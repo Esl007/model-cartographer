@@ -99,7 +99,23 @@ def _entity_reference_prose(world: ToolWorld) -> str:
     return "\n".join(parts)
 
 
-def render(world: ToolWorld, seed: int, style: str = "explicit") -> RenderedToolTask:
+_DECLINE_PARAGRAPH = (
+    "IMPORTANT: it is possible that the goal CANNOT be achieved with the "
+    "tools in this catalog. Decide for yourself whether a valid plan exists. "
+    "If one does, output it. If no sequence of the available tools can "
+    "satisfy the goal, output exactly [] (an empty JSON array) instead. Do "
+    "not invent tools that are not listed, and do not output a partial or "
+    "best-effort plan that fails to reach the goal -- an empty array is the "
+    "correct answer in that case."
+)
+
+
+def render(
+    world: ToolWorld,
+    seed: int,
+    style: str = "explicit",
+    allow_decline: bool = False,
+) -> RenderedToolTask:
     """Render `world` to a prompt. `style="explicit"` (default) is the
     original rendering: every tool spells out its own "Precondition: ..."
     sentence. `style="implicit"` strips those sentences from every tool
@@ -108,7 +124,16 @@ def render(world: ToolWorld, seed: int, style: str = "explicit") -> RenderedTool
     general rule to the specific call itself. The underlying `world` (and
     therefore ground truth / verification) is identical either way; only the
     prose changes -- see `mutate.implicit_preconditions`, which documents
-    this as a render-level mutator to keep the world/render split clean."""
+    this as a render-level mutator to keep the world/render split clean.
+
+    `allow_decline=True` adds the irrelevance affordance: the prompt tells
+    the model the goal may be impossible and that `[]` is the correct answer
+    if so (see `mutate.make_unsolvable`). This MUST be set uniformly across
+    every trial in a campaign that contains any unsolvable world -- if only
+    the unsolvable ones carried the instruction, its mere presence would
+    give the answer away. It is off by default so existing solvable-only
+    campaigns render byte-identically to before.
+    """
     if style not in ("explicit", "implicit"):
         raise ValueError(f'style must be "explicit" or "implicit", got {style!r}')
 
@@ -142,6 +167,7 @@ def render(world: ToolWorld, seed: int, style: str = "explicit") -> RenderedTool
         "Do not include any prose, explanation, or markdown fences -- just the "
         "JSON array.\n\n"
         f"You may use at most {world.budget} tool calls."
+        + (f"\n\n{_DECLINE_PARAGRAPH}" if allow_decline else "")
     )
 
     meta = {
@@ -151,6 +177,8 @@ def render(world: ToolWorld, seed: int, style: str = "explicit") -> RenderedTool
         "n_tools": len(world.catalog),
         "n_decoys": sum(1 for t in world.catalog if t.decoy),
         "style": style,
+        "allow_decline": allow_decline,
+        "solvable": world.optimal_depth is not None,
     }
     return RenderedToolTask(
         prompt=prompt,

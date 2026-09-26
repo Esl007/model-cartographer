@@ -92,6 +92,20 @@ class BreakingPoint:
     `t_ci` its bootstrap CI. `pass_curve` is every probed (t, pass_rate)
     in probe order -- the raw ramp+bisect record. `ceiling_pass_rate` is
     the pass rate observed at t=1.0 if it was probed (None otherwise).
+
+    DEGRADATION vs BREAK. `found`/`t_star` answer "where does the model
+    COLLAPSE" (pass rate <= `fail_threshold`, default 0.30). That is a
+    deliberately strict bar, and a model can degrade badly without ever
+    reaching it -- e.g. sitting at a 60% pass rate (a 40% failure rate!)
+    across the whole upper ray and still reporting `found=False`. Reporting
+    only the break therefore throws away the more common result. So
+    `degradation_onset` records the FIRST ramp t whose pass rate fell at
+    least `degradation_drop` below the t=0 baseline, with
+    `config_at_degradation` and `baseline_rate` alongside it. It is
+    descriptive (a threshold crossing on k_trials samples), not an
+    inferential estimate like `t_star` -- treat it as "difficulty where
+    this model started visibly slipping," and widen k_trials before
+    leaning on it hard.
     """
 
     found: bool
@@ -103,6 +117,9 @@ class BreakingPoint:
     confirmation: ConfirmationResult | None = None
     budget_spent: int = 0
     ceiling_pass_rate: float | None = None
+    degradation_onset: float | None = None
+    config_at_degradation: dict[str, float] = field(default_factory=dict)
+    baseline_rate: float | None = None
     note: str = ""
 
     def to_json_dict(self) -> dict:
@@ -116,6 +133,9 @@ class BreakingPoint:
             "confirmation": self.confirmation.to_json_dict() if self.confirmation else None,
             "budget_spent": self.budget_spent,
             "ceiling_pass_rate": self.ceiling_pass_rate,
+            "degradation_onset": self.degradation_onset,
+            "config_at_degradation": dict(self.config_at_degradation),
+            "baseline_rate": self.baseline_rate,
             "note": self.note,
         }
 
@@ -185,6 +205,7 @@ def find_breaking_point(
     seed_base: int = 0,
     t_step: float = 0.15,
     parallelism: int = 1,
+    degradation_drop: float = 0.25,
 ) -> BreakingPoint:
     """Ramp t from 0 to 1 along `ray`, bisect the first pass->fail frontier,
     fit a logistic t*, then decompose + confirm at the frontier.
@@ -212,7 +233,17 @@ def find_breaking_point(
     """
     rp = _RayProbe(evaluator, ray, budget, seed_base, parallelism=parallelism)
 
+    # Degradation tracking (see BreakingPoint's docstring): recorded on every
+    # exit path, including the found=False ones -- a model that never
+    # collapses can still have a well-defined point where it started slipping.
+    onset_t: float | None = None
+    onset_cfg: dict[str, float] = {}
+    baseline_seen: float | None = None
+
     def result(**kw) -> BreakingPoint:
+        kw.setdefault("degradation_onset", onset_t)
+        kw.setdefault("config_at_degradation", dict(onset_cfg))
+        kw.setdefault("baseline_rate", baseline_seen)
         return BreakingPoint(
             pass_curve=list(rp.pass_curve), budget_spent=rp.spent, **kw
         )
@@ -221,6 +252,7 @@ def find_breaking_point(
     if not rp.can(k_trials):
         return result(found=False, note="budget too small for a single probe")
     base_rate = rp.probe(0.0, k_trials)
+    baseline_seen = base_rate
     if base_rate < pass_threshold:
         return result(
             found=False,
@@ -250,6 +282,9 @@ def find_breaking_point(
         rate = rp.probe(t, k_trials)
         if t == 1.0:
             ceiling_rate = rate
+        if onset_t is None and rate <= base_rate - degradation_drop:
+            onset_t = t
+            onset_cfg = ray.config_at(t)
         if rate <= fail_threshold:
             t_hi = t
             break
@@ -335,5 +370,8 @@ def find_breaking_point(
         confirmation=confirmation,
         budget_spent=rp.spent,
         ceiling_pass_rate=ceiling_rate,
+        degradation_onset=onset_t,
+        config_at_degradation=dict(onset_cfg),
+        baseline_rate=baseline_seen,
         note="; ".join(notes) if notes else f"frontier bracket ({t_lo:.4f}, {t_hi:.4f})",
     )

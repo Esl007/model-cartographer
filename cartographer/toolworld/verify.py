@@ -128,7 +128,27 @@ def parse_plan(text: str) -> list[Call] | None:
     return calls
 
 
-def verify_plan(response: str, world: ToolWorld) -> PlanVerification:
+def verify_plan(
+    response: str, world: ToolWorld, allow_decline: bool = False
+) -> PlanVerification:
+    """Grade `response` against `world`.
+
+    UNSOLVABLE WORLDS (`world.optimal_depth is None`, produced by
+    `mutate.make_unsolvable`) invert the grading: there is no valid plan, so
+    the correct answer is to decline by emitting an empty array. Emitting any
+    non-empty plan is the tool-calling literature's canonical irrelevance
+    failure -- the model fabricated calls for an impossible goal -- and is
+    scored FAIL with detail `fabricated_plan_on_unsolvable`.
+
+    `allow_decline` says the prompt offered the decline affordance (see
+    `render(..., allow_decline=True)`). It only affects SOLVABLE worlds: a
+    model that declines a task it was told might be impossible, but which in
+    fact had a valid plan, fails with `incorrectly_declined` rather than
+    being graded as an ordinary empty plan that missed the goal. Solvable
+    worlds rendered without the affordance keep their original grading
+    exactly.
+    """
+    solvable = world.optimal_depth is not None
     optimal = world.optimal_depth if world.optimal_depth is not None else 0
 
     if response is None or not response.strip():
@@ -147,6 +167,40 @@ def verify_plan(response: str, world: ToolWorld) -> PlanVerification:
         return PlanVerification(
             verdict=Verdict.FAIL,
             detail="malformed_plan",
+            n_calls=0,
+            optimal_depth=optimal,
+            overhead=-1,
+            failed_step=None,
+            reached_goal=False,
+        )
+
+    # --- Unsolvable worlds: declining is the correct answer ----------------
+    if not solvable:
+        if not plan:
+            return PlanVerification(
+                verdict=Verdict.PASS,
+                detail="correctly_declined",
+                n_calls=0,
+                optimal_depth=0,
+                overhead=0,
+                failed_step=None,
+                reached_goal=False,
+            )
+        return PlanVerification(
+            verdict=Verdict.FAIL,
+            detail=f"fabricated_plan_on_unsolvable:{len(plan)}",
+            n_calls=len(plan),
+            optimal_depth=0,
+            overhead=-1,
+            failed_step=None,
+            reached_goal=False,
+        )
+
+    # --- Solvable world, but the model declined ----------------------------
+    if allow_decline and not plan:
+        return PlanVerification(
+            verdict=Verdict.FAIL,
+            detail="incorrectly_declined",
             n_calls=0,
             optimal_depth=optimal,
             overhead=-1,

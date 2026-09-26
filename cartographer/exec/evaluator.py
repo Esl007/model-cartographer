@@ -1566,6 +1566,30 @@ def default_tool_ray() -> EscalationRay:
     )
 
 
+# Catalog-size ceiling for the tool-count ray. The published tool-selection
+# literature puts the "safe zone" at roughly 10-20 tools, first real
+# degradation around 40-50, and severe collapse in the hundreds. Our other
+# campaigns sweep `decoy_tools` only to 5 -- a ~14-tool catalog, i.e.
+# entirely inside the safe zone, which is a plausible reason Super/Ultra
+# never broke on the depth or trap rays. 60 decoys puts the catalog near 69
+# tools, past the documented degradation onset while staying small enough
+# that the prompt is ~11k chars and BFS ground truth stays cheap.
+_TOOL_COUNT_CEILING = 60
+
+
+def default_tool_count_ray() -> EscalationRay:
+    """Escalation ray over CATALOG SIZE alone: `decoy_tools` 2 -> 60 (catalog
+    ~11 -> ~69 tools), every other dim held at its generator default.
+
+    Deliberately single-dim: any break found on this ray is attributable to
+    tool-count pressure specifically, with no depth/trap confound. The decoys
+    are the ordinary self-describing kind (`generate._decoy_tool`), NOT
+    `mutate.dishonest_decoys` -- so this measures pure selection pressure
+    from catalog size, not deception.
+    """
+    return EscalationRay(dims=(RayDim("decoy_tools", 2, _TOOL_COUNT_CEILING, True),))
+
+
 def _apply_tool_trap_config(
     world, config: dict[str, float], seed: int
 ):
@@ -1818,6 +1842,8 @@ def run_tool_breaking_point_campaign(
     max_tokens: int | None = None,
     cancel_event: threading.Event | None = None,
     verify: str = "auto",
+    ray: EscalationRay | None = None,
+    parallelism: int = 1,
 ) -> BreakingPoint:
     """Escalation mode over the toolworld's STRUCTURAL trap mutators (see
     `default_tool_ray`): walk the ray from no-traps baseline to full-trap
@@ -1826,6 +1852,12 @@ def run_tool_breaking_point_campaign(
     up) and find where the model actually breaks. Mirrors
     `run_breaking_point_campaign`'s shape (find_breaking_point + decompose +
     confirm), budget/cost_cap defaults chosen to match its sibling.
+
+    `ray` overrides the default trap ray -- pass `default_tool_count_ray()`
+    for the catalog-size sweep, or any custom `EscalationRay` over
+    `_TOOL_KNOWN_KEYS` / trap-dim names. `parallelism` runs each probe's
+    k_trials concurrently (see `find_breaking_point`); the trial set is
+    identical at any worker count.
 
     `verify` is accepted for signature symmetry with the other campaign
     runners (so /launch's generic kwarg-forwarding in `_campaign_thread`
@@ -1842,7 +1874,12 @@ def run_tool_breaking_point_campaign(
         max_tokens=max_tokens,
         cancel_event=cancel_event,
     )
-    bp = find_breaking_point(evaluator, default_tool_ray(), budget=budget)
+    bp = find_breaking_point(
+        evaluator,
+        ray if ray is not None else default_tool_ray(),
+        budget=budget,
+        parallelism=parallelism,
+    )
     bp_note = f"spent=${evaluator.spent_usd:.4f}"
     if evaluator.capped:
         bp_note += ";cost_cap_hit"
@@ -2134,4 +2171,253 @@ def run_full_map_campaign(
             result.notes.append(f"cancelled during/after stage={stage}")
             break
 
+    return result
+
+
+# ---------------------------------------------------------------------------
+# tool_irrelevance: can the model tell an IMPOSSIBLE task from a possible one?
+#
+# Every other tool-province campaign asks "does the model find the plan?" on
+# worlds that always have one. That cannot distinguish a model that reasons
+# about feasibility from one that simply always emits a confident plan -- and
+# the tool-calling literature treats exactly that confusion (fabricating
+# calls for an unachievable goal) as a first-class failure mode.
+#
+# Design notes that matter for the result to mean anything:
+#   * The decline affordance is rendered into EVERY trial, solvable or not
+#     (`render(..., allow_decline=True)`). If only the unsolvable worlds
+#     carried it, its presence would be the answer.
+#   * Both error directions are measured. Fabricating a plan for an
+#     impossible goal is the headline failure, but wrongly declining a
+#     solvable task is the opposite pathology and a model can trivially
+#     "win" the first metric by declining everything. Reporting one without
+#     the other is how you get a meaningless benchmark.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class IrrelevanceResult:
+    """Outcome of one `run_tool_irrelevance_campaign`."""
+
+    n_solvable: int = 0
+    n_solvable_correct: int = 0
+    n_unsolvable: int = 0
+    n_unsolvable_correct: int = 0
+    n_error: int = 0
+    n_skipped_inapplicable: int = 0
+    spent_usd: float = 0.0
+    capped: bool = False
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def solvable_accuracy(self) -> float:
+        return self.n_solvable_correct / self.n_solvable if self.n_solvable else 0.0
+
+    @property
+    def decline_accuracy(self) -> float:
+        """Fraction of impossible tasks correctly declined."""
+        return (
+            self.n_unsolvable_correct / self.n_unsolvable if self.n_unsolvable else 0.0
+        )
+
+    @property
+    def fabrication_rate(self) -> float:
+        """Fraction of impossible tasks answered with a confident plan."""
+        return 1.0 - self.decline_accuracy if self.n_unsolvable else 0.0
+
+    @property
+    def balanced_accuracy(self) -> float:
+        """Mean of the two per-class accuracies -- the metric that cannot be
+        gamed by always-plan or always-decline."""
+        parts = []
+        if self.n_solvable:
+            parts.append(self.solvable_accuracy)
+        if self.n_unsolvable:
+            parts.append(self.decline_accuracy)
+        return sum(parts) / len(parts) if parts else 0.0
+
+    def to_json_dict(self) -> dict:
+        return {
+            "n_solvable": self.n_solvable,
+            "n_solvable_correct": self.n_solvable_correct,
+            "n_unsolvable": self.n_unsolvable,
+            "n_unsolvable_correct": self.n_unsolvable_correct,
+            "n_error": self.n_error,
+            "n_skipped_inapplicable": self.n_skipped_inapplicable,
+            "solvable_accuracy": self.solvable_accuracy,
+            "decline_accuracy": self.decline_accuracy,
+            "fabrication_rate": self.fabrication_rate,
+            "balanced_accuracy": self.balanced_accuracy,
+            "spent_usd": self.spent_usd,
+            "capped": self.capped,
+            "notes": list(self.notes),
+        }
+
+
+def _irrelevance_trial_seed(run_id: str, index: int) -> int:
+    payload = f"tool_irrelevance|{run_id}|{index}".encode("utf-8")
+    return int(hashlib.sha256(payload).hexdigest()[:15], 16)
+
+
+def run_tool_irrelevance_campaign(
+    client: Client,
+    store: ResultsStore,
+    run_id: str,
+    model: str,
+    n_trials: int = 40,
+    unsolvable_rate: float = 0.4,
+    base: ToolDimParams | None = None,
+    cost_cap: float = 0.3,
+    max_tokens: int | None = None,
+    max_tokens_retry: int | None = None,
+    parallelism: int | None = None,
+    cancel_event: threading.Event | None = None,
+) -> IrrelevanceResult:
+    """Measure whether `model` can distinguish an achievable tool-planning
+    goal from an impossible one.
+
+    `unsolvable_rate` of the `n_trials` worlds have one load-bearing tool
+    removed via `mutate.make_unsolvable`, making the goal provably
+    unreachable by exhaustive BFS; the rest are ordinary solvable worlds.
+    Class assignment is deterministic in `run_id` (index-based), so a rerun
+    reproduces the same split. Seeds where no single-tool removal yields an
+    unreachable goal are counted in `n_skipped_inapplicable` and re-drawn up
+    to a few times rather than silently downgraded to solvable -- which
+    would quietly shift the class balance and inflate the decline metric.
+    """
+    if not 0.0 <= unsolvable_rate <= 1.0:
+        raise ValueError(f"unsolvable_rate must be in [0,1], got {unsolvable_rate}")
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ..toolworld.mutate import make_unsolvable
+
+    params = base if base is not None else _default_tool_base()
+    default_max, default_retry = default_token_budget(model)
+    mt = max_tokens if max_tokens is not None else default_max
+    mtr = max_tokens_retry if max_tokens_retry is not None else default_retry
+    if mtr <= mt:
+        mtr = mt * 2
+    if parallelism is None:
+        parallelism = _default_parallelism(client)
+
+    result = IrrelevanceResult()
+    lock = threading.Lock()
+
+    # Deterministic class assignment: the first `n_unsolvable` indices of a
+    # stable shuffle are the impossible ones.
+    n_unsolvable = int(round(n_trials * unsolvable_rate))
+    order = sorted(
+        range(n_trials),
+        key=lambda i: int(
+            hashlib.sha256(f"{run_id}|class|{i}".encode("utf-8")).hexdigest()[:15], 16
+        ),
+    )
+    unsolvable_idx = set(order[:n_unsolvable])
+
+    def one_trial(index: int) -> None:
+        with lock:
+            if result.spent_usd >= cost_cap:
+                result.capped = True
+                return
+            if cancel_event is not None and cancel_event.is_set():
+                return
+
+        want_unsolvable = index in unsolvable_idx
+        world = None
+        seed = _irrelevance_trial_seed(run_id, index)
+        if want_unsolvable:
+            # Re-draw a few seeds before giving up on this slot.
+            for attempt in range(4):
+                probe_seed = _irrelevance_trial_seed(run_id, index + 10_000 * attempt)
+                candidate = tool_generate(params, probe_seed)
+                mutated = make_unsolvable(candidate, probe_seed)
+                if mutated is not None:
+                    world, seed = mutated, probe_seed
+                    break
+            if world is None:
+                with lock:
+                    result.n_skipped_inapplicable += 1
+                return
+        else:
+            world = tool_generate(params, seed)
+
+        rendered = tool_render(world, seed, allow_decline=True)
+        realized = dict(tool_measure(world))
+        realized["unsolvable"] = 1.0 if want_unsolvable else 0.0
+
+        chat = client.chat(
+            model=model,
+            prompt=rendered.prompt,
+            max_tokens=mt,
+            max_tokens_retry=mtr,
+        )
+        cost = cost_usd(model, chat.tokens_in, chat.tokens_out)
+        with lock:
+            result.spent_usd += cost
+
+        detail = f"kind=tool_plan;campaign=irrelevance;unsolvable={int(want_unsolvable)}"
+        if chat.error is not None:
+            verdict = Verdict.ERROR
+            detail += f";error={chat.error}"
+        else:
+            pv = verify_plan(chat.text, world, allow_decline=True)
+            verdict = pv.verdict
+            detail += f";detail={pv.detail};n_calls={pv.n_calls}"
+            if chat.finish_reason == "length":
+                verdict = Verdict.ERROR
+                detail += ";cap_hit=1"
+
+        record = ExperimentRecord(
+            run_id=run_id,
+            model_name=model,
+            latent_params={
+                "plan_depth": float(params.plan_depth),
+                "decoy_tools": float(params.decoy_tools),
+                "precondition_chain": float(params.precondition_chain),
+                "state_obscurity": float(params.state_obscurity),
+                "parallel_goals": float(params.parallel_goals),
+                "unsolvable": 1.0 if want_unsolvable else 0.0,
+            },
+            realized_dims=realized,
+            render_mode=RenderMode.TEMPLATE,
+            task_seed=seed,
+            trial_seed=index,
+            rendering_seed=seed,
+            prompt_text=rendered.prompt,
+            response_text=chat.text,
+            verdict=verdict,
+            verifier_detail=detail,
+            tokens_in=chat.tokens_in,
+            tokens_out=chat.tokens_out,
+            cost_usd=cost,
+            latency_ms=chat.latency_ms,
+            reasoning_text=chat.reasoning,
+            finish_reason=chat.finish_reason,
+        )
+        with lock:
+            store.append(record)
+            if verdict == Verdict.ERROR:
+                result.n_error += 1
+            elif want_unsolvable:
+                result.n_unsolvable += 1
+                if verdict == Verdict.PASS:
+                    result.n_unsolvable_correct += 1
+            else:
+                result.n_solvable += 1
+                if verdict == Verdict.PASS:
+                    result.n_solvable_correct += 1
+            if result.spent_usd >= cost_cap:
+                result.capped = True
+
+    with ThreadPoolExecutor(max_workers=max(1, parallelism)) as pool:
+        list(pool.map(one_trial, range(n_trials)))
+
+    if result.capped:
+        result.notes.append("cost_cap_hit")
+    if result.n_skipped_inapplicable:
+        result.notes.append(
+            f"{result.n_skipped_inapplicable} slot(s) had no single-tool "
+            "removal that made the goal unreachable"
+        )
     return result
