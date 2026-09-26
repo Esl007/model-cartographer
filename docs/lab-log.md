@@ -3083,6 +3083,50 @@ t*=0.55 and the depth ray gives t*=0.500 with CI (0.450, 0.575), which
 depth ≥ 11 without a locatable frontier; the generator's depth-16 ceiling
 is not high enough to break either.
 
+## 2026-09-25 — FINDING (null, informative) + BUG (open) — Super is untouched by a 66-tool catalog, because our decoys confess
+
+**What we saw:** `camp-tool-count-super-001` — the new single-dim
+catalog-size ray (`decoy_tools` 2→60, catalog 8→66 tools, everything else
+at generator default so `plan_depth=3` / 6-call optimal plans, no trap
+mutators). Result: **8/8 probe points at 100%, 56/56 PASS, zero FAILs,
+zero ERRORs**, $0.0299. `found=False`, and the new `degradation_onset` is
+**None** — not "we couldn't localize a frontier," but "the pass rate never
+moved off 1.0 at any catalog size."
+
+That flatly contradicts the tool-selection literature, which puts first
+degradation around 40–50 candidate tools and severe collapse in the
+hundreds. We went to 66 with zero effect.
+
+**Root cause / reasoning:** Our decoys announce themselves. A rendered
+decoy reads:
+
+> `id=decoy_4 name=tag_release` — "Attach a cosmetic release tag to a
+> service (no effect on state). (Has no effect on deployment state.)"
+
+So a 66-tool catalog is not a 66-way selection problem; it is an 8-way
+selection problem with 58 entries that explicitly say *ignore me*. Adding
+more of those adds prompt length, not selection pressure — confirmed by
+the trivial input cost (max tokens_in only 3203). The literature's setting
+is the opposite: thousands of *genuinely plausible* tools with overlapping
+semantics and no self-labelling. This is the same "decoys self-confess"
+flaw the original tool-planning saturation diagnosis flagged, resurfacing
+on a new axis: we fixed it for the trap ray via
+`mutate.dishonest_decoys` but the plain `decoy_tools` knob still generates
+confessing decoys.
+
+**Fix / decision / next step:** The finding is real and worth keeping as a
+null: *Nemotron Super's tool selection is insensitive to catalog size when
+irrelevant tools are honestly labelled* — i.e. catalog size per se is not
+the stressor; **semantic confusability** is. The corrected experiment is
+the tool-count ray with `dishonest_decoys_on=1` (that mutator renames
+decoys to sound load-bearing and strips the confession — the same decoy
+above becomes "Refreshes notifier-0's deploy context ahead of the goal
+check"), which is the honest analogue of the literature's condition. Not
+run yet (awaiting approval). Longer term, `generate._decoy_tool` should
+arguably stop self-confessing by default, but changing it would break
+comparability with every existing record, so the mutator route is correct
+for now.
+
 ## Template for new entries
 
 ```
