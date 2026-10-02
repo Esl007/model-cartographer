@@ -3184,6 +3184,84 @@ depth 16, not another dimension. Raising `k_trials` from 7 to ~15 at depths
 11–16 would also cheaply settle whether that 57–86% band is a real shallow
 degradation or small-n noise.
 
+## 2026-10-02 — FIX + CORRECTION + FINDINGS (confirmed) — evidence layer cleaned; Nano trap-ray t* was cap-biased (0.55 → 0.675); Super degradation is real; impossible-task test run; untested areas proven testable
+
+**Fixes (commit `aedb57c`, 680 tests passing).** (1) `findings.derive`, which feeds
+`/findings`, `/report` and the Evidence Analyst, counted the two belief runs
+recorded before the witness-rendering fix: Super's belief rate read 78.4% instead
+of 97.6% and the Analyst's diagnosis ranked Super below Nano. Now excluded via an
+explicit `INVALIDATED_RUNS` table with reasons. Post-fix pack: Ultra 97.3% overall,
+Super 95.9%, Nano 86.7%. (2) Adversarial-selection trials (`kind=belief` +
+`adversarial=1`) now populate the `adversarial_belief` column, which had been
+permanently empty. (3) Fidelity-gate rejections no longer create a phantom
+"tested model" row for the renderer. (4) `default_token_budget` is 16000/32000
+for every tier, with a regression test pinning it above the longest legitimate
+answer observed (8,456 tokens).
+
+**Correction — "cross-ray replication" was invalid.** Earlier entries, the survey
+page and the brand boards said Nano's depth-ray t* = 0.500 [0.450–0.575]
+"replicates" the trap-ray t* = 0.55 because the interval contains it. t* is a
+normalised position along ONE ray; two rays through different difficulty spaces
+produce incomparable t values. What does replicate is the mechanism: the trap
+ray, the depth ray and Nemotron's proposer all fail Nano on identifier
+collisions. Survey page and v1 brand boards corrected.
+
+**Nano trap ray re-run with lifted caps (`camp-tool_bp-nano-002`, $0.068, 0
+ERRORs vs 10 in the original).** `found=True`, **t* = 0.675 [0.615, 0.758]**,
+degradation onset t = 0.6; break config = every trap on, precondition_chain 2,
+parallel_goals 2. The original 0.55 was pulled ~0.125 earlier by token-cap
+ERRORs scored as failures, the same artifact as the Super retraction (now
+confirmed on a second run). Nano's break on this ray is real; its location was
+not.
+
+**Super depth top-up to k=15 (`camp-tool-depth-super-003/k15`, fresh seeds, $0.052,
+0 ERRORs).** Combined with the original 7/point: depth ≤ 9 28/28; depth 11 11/15,
+13 9/15, 15 11/15, 16 7/15. Pooled depth ≥ 11: **38/60 = 63% [0.51, 0.74]**,
+Fisher vs depth ≤ 9 one-sided p = 4.7e-05. **Super's degradation once identifier
+collisions engage is real, not small-n noise** (upgraded from grade B). It still
+does not collapse below the 0.30 threshold in range (depth 16: 7/15, CI 0.25–0.70).
+
+**Impossible-task (irrelevance) campaign, first live run (`camp-irrelevance-*-001`,
+$0.067 total, 0 ERRORs).** 40% of worlds had one load-bearing tool removed
+(BFS-proven unreachable); the decline affordance was rendered on every trial.
+
+| tier | solvable correct | impossible correctly declined | invents a plan | balanced accuracy |
+|---|---|---|---|---|
+| Nano | 16/18 | 6/12 [0.25, 0.75] | 50% | 0.69 |
+| Super | 18/18 | 10/12 [0.55, 0.95] | 17% | 0.92 |
+| Ultra | 12/12 | 5/8 [0.31, 0.86] | 38% | 0.81 |
+
+**Mechanism, 11/11 invented plans on all tiers:** the model never names a
+nonexistent tool. It *silently omits the step whose tool is missing* and emits
+the remaining plan, which then fails at the step that depended on it
+(typically `precondition_violation:advance_2`). It notices the tool is absent
+but does not conclude the goal is unreachable. No tier ever declined a solvable
+task. Ultra vs Super is not separable at this n; Nano is clearly worst. All 3 of
+Ultra's failures were worlds missing `publish_art_0` (an artifact gate rather
+than a ladder rung). Suggestive, n too small.
+
+**Feasibility probes for untested areas ($0.025, ad-hoc calls outside the store,
+cost tracked in-script).**
+- *Cross-model:* Nebius serves 10 families: Qwen (4, incl. Qwen3-30B-A3B, the
+  same active size as Nano), DeepSeek (4), Z.ai GLM (4), Moonshot Kimi (3), NVIDIA
+  (4), MiniMax, Nous Hermes-4-405B, Gemma-3-27B, MiniCPM, gpt-oss-120b.
+  `exec/pricing.py` has no entries for most → `cost_usd` returns 0 → cost caps
+  would NOT bind. Pricing must be added before any cross-model run.
+- *Native function calling + multi-turn + error recovery* (tools via the API
+  `tools` parameter; each `tool_call` executed in the simulator; result or error
+  returned as a `tool` message; depth 4 + id collisions): both tiers emit native
+  `tool_calls`. Super 4/4 reached the goal at optimal length with 0 errors. Nano
+  3/4, 3 errors, 2 recovered (`adva_nce_0` → unknown_tool → `adva-nce_0` → ok). The
+  failure called the natural id `publish_art_0` (renamed by the collision
+  mutator), got an error, and stopped without trying again.
+- *Consistency (pass^k):* Nano, 6 worlds × 5 samples at temperature 0.6 (depth 4
+  + collisions): mean pass@1 **63%**, **pass^5 = 1/6**, any-of-5 = 6/6. Every
+  world is solvable; only one is solved reliably.
+- *Value passing:* not testable without a generator change (tools do not yet
+  return ids that later calls must consume).
+
+**Spend this entry: $0.21 tracked.**
+
 ## Template for new entries
 
 ```
