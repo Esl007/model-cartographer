@@ -152,7 +152,10 @@ def _seed(tmp_path) -> ResultsStore:
                 seed=n,
                 dims={"entity_state": 2.0, "coreference": 6.0},
                 latent={"chain_length": 2.0, "coref_pressure": 6.0},
-                detail_extra=";adversarial=1;traps=final_true_state",
+                # Trap tags without `adversarial=1`: these fixtures exercise
+                # the plain belief column's scoring contract. Adversarial-
+                # selection trials go to their own column (tested below).
+                detail_extra=";traps=final_true_state",
                 response="the kitchen",
             )
         )
@@ -618,3 +621,54 @@ def test_handle_replicate_now_takes_the_one_campaign_slot(tmp_path):
         assert "campaign in progress" in payload.lower()
     finally:
         launch_mod._reset_for_tests()
+
+
+# ---------------------------------------------------------------------------
+# Evidence hygiene: what must never count as capability evidence
+# ---------------------------------------------------------------------------
+
+
+def test_adversarial_trials_land_in_their_own_column(tmp_path):
+    """Adversarial-selection trials are written as kind=belief + adversarial=1.
+    They used to fold into `belief`, leaving `adversarial_belief` empty."""
+    store = ResultsStore(tmp_path / "adv.sqlite")
+    recs = [
+        _rec("camp-x-001", MODEL_WEAK, Verdict.PASS, seed=1),
+        _rec("camp-x-001", MODEL_WEAK, Verdict.FAIL, seed=2,
+             detail_extra=";adversarial=1;traps=final_true_state"),
+        _rec("camp-x-001", MODEL_WEAK, Verdict.PASS, seed=3,
+             detail_extra=";adversarial=1;traps=final_true_state"),
+    ]
+    store.append_many(recs)
+    mf = derive(store).by_model(MODEL_WEAK)
+    assert mf.cells[("kind", "belief")].n_scored == 1
+    adv = mf.cells[("kind", "adversarial_belief")]
+    assert adv.n_scored == 2 and adv.n_pass == 1
+    store.close()
+
+
+def test_invalidated_runs_never_count_as_evidence(tmp_path):
+    """Runs measured with a broken instrument (the witness-rendering bug)
+    must not reach any pass rate -- they made Super's belief score read
+    78% instead of 97% and inverted the Evidence Analyst's tier ranking."""
+    from cartographer.viewer.findings import INVALIDATED_RUNS
+
+    bad_run = next(iter(INVALIDATED_RUNS))
+    store = ResultsStore(tmp_path / "inv.sqlite")
+    recs = [_rec(bad_run, MODEL_WEAK, Verdict.FAIL, seed=i) for i in range(1, 6)]
+    recs.append(_rec("camp-clean-001", MODEL_WEAK, Verdict.PASS, seed=99))
+    store.append_many(recs)
+    belief = derive(store).by_model(MODEL_WEAK).cells[("kind", "belief")]
+    assert belief.n_scored == 1 and belief.n_pass == 1
+    store.close()
+
+
+def test_fidelity_gate_rejections_do_not_create_a_model_row(tmp_path):
+    """A rejected rendering is a renderer event, not a subject trial."""
+    store = ResultsStore(tmp_path / "gate.sqlite")
+    store.append_many([
+        _rec("camp-r-001", "renderer/model", Verdict.REJECTED_BY_FIDELITY_GATE, seed=1),
+        _rec("camp-r-001", MODEL_WEAK, Verdict.PASS, seed=2),
+    ])
+    assert [mf.model for mf in derive(store).models] == [MODEL_WEAK]
+    store.close()

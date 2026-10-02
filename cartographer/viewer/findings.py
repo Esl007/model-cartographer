@@ -77,6 +77,21 @@ WEAKNESS_PASS_RATE = 0.90
 WEAKNESS_MIN_N = 20
 
 # Capability map columns.
+# Runs measured with a broken instrument. Their records stay in the
+# append-only store (and RETRACTED findings still cite them as evidence of
+# what went wrong), but they are never counted as capability evidence.
+# Keyed by top-level run_id; children (`/verify`, stages) inherit.
+INVALIDATED_RUNS: dict[str, str] = {
+    "camp-belief-nemotron-super-001": (
+        "witness-rendering bug: non-actor witnesses never reached the prompt "
+        "(fixed 2026-09-17 16:06 UTC, commit 5bd297f); belief ground truth "
+        "was unanswerable from the text the model saw"
+    ),
+    "camp-belief-120b-001": (
+        "witness-rendering bug (same as above); recorded before the fix"
+    ),
+}
+
 CAPABILITY_KINDS = ("state", "order", "belief", "adversarial_belief", "tool_plan")
 # The measured difficulty dimensions `cartographer.world.measure.measure`
 # emits. A dim column reports the pass rate in that dim's HIGH region (top
@@ -142,11 +157,22 @@ def model_slug(model_name: str) -> str:
 
 
 def _query_kind_of(record) -> str | None:
+    """The capability column a record belongs to.
+
+    Adversarial-selection belief trials are written by `PipelineEvaluator`
+    as `kind=belief;...;adversarial=1`, so keying on `kind=` alone folded
+    every one of them into the plain `belief` column and left the
+    `adversarial_belief` column permanently empty. The `adversarial=1` flag
+    is what distinguishes them."""
     detail = record.verifier_detail or ""
+    kind = None
     for part in detail.split(";"):
         if part.startswith("kind="):
-            return part[len("kind="):] or None
-    return None
+            kind = part[len("kind="):] or None
+            break
+    if kind == "belief" and "adversarial=1" in detail.split(";"):
+        return "adversarial_belief"
+    return kind
 
 
 def _traps_of(record) -> tuple[str, ...]:
@@ -347,12 +373,22 @@ def _primary_records(store: ResultsStore) -> list:
     deliberately over-samples one hard config and one easy one, so folding
     it in would bias the map in both directions at once; it is read back
     separately as a finding's replication status).
+
+    Also excluded: runs in `INVALIDATED_RUNS` (measured with a broken
+    instrument -- see that table for each reason), and fidelity-gate
+    rejections (a rejected rendering is a renderer-model event, not a
+    subject trial; counting them made the renderer appear as a "tested
+    model" with a 0% pass rate).
     """
     cur = store._conn.execute("SELECT * FROM experiments")
     out = []
     for row in cur.fetchall():
         record = _row_to_record(row)
         if record.run_id.endswith(VERIFY_SUFFIX) or is_replication_run(record.run_id):
+            continue
+        if record.run_id.split("/", 1)[0] in INVALIDATED_RUNS:
+            continue
+        if record.verdict == Verdict.REJECTED_BY_FIDELITY_GATE:
             continue
         out.append(record)
     return out

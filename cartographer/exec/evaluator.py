@@ -47,17 +47,23 @@ _INT_KEYS = {"chain_length", "coref_pressure", "distractor_events", "filler_even
 _FLOAT_KEYS = {"scramble", "witness_cutoff"}
 _KNOWN_KEYS = _INT_KEYS | _FLOAT_KEYS
 
-# Default token budgets, and the heavier budgets used for "ultra"-class
-# reasoning models (id contains "ultra", case-insensitive) whose reasoning
-# traces can exhaust even the standard auto-retry cap on escalated-difficulty
-# tasks -- e.g. nvidia/Nemotron-3-Ultra-550b-a55b burning through 4000 tokens
-# of reasoning before ever emitting an answer. These are heuristic defaults;
-# an explicit `max_tokens` (and derived retry budget) passed to
-# PipelineEvaluator or a campaign wrapper always wins.
-_DEFAULT_MAX_TOKENS = 1500
-_DEFAULT_MAX_TOKENS_RETRY = 4000
-_ULTRA_MAX_TOKENS = 8000
-_ULTRA_MAX_TOKENS_RETRY = 16000
+# Default token budgets. These are CEILINGS, not targets: a model is billed
+# for what it actually emits, so a generous ceiling costs nothing on the
+# median trial and only matters on the long tail.
+#
+# The ceiling must sit above the task's legitimate output length. Measured
+# over every clean (finish_reason=stop) tool_plan completion in the store:
+# Nano median 2239 / p99 6540 / max 8456 tokens, Super max 5149, Ultra max
+# 4368. The old 1500/4000 (and 8000/16000 for "ultra") budgets sat BELOW
+# that, so long-but-correct answers were truncated -> ERROR -> counted as a
+# non-pass by escalation probes. Because deeper tasks need more tokens, that
+# bias tracks difficulty and manufactured a false Super breaking point
+# (retracted 2026-09-25, see docs/lab-log.md). One budget for every tier now;
+# an explicit `max_tokens` passed to an evaluator or campaign still wins.
+_DEFAULT_MAX_TOKENS = 16000
+_DEFAULT_MAX_TOKENS_RETRY = 32000
+_ULTRA_MAX_TOKENS = 16000
+_ULTRA_MAX_TOKENS_RETRY = 32000
 
 
 def _is_ultra_model(model: str) -> bool:
@@ -67,7 +73,8 @@ def _is_ultra_model(model: str) -> bool:
 def default_token_budget(model: str) -> tuple[int, int]:
     """(max_tokens, max_tokens_retry) heuristic defaults for `model`.
 
-    Models whose id contains "ultra" get an 8000/16000 budget; everything
+    Every tier currently gets 16000/32000 (see the constants' comment for
+    why). Historically models whose id contains "ultra" got 8000/16000; everything
     else keeps the pre-existing 1500/4000 defaults.
     """
     if _is_ultra_model(model):

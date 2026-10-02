@@ -308,14 +308,21 @@ def test_full_suite_call_count_and_verdict_tracking(tmp_path):
 # --- model-aware token budgets ----------------------------------------------
 
 
-def test_default_token_budget_ultra_gets_bigger_budget():
-    assert default_token_budget("nvidia/Nemotron-3-Ultra-550b-a55b") == (8000, 16000)
-    assert default_token_budget("NVIDIA/SOME-ULTRA-MODEL") == (8000, 16000)
+def test_default_token_budget_ultra():
+    assert default_token_budget("nvidia/Nemotron-3-Ultra-550b-a55b") == (16000, 32000)
+    assert default_token_budget("NVIDIA/SOME-ULTRA-MODEL") == (16000, 32000)
 
 
-def test_default_token_budget_non_ultra_keeps_defaults():
-    assert default_token_budget("openai/gpt-oss-20b") == (1500, 4000)
-    assert default_token_budget("nvidia/Nemotron-3-Nano-9b") == (1500, 4000)
+def test_default_token_budget_clears_observed_legitimate_output():
+    """Regression guard for the 2026-09-25 retraction: the default ceiling
+    must exceed the longest legitimate answer we have observed (Nano's
+    clean tool_plan max was 8456 tokens). A cap below that turns
+    still-writing into failed, and the bias tracks difficulty."""
+    for model in ("openai/gpt-oss-20b", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+                  "nvidia/nemotron-3-super-120b-a12b", "nvidia/Nemotron-3-Ultra-550b-a55b"):
+        max_tokens, retry = default_token_budget(model)
+        assert max_tokens > 8456
+        assert retry > max_tokens
 
 
 def test_ultra_model_id_gets_bigger_budgets_in_practice(tmp_path):
@@ -324,12 +331,12 @@ def test_ultra_model_id_gets_bigger_budgets_in_practice(tmp_path):
     ev = PipelineEvaluator(
         client, "nvidia/Nemotron-3-Ultra-550b-a55b", store, "run1", "state", cost_cap_usd=10.0,
     )
-    assert ev.max_tokens == 8000
-    assert ev.max_tokens_retry == 16000
+    assert ev.max_tokens == 16000
+    assert ev.max_tokens_retry == 32000
 
     ev({"chain_length": 2}, trial_seed=1)
-    assert client.calls[0][2] == 8000  # max_tokens actually sent
-    assert client.max_tokens_retries[0] == 16000
+    assert client.calls[0][2] == 16000  # max_tokens actually sent
+    assert client.max_tokens_retries[0] == 32000
     store.close()
 
 
@@ -337,8 +344,8 @@ def test_non_ultra_model_keeps_default_budgets(tmp_path):
     store = ResultsStore(tmp_path / "db.sqlite3")
     client = ScriptedClient(default_text="wrong")
     ev = PipelineEvaluator(client, "openai/gpt-oss-20b", store, "run1", "state", cost_cap_usd=10.0)
-    assert ev.max_tokens == 1500
-    assert ev.max_tokens_retry == 4000
+    assert ev.max_tokens == 16000
+    assert ev.max_tokens_retry == 32000
     store.close()
 
 
