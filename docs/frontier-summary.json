@@ -2,7 +2,7 @@
  {
   "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
   "name": "NVIDIA-Nemotron-3-Nano-30B-A3B",
-  "verdict": "NVIDIA-Nemotron-3-Nano-30B-A3B: breaks on long plans with look-alike tool names (13-call plans); slips on belief tracking; slips on misleading stories; slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks. Holds on 4 of 9 capabilities tested.",
+  "verdict": "NVIDIA-Nemotron-3-Nano-30B-A3B: breaks on long plans with look-alike tool names (13-call plans); breaks on step-by-step execution with look-alike tool names (11-call plans); slips on belief tracking; slips on misleading stories; slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks. Holds on 4 of 10 capabilities tested.",
   "rows": [
    {
     "key": "state",
@@ -419,6 +419,65 @@
     "short": "step-by-step execution with values to carry"
    },
    {
+    "key": "interactive_lookalike",
+    "label": "Executes step by step when tool names look alike (sees each error)",
+    "province": "III \u00b7 Interactive execution",
+    "status": "BREAKS",
+    "headline": "Breaks at 11-call plans: 1/5 pass (was 4/5 at 7-call plans)",
+    "boundary": "11-call plans",
+    "held_through": "7-call plans",
+    "n_pass": 1,
+    "n_scored": 5,
+    "n_error": 0,
+    "ci": [
+     0.036,
+     0.624
+    ],
+    "confidence": "C",
+    "p_value": 0.10317460317460317,
+    "cause_code": "stopped_short",
+    "cause": "stops acting before the goal is reached",
+    "cause_share": 0.5,
+    "exemplar": {
+     "record_id": "67f49d91903044fea5bd46c365d5933c",
+     "run_id": "camp-interactive-lookalike-nano-001",
+     "detail": "stopped_short",
+     "excerpt": "[{\"step\": 1, \"tool\": \"set_flag_o0\", \"args\": {\"flag\": \"flag_0\"}, \"ok\": true, \"error_kind\": null, \"result\": {\"status\": \"ok\"}, \"distance_after\": 10}, {\"step\": 2, \"tool\": \"set_dep-th_flag_0\", \"args\": {\"flag\": \"depth_flag_0\"}, \"ok\": true, \"error_kind\": null, \"result\": {\"status\": \"ok\"}, \"distance_after\": 9}, {\"step\": 3, \"tool\": \"build_art_o0\", \"args\": {\"artifact\": \"art_0\"}, \"ok\": true, \"error_kind\": nul"
+    },
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans",
+      "n_pass": 4,
+      "n_scored": 5,
+      "n_error": 5
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans",
+      "n_pass": 12,
+      "n_scored": 21,
+      "n_error": 4
+     },
+     {
+      "value": 7.0,
+      "label": "10-call plans",
+      "n_pass": 2,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans",
+      "n_pass": 1,
+      "n_scored": 5,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "step-by-step execution with look-alike tool names"
+   },
+   {
     "key": "consistency",
     "label": "Gets the same task right every time (pass^k)",
     "province": "Reliability",
@@ -827,6 +886,28 @@
     "short": "step-by-step execution with values to carry"
    },
    {
+    "key": "interactive_lookalike",
+    "label": "Executes step by step when tool names look alike (sees each error)",
+    "province": "III \u00b7 Interactive execution",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "step-by-step execution with look-alike tool names"
+   },
+   {
     "key": "consistency",
     "label": "Gets the same task right every time (pass^k)",
     "province": "Reliability",
@@ -853,7 +934,7 @@
  {
   "model": "nvidia/nemotron-3-super-120b-a12b",
   "name": "nemotron-3-super-120b-a12b",
-  "verdict": "nemotron-3-super-120b-a12b: breaks on long plans with look-alike tool names (24-call plans). Holds on 9 of 10 capabilities tested.",
+  "verdict": "nemotron-3-super-120b-a12b: breaks on long plans with look-alike tool names (24-call plans). Holds on 10 of 11 capabilities tested.",
   "rows": [
    {
     "key": "state",
@@ -1365,6 +1446,67 @@
     "short": "step-by-step execution with values to carry"
    },
    {
+    "key": "interactive_lookalike",
+    "label": "Executes step by step when tool names look alike (sees each error)",
+    "province": "III \u00b7 Interactive execution",
+    "status": "HOLDS",
+    "headline": "Holds through 22-call plans: 17/20 pass across every tested level",
+    "boundary": null,
+    "held_through": "22-call plans",
+    "n_pass": 17,
+    "n_scored": 20,
+    "n_error": 5,
+    "ci": [
+     0.64,
+     0.948
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "unknown_tool",
+    "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
+    "cause_share": 1.0,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 12.0,
+      "label": "15-call plans",
+      "n_pass": 4,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 14.0,
+      "label": "17-call plans",
+      "n_pass": 4,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 17.0,
+      "label": "20-call plans",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 19.0,
+      "label": "22-call plans",
+      "n_pass": 4,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 22.0,
+      "label": "25-call plans",
+      "n_pass": 0,
+      "n_scored": 0,
+      "n_error": 5
+     }
+    ],
+    "note": "",
+    "short": "step-by-step execution with look-alike tool names"
+   },
+   {
     "key": "consistency",
     "label": "Gets the same task right every time (pass^k)",
     "province": "Reliability",
@@ -1615,6 +1757,28 @@
     "curve": [],
     "note": "",
     "short": "step-by-step execution with values to carry"
+   },
+   {
+    "key": "interactive_lookalike",
+    "label": "Executes step by step when tool names look alike (sees each error)",
+    "province": "III \u00b7 Interactive execution",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "step-by-step execution with look-alike tool names"
    },
    {
     "key": "consistency",

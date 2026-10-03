@@ -3356,6 +3356,50 @@ Current verdicts:
 - Ultra: degrades from 25-call plans [A] and never collapses within the
   31-call ceiling.
 
+## 2026-10-03 — FINDING (suggestive for Super, p = 0.063; mechanism for Nano, B) — feedback appears to rescue Super's identifier-binding failures; Nano's interactive frontier is set by giving up, not by binding
+
+**Question.** In single-shot planning, look-alike tool names are what break every
+tier (`unknown_tool`). When the model executes interactively and sees the error
+after a wrong name, can it repair the binding?
+
+**Runs.** Province III with `id_collisions_on` pinned ON and no value links, so
+binding is the only stressor. Nano: 7- to 19-call plans
+(`camp-interactive-lookalike-nano-001`, $0.150). Super: 15- to 31-call plans
+(`camp-interactive-lookalike-super-001`, $0.209). k = 5, native function calling.
+
+**Super: feedback appears to rescue binding (suggestive, not yet significant).**
+- Interactive 15–22-call plans: **17/20 (85%)**. Single-shot with look-alike names at
+  14–23-call plans: **57/88 (65%)**. Fisher one-sided p = 0.063.
+- **9 of 12** episodes that hit a binding error recovered and reached the goal.
+- No early stops; its 3 failures were 2 budget exhaustions and 1 early stop
+  after an error.
+- The cost cap stopped the ray at 25-call plans before its single-shot frontier
+  (24 calls) could be tested interactively. The incomplete probe was discarded,
+  as designed. So whether feedback *moves* Super's frontier is still open.
+
+**Nano: feedback helps binding, but it gives up.**
+- Interactive ray `found=True`, t* = 0.175 [0.04, 0.27] → about **9-call plans** (CI
+  ≈ 7–10). Earlier than its single-shot frontier (13 calls, 5/21), though the
+  depths do not line up exactly.
+- Overall 19/36. It recovered from a binding error in 7 of 15 errored episodes,
+  so it can read an `unknown_tool` error and correct the name.
+- But **all 17 failures are early stops** (`stopped_short`), and **9 had no error at
+  all**. Several stopped one call from the goal (BFS remaining distance 1), and 3
+  stopped before making a single call.
+- The same goal-abandonment mechanism appeared once in the value-passing run.
+  Here it dominates.
+
+**Reading.** The binding weakness looks *recoverable with feedback* for Super (the direct
+evidence, 9 of 12 errored episodes recovered, is stronger than the pass-rate
+comparison, which misses significance at p = 0.063 with n = 20) and only partly for Nano. Nano's interactive limit is persistence (holding the goal across
+many turns), a capability that single-shot planning never exposes. This is the
+first result where the two provinces disagree about a tier, and the disagreement
+is informative: Province III measures something Province II cannot.
+
+Grade: Nano mechanism B; Super pass-rate comparison C until more interactive trials. Next steps:
+- Super interactive at 24–31-call plans (≈ $0.20 more) to see whether its frontier moves.
+- A fresh-seed confirmation of Nano's abandonment rate.
+
 ## Template for new entries
 
 ```
