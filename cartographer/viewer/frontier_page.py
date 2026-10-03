@@ -44,9 +44,6 @@ _PROVINCES = list(dict.fromkeys(s.province for s in SPECS))
 
 _GRADE_WORDS = {"A": "strong", "B": "moderate", "C": "thin"}
 _SMALL_SAMPLE = 15
-# `report.frontier._cause` names the dominant cause from the first 40
-# failures (by time). Mirrored here only to say so when there were more.
-_CAUSE_SAMPLE = 40
 
 # Status -> (heat-ramp class, tiny curve glyph). The glyph is the shape of
 # the pass-rate curve the status describes, so the chip reads without
@@ -697,11 +694,10 @@ def _cause_card(row: FrontierRow, spec) -> str:
         inner = '<p class="fm-cause">No failures recorded in the trials behind this row.</p>'
     else:
         sentence = row.cause or "The dominant failure has no plain-words description yet."
-        n = _n_failures(row, spec)
+        # The share is computed over every failure in scope (row.cause_n).
+        n = row.cause_n or _n_failures(row, spec)
         scope = " at and beyond the boundary" if row.boundary else ""
-        if n is not None and n > _CAUSE_SAMPLE:
-            share = f"in {row.cause_share:.0%} of the first {_CAUSE_SAMPLE} of {n} failures{scope}"
-        elif n:
+        if n:
             share = f"in {row.cause_share:.0%} of failures ({n} failures{scope})"
         else:
             share = f"in {row.cause_share:.0%} of failures"

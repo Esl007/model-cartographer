@@ -205,7 +205,9 @@ def test_ribbon_ticks_only_what_the_row_carries(store):
     assert "&#10003;" not in _ribbon_item(page, "sample-size")  # 10 < 15: flagged, not ticked
 
 
-def test_exemplar_that_is_not_the_dominant_cause_says_so(tmp_path):
+def test_exemplar_shows_the_dominant_cause(tmp_path):
+    """frontier.py now picks an example failure of the dominant cause, so the
+    example never contradicts the cause sentence above it."""
     s = ResultsStore(tmp_path / "s.sqlite")
     recs: list = []
     _depth_level(recs, 4, 10, 0, 1)
@@ -214,7 +216,8 @@ def test_exemplar_that_is_not_the_dominant_cause_says_so(tmp_path):
     _depth_level(recs, 22, 0, 8, 4000)
     s.append_many(recs)
     page = frontier_html(s, model=M, cap="plan_length_lookalike")
-    assert "failed a different check from the dominant cause" in page
+    assert "failed a different check from the dominant cause" not in page
+    assert "unknown_tool" in page
     s.close()
 
 

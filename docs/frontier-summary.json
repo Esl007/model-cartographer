@@ -24,6 +24,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -49,6 +50,7 @@
     "cause_code": "other_wrong_answer",
     "cause": "gives a wrong answer that matches no known shortcut",
     "cause_share": 1.0,
+    "cause_n": 2,
     "exemplar": {
      "record_id": "f4ff81b319174c539e0e56469f4655ae",
      "run_id": "camp-full_map-nano-002/order",
@@ -78,12 +80,13 @@
     "p_value": null,
     "cause_code": "final_true_state",
     "cause": "answers where the object really is, not where the person believes it is",
-    "cause_share": 0.65,
+    "cause_share": 0.631578947368421,
+    "cause_n": 57,
     "exemplar": {
-     "record_id": "464c525b541b492b8d9aa84b56555b10",
-     "run_id": "camp-belief-nemotron-nano-001",
+     "record_id": "1ca1ef222dd24a6a89faf0bccfa0ccd8",
+     "run_id": "camp-full_map-nvidia-nemotron-3-nano-30b-a3b-001/belief",
      "detail": null,
-     "excerpt": "loading dock"
+     "excerpt": "print room"
     },
     "curve": [],
     "note": "",
@@ -109,6 +112,7 @@
     "cause_code": "final_true_state",
     "cause": "answers where the object really is, not where the person believes it is",
     "cause_share": 0.868421052631579,
+    "cause_n": 38,
     "exemplar": {
      "record_id": "4d1da1b45d1a4d64aa0011adbc501ef7",
      "run_id": "camp-full_map-nvidia-nemotron-3-nano-30b-a3b-001/adversarial_belief",
@@ -139,6 +143,7 @@
     "cause_code": "bad_arg",
     "cause": "passes the wrong entity to a tool",
     "cause_share": 0.6666666666666666,
+    "cause_n": 3,
     "exemplar": null,
     "curve": [
      {
@@ -200,6 +205,7 @@
     "cause_code": "unknown_tool",
     "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
     "cause_share": 0.9565217391304348,
+    "cause_n": 23,
     "exemplar": {
      "record_id": "f126ceb219f84c8e80104abb1433bbe1",
      "run_id": "camp-tool-depth-nano-003",
@@ -251,7 +257,8 @@
     "p_value": 1.2382197215884655e-11,
     "cause_code": "precondition_violation",
     "cause": "calls a real tool before the step it depends on is done",
-    "cause_share": 0.75,
+    "cause_share": 0.7166666666666667,
+    "cause_n": 60,
     "exemplar": {
      "record_id": "9f0f1ceffbdc4ef3856ec2e30ee9c455",
      "run_id": "camp-tool_bp-nano-002",
@@ -301,6 +308,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -326,6 +334,7 @@
     "cause_code": "fabricated_plan_on_unsolvable",
     "cause": "writes a plan for an impossible goal instead of declining",
     "cause_share": 1.0,
+    "cause_n": 6,
     "exemplar": {
      "record_id": "928528cfa6e4473393f647339847b347",
      "run_id": "camp-irrelevance-nano-001",
@@ -356,6 +365,7 @@
     "cause_code": "stopped_short",
     "cause": "stops acting before the goal is reached",
     "cause_share": 1.0,
+    "cause_n": 1,
     "exemplar": null,
     "curve": [
      {
@@ -367,7 +377,7 @@
      },
      {
       "value": 6.0,
-      "label": "9-call plans, 1 values to carry",
+      "label": "9-call plans, 1 value to carry",
       "n_pass": 5,
       "n_scored": 5,
       "n_error": 0
@@ -438,6 +448,7 @@
     "cause_code": "stopped_short",
     "cause": "stops acting before the goal is reached",
     "cause_share": 0.5,
+    "cause_n": 4,
     "exemplar": {
      "record_id": "67f49d91903044fea5bd46c365d5933c",
      "run_id": "camp-interactive-lookalike-nano-001",
@@ -494,6 +505,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
@@ -526,6 +538,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -551,6 +564,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -576,6 +590,7 @@
     "cause_code": "final_true_state",
     "cause": "answers where the object really is, not where the person believes it is",
     "cause_share": 0.5,
+    "cause_n": 2,
     "exemplar": {
      "record_id": "65ddb03c744541ccb79dfcc986a39c1e",
      "run_id": "camp-full_map-ultra-002/belief",
@@ -606,6 +621,7 @@
     "cause_code": "abstained",
     "cause": "answers 'unknown' when the belief can be worked out",
     "cause_share": 1.0,
+    "cause_n": 1,
     "exemplar": {
      "record_id": "7b713cba1d8b4ab09d438cf4e552d419",
      "run_id": "camp-full_map-ultra-002/adversarial_belief",
@@ -636,6 +652,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [
      {
@@ -690,6 +707,7 @@
     "cause_code": "unknown_tool",
     "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
     "cause_share": 1.0,
+    "cause_n": 10,
     "exemplar": {
      "record_id": "080e03c9a60b421db093657371c5bc3a",
      "run_id": "camp-tool-deep-ultra-001",
@@ -791,6 +809,7 @@
     "cause_code": "precondition_violation",
     "cause": "calls a real tool before the step it depends on is done",
     "cause_share": 1.0,
+    "cause_n": 5,
     "exemplar": null,
     "curve": [
      {
@@ -828,6 +847,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -853,6 +873,7 @@
     "cause_code": "fabricated_plan_on_unsolvable",
     "cause": "writes a plan for an impossible goal instead of declining",
     "cause_share": 1.0,
+    "cause_n": 3,
     "exemplar": {
      "record_id": "16a6eb20fe744dd9b9dcd49026c3f05f",
      "run_id": "camp-irrelevance-ultra-001",
@@ -880,6 +901,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -902,6 +924,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -924,6 +947,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
@@ -956,6 +980,7 @@
     "cause_code": "other_wrong_answer",
     "cause": "gives a wrong answer that matches no known shortcut",
     "cause_share": 1.0,
+    "cause_n": 4,
     "exemplar": {
      "record_id": "8ac17ceb9c094aef8a11fd34ead9b910",
      "run_id": "camp-state-nemotron-super-001",
@@ -986,6 +1011,7 @@
     "cause_code": "other_wrong_answer",
     "cause": "gives a wrong answer that matches no known shortcut",
     "cause_share": 1.0,
+    "cause_n": 1,
     "exemplar": {
      "record_id": "ff62342c7913409d8fbd5b92340c3a9a",
      "run_id": "camp-full_map-super-002/order",
@@ -1016,6 +1042,7 @@
     "cause_code": "other_wrong_answer",
     "cause": "gives a wrong answer that matches no known shortcut",
     "cause_share": 0.625,
+    "cause_n": 8,
     "exemplar": {
      "record_id": "3343716878d14e4bb6a309e986132b6f",
      "run_id": "camp-belief-nemotron-super-002",
@@ -1046,6 +1073,7 @@
     "cause_code": "abstained",
     "cause": "answers 'unknown' when the belief can be worked out",
     "cause_share": 0.875,
+    "cause_n": 8,
     "exemplar": {
      "record_id": "1c28851f8c764a39a0344063d89a831c",
      "run_id": "camp-full_map-super-002/adversarial_belief",
@@ -1076,6 +1104,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [
      {
@@ -1130,11 +1159,12 @@
     "cause_code": "unknown_tool",
     "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
     "cause_share": 0.96,
+    "cause_n": 25,
     "exemplar": {
-     "record_id": "acd37ba9ae30410595a647cfc55c5482",
+     "record_id": "3671d94b41dd471da6179c2b1e494d9f",
      "run_id": "camp-tool-deep-super-001",
-     "detail": "precondition_violation:step=1:set_depth_flag_o1",
-     "excerpt": "[ {\"tool\": \"set_flag_0\", \"args\": {\"flag\": \"flag_0\"}}, {\"tool\": \"set_depth_flag_o1\", \"args\": {\"flag\": \"depth_flag_1\"}}, {\"tool\": \"set_depth_flag_o2\", \"args\": {\"flag\": \"depth_flag_2\"}}, {\"tool\": \"set_depth_flag_o3\", \"args\": {\"flag\": \"depth_flag_3\"}}, {\"tool\": \"set_depth_flag_o4\", \"args\": {\"flag\": \"depth_flag_4\"}}, {\"tool\": \"set_dep_th_flag_5\", \"args\": {\"flag\": \"depth_flag_5\"}}, {\"tool\": \"set_dep_th_"
+     "detail": "unknown_tool:step=10:set_dep-th_flag_9",
+     "excerpt": "[ {\"tool\":\"set_flag_0\",\"args\":{\"flag\":\"flag_0\"}}, {\"tool\":\"set_dep_th_flag_0\",\"args\":{\"flag\":\"depth_flag_0\"}}, {\"tool\":\"set_dep-th_flag_1\",\"args\":{\"flag\":\"depth_flag_1\"}}, {\"tool\":\"set_dep-th_flag_2\",\"args\":{\"flag\":\"depth_flag_2\"}}, {\"tool\":\"set_depth_flag_o3\",\"args\":{\"flag\":\"depth_flag_3\"}}, {\"tool\":\"set_dep-th_flag_4\",\"args\":{\"flag\":\"depth_flag_4\"}}, {\"tool\":\"set_dep-th_flag_5\",\"args\":{\"flag\":\"d"
     },
     "curve": [
      {
@@ -1231,6 +1261,7 @@
     "cause_code": "missing_arg",
     "cause": "leaves out a required argument",
     "cause_share": 1.0,
+    "cause_n": 1,
     "exemplar": null,
     "curve": [
      {
@@ -1271,6 +1302,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [
      {
@@ -1353,6 +1385,7 @@
     "cause_code": "fabricated_plan_on_unsolvable",
     "cause": "writes a plan for an impossible goal instead of declining",
     "cause_share": 1.0,
+    "cause_n": 2,
     "exemplar": {
      "record_id": "6049f24793754dd78f467db7feb44436",
      "run_id": "camp-irrelevance-super-001",
@@ -1383,6 +1416,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [
      {
@@ -1394,7 +1428,7 @@
      },
      {
       "value": 6.0,
-      "label": "9-call plans, 1 values to carry",
+      "label": "9-call plans, 1 value to carry",
       "n_pass": 5,
       "n_scored": 5,
       "n_error": 0
@@ -1465,6 +1499,7 @@
     "cause_code": "unknown_tool",
     "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
     "cause_share": 1.0,
+    "cause_n": 3,
     "exemplar": null,
     "curve": [
      {
@@ -1523,6 +1558,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
@@ -1533,7 +1569,7 @@
  {
   "model": "openai/gpt-oss-120b",
   "name": "gpt-oss-120b",
-  "verdict": "gpt-oss-120b: holds on all 1 capabilities tested.",
+  "verdict": "gpt-oss-120b: holds on the 1 capability tested.",
   "rows": [
    {
     "key": "state",
@@ -1555,6 +1591,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1577,6 +1614,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1599,6 +1637,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1621,6 +1660,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1643,6 +1683,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1665,6 +1706,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1687,6 +1729,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1709,6 +1752,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1731,6 +1775,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1753,6 +1798,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1775,6 +1821,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "",
@@ -1797,6 +1844,7 @@
     "cause_code": null,
     "cause": null,
     "cause_share": null,
+    "cause_n": 0,
     "exemplar": null,
     "curve": [],
     "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",

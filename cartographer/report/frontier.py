@@ -124,7 +124,9 @@ def _catalog_label(value, recs) -> str:
 def _interactive_label(value, recs) -> str:
     base = _plan_len_label(value, recs)
     links = Counter(int(r.realized_dims.get("n_links", 0)) for r in recs).most_common(1)[0][0]
-    return f"{base}, {links} values to carry" if links else f"{base}, no values to carry"
+    if not links:
+        return f"{base}, no values to carry"
+    return f"{base}, {links} value{'s' if links != 1 else ''} to carry"
 
 
 @dataclass(frozen=True)
@@ -223,6 +225,7 @@ class FrontierRow:
     cause_code: str | None = None
     cause: str | None = None
     cause_share: float | None = None
+    cause_n: int = 0  # number of failures the cause share is computed over
     exemplar: dict | None = None
     curve: list[dict] = field(default_factory=list)
     note: str = ""
@@ -271,17 +274,30 @@ def _belief_cause(r) -> str:
     return classify_belief_failure(r) or "other_wrong_answer"
 
 
+def _cause_code(spec: Spec, r) -> str:
+    if spec.kind in ("belief", "adversarial_belief"):
+        return _belief_cause(r)
+    if spec.kind in ("state", "order"):
+        return "other_wrong_answer"
+    return _detail_code(r) or "unknown"
+
+
 def _cause(spec: Spec, fails: list) -> tuple[str | None, float | None]:
+    """Dominant failure cause over ALL failures in scope, and its share."""
     if not fails:
         return None, None
-    sample = fails[:40]
-    if spec.kind in ("belief", "adversarial_belief", "state", "order"):
-        codes = Counter(_belief_cause(r) if spec.kind != "order" and spec.kind != "state" else "other_wrong_answer"
-                        for r in sample)
-    else:
-        codes = Counter(_detail_code(r) or "unknown" for r in sample)
+    codes = Counter(_cause_code(spec, r) for r in fails)
     code, count = codes.most_common(1)[0]
-    return code, count / len(sample)
+    return code, count / len(fails)
+
+
+def _pick_exemplar(spec: Spec, candidates: list, code: str | None):
+    """Prefer a failure that shows the dominant cause, so the example never
+    contradicts the cause sentence printed above it."""
+    for r in candidates:
+        if code is None or _cause_code(spec, r) == code:
+            return r
+    return candidates[0] if candidates else None
 
 
 def _exemplar(rec) -> dict:
@@ -370,6 +386,7 @@ def _row_axis(spec: Spec, recs: list) -> FrontierRow:
         row.confidence = "A" if n >= 30 and ci.low >= 0.90 else ("B" if n >= 14 else "C")
         fails = [r for _, g in eligible for r in g if r.verdict == Verdict.FAIL]
         row.cause_code, row.cause_share = _cause(spec, fails)
+        row.cause_n = len(fails)
         row.cause = CAUSE_WORDS.get(row.cause_code) if row.cause_code else None
         return row
 
@@ -396,10 +413,12 @@ def _row_axis(spec: Spec, recs: list) -> FrontierRow:
         row.headline += f" (already only {first.n_pass}/{first.n_scored} at {first.label})"
     fails = [r for _, g in after for r in g if r.verdict == Verdict.FAIL]
     row.cause_code, row.cause_share = _cause(spec, fails)
+    row.cause_n = len(fails)
     row.cause = CAUSE_WORDS.get(row.cause_code) if row.cause_code else None
     boundary_fails = [r for r in next(g for l, g in eligible if l.value == bl.value) if r.verdict == Verdict.FAIL]
-    if boundary_fails:
-        row.exemplar = _exemplar(boundary_fails[0])
+    ex = _pick_exemplar(spec, boundary_fails or fails, row.cause_code)
+    if ex is not None:
+        row.exemplar = _exemplar(ex)
     return row
 
 
@@ -444,9 +463,11 @@ def _row_rate(spec: Spec, recs: list) -> FrontierRow:
             row.held_through = "tested up to " + ", ".join(maxima)
     fails = [r for r in recs if r.verdict == Verdict.FAIL]
     row.cause_code, row.cause_share = _cause(spec, fails)
+    row.cause_n = len(fails)
     row.cause = CAUSE_WORDS.get(row.cause_code) if row.cause_code else None
-    if fails:
-        row.exemplar = _exemplar(fails[0])
+    ex = _pick_exemplar(spec, fails, row.cause_code)
+    if ex is not None:
+        row.exemplar = _exemplar(ex)
     return row
 
 
@@ -463,8 +484,10 @@ def _verdict(name: str, rows: list[FrontierRow]) -> str:
     for r in degrades:
         parts.append(f"slips on {r.short}" + (f" ({r.boundary})" if r.boundary else ""))
     if not parts:
-        return f"{name}: holds on all {len(tested)} capabilities tested."
-    return f"{name}: " + "; ".join(parts) + f". Holds on {len(holds)} of {len(tested)} capabilities tested."
+        noun = "capability" if len(tested) == 1 else "capabilities"
+        return f"{name}: holds on {'the 1' if len(tested) == 1 else 'all ' + str(len(tested))} {noun} tested."
+    noun = "capability" if len(tested) == 1 else "capabilities"
+    return f"{name}: " + "; ".join(parts) + f". Holds on {len(holds)} of {len(tested)} {noun} tested."
 
 
 def _matches(spec: Spec, r) -> bool:
