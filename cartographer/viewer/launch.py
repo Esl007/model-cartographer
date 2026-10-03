@@ -49,6 +49,7 @@ from ..exec.evaluator import (
     run_adversarial_belief_campaign,
     run_belief_campaign,
     run_breaking_point_campaign,
+    run_code_breaking_point_campaign,
     run_full_map_campaign,
     run_order_campaign,
     run_state_campaign,
@@ -79,6 +80,7 @@ CAMPAIGN_PRESETS: dict[str, dict[str, float]] = {
     "adversarial_belief": {"budget": 300, "cost_cap": 1.0},
     "tool_planning": {"budget": 400, "cost_cap": 0.75},
     "tool_breaking_point": {"budget": 250, "cost_cap": 0.5},
+    "code_tracing": {"budget": 200, "cost_cap": 0.5},
     "full_map": {"budget": 600, "cost_cap": 2.0},
 }
 
@@ -185,6 +187,21 @@ CAMPAIGN_DESCRIPTIONS: dict[str, dict[str, object]] = {
         "typical_duration": "10-25 minutes",
         "new": True,
     },
+    "code_tracing": {
+        "query_kind": "code_trace",
+        "summary": (
+            "Province IV. Shows the model a generated Python program and asks for a "
+            "variable's final value, escalating program length together with "
+            "look-alike variable names (total / totl). Ground truth comes from "
+            "the project's own interpreter, never from running model output; a "
+            "wrong answer is matched to the shallow reading behind it "
+            "(lists copied on assignment, closures bound early, range "
+            "inclusive, a look-alike variable read instead)."
+        ),
+        "typical_cost": "~$0.05-0.45",
+        "typical_duration": "10-30 minutes",
+        "new": True,
+    },
     "full_map": {
         "query_kind": "state, order, belief, adversarial_belief, breaking_point",
         "summary": (
@@ -208,6 +225,7 @@ _RUNNERS: dict[str, Callable] = {
     "adversarial_belief": run_adversarial_belief_campaign,
     "tool_planning": run_tool_planning_campaign,
     "tool_breaking_point": run_tool_breaking_point_campaign,
+    "code_tracing": run_code_breaking_point_campaign,
     "full_map": run_full_map_campaign,
 }
 

@@ -38,6 +38,13 @@ from ..toolworld.measure import measure as tool_measure
 from ..toolworld.render import render as tool_render
 from ..toolworld.search import search_adversarial_seeds as tool_search_adversarial_seeds
 from ..toolworld.verify import verify_plan
+from ..codeworld.generate import GenerationFailed as CodeGenerationFailed
+from ..codeworld.generate import generate as code_generate
+from ..codeworld.measure import measure as code_measure
+from ..codeworld.model import TRAP_KEYS as CODE_TRAP_KEYS
+from ..codeworld.model import CodeDimParams
+from ..codeworld.render import render as code_render
+from ..codeworld.verify import verify_answer as code_verify_answer
 from .client import Client
 from .pricing import cost_usd
 
@@ -1915,6 +1922,242 @@ def run_tool_breaking_point_campaign(
     if evaluator.capped:
         bp_note += ";cost_cap_hit"
     bp.note = f"{bp.note}; {bp_note}" if bp.note else bp_note
+    return bp
+
+
+# ---------------------------------------------------------------------------
+# CODE-TRACING province (Province IV, docs/province-iv-spec.md): the model
+# reads a generated Python program and predicts a variable's final value.
+# Ground truth from `codeworld.interpret`, never from executing text; a wrong
+# answer is matched against the foil readings (`codeworld.foils`). Emits
+# `kind=code_trace` so /findings, /atlas and frontier_summary pick it up.
+# ---------------------------------------------------------------------------
+
+_CODE_INT_KEYS = {"n_statements", "max_nesting", "n_variables"}
+_CODE_FLOAT_KEYS = {"distractor_fraction", "identifier_confusability"}
+_CODE_BOOL_KEYS = set(CODE_TRAP_KEYS)
+_CODE_KNOWN_KEYS = _CODE_INT_KEYS | _CODE_FLOAT_KEYS | _CODE_BOOL_KEYS
+_CODE_LIMITS = {
+    "n_statements": (2, 80), "max_nesting": (0, 3), "n_variables": (2, 12),
+    "distractor_fraction": (0.0, 0.6), "identifier_confusability": (0.0, 1.0),
+}
+
+
+def _default_code_base() -> CodeDimParams:
+    return CodeDimParams(n_statements=6, max_nesting=1, n_variables=3)
+
+
+def _apply_code_config(base: CodeDimParams, config: dict[str, float]) -> CodeDimParams:
+    """Config -> params. Trap toggles use the same 0.5 threshold as
+    `_apply_tool_trap_config`; scalars are clamped into the generator's
+    valid range. Unknown keys raise, like `_apply_tool_config`."""
+    overrides: dict[str, object] = {}
+    for key, value in config.items():
+        if key in _CODE_BOOL_KEYS:
+            overrides[key] = value >= 0.5
+        elif key in _CODE_INT_KEYS or key in _CODE_FLOAT_KEYS:
+            lo, hi = _CODE_LIMITS[key]
+            v = min(max(value, lo), hi)
+            overrides[key] = int(round(v)) if key in _CODE_INT_KEYS else float(v)
+        else:
+            raise ValueError(f"unknown code config key: {key!r}")
+    return replace(base, **overrides)
+
+
+def build_code_task(config: dict[str, float], trial_seed: int, base: CodeDimParams | None = None):
+    """(params, program, rendered, task_seed) for one trial. Deterministic in
+    (config, trial_seed); raises `GenerationFailed` (recorded as ERROR)."""
+    params = _apply_code_config(base if base is not None else _default_code_base(),
+                                {k: v for k, v in config.items() if k in _CODE_KNOWN_KEYS})
+    seed = _task_seed(config, trial_seed)
+    program = code_generate(params, seed)
+    return params, program, code_render(program, seed), seed
+
+
+def _code_latent(params: CodeDimParams) -> dict[str, float]:
+    return {
+        "n_statements": float(params.n_statements),
+        "max_nesting": float(params.max_nesting),
+        "n_variables": float(params.n_variables),
+        "distractor_fraction": float(params.distractor_fraction),
+        "identifier_confusability": float(params.identifier_confusability),
+        **{k: float(getattr(params, k)) for k in CODE_TRAP_KEYS},
+    }
+
+
+class CodeTraceEvaluator:
+    """A `find_breaking_point` `Evaluator` over generated programs, with the
+    same cost-cap / cancel / thread-safety / token-budget discipline as
+    `ToolBreakingPointEvaluator`. Config keys: `CodeDimParams` scalars plus
+    the six trap toggles as 0/1. Persists `kind=code_trace` records."""
+
+    def __init__(
+        self,
+        client: Client,
+        model: str,
+        store: ResultsStore,
+        run_id: str,
+        cost_cap_usd: float,
+        base: CodeDimParams | None = None,
+        max_tokens: int | None = None,
+        max_tokens_retry: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        self.client = client
+        self.model = model
+        self.store = store
+        self.run_id = run_id
+        self.cost_cap_usd = cost_cap_usd
+        self.base = base if base is not None else _default_code_base()
+        default_max_tokens, default_max_tokens_retry = default_token_budget(model)
+        self.max_tokens = max_tokens if max_tokens is not None else default_max_tokens
+        self.max_tokens_retry = (
+            max_tokens_retry if max_tokens_retry is not None else default_max_tokens_retry
+        )
+        if self.max_tokens_retry <= self.max_tokens:
+            self.max_tokens_retry = self.max_tokens * 2
+        self.cancel_event = cancel_event
+        self.spent_usd = 0.0
+        self.call_count = 0
+        self.error_count = 0
+        self.capped = False
+        self.cancelled = False
+        self._lock = threading.Lock()
+
+    def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
+        params = _apply_code_config(self.base, {k: v for k, v in config.items() if k in _CODE_KNOWN_KEYS})
+        seed = _task_seed(config, trial_seed)
+        with self._lock:
+            reason = None
+            if self.spent_usd >= self.cost_cap_usd:
+                self.capped, reason = True, "cost_capped"
+            elif self.cancel_event is not None and self.cancel_event.is_set():
+                self.cancelled, reason = True, "cancelled"
+            if reason:
+                self._record_error(params, seed, trial_seed, reason)
+                return False
+        try:
+            _, program, rendered, _ = build_code_task(config, trial_seed, self.base)
+        except CodeGenerationFailed:
+            with self._lock:
+                self._record_error(params, seed, trial_seed, "generation_failed")
+            return False
+
+        realized = code_measure(program)
+        traps = ";".join(f"{k}={int(getattr(params, k))}" for k in CODE_TRAP_KEYS)
+        detail = (
+            f"kind=code_trace;campaign=1;query={program.query.kind}"
+        )
+        result = self.client.chat(
+            model=self.model, prompt=rendered.prompt,
+            max_tokens=self.max_tokens, max_tokens_retry=self.max_tokens_retry,
+        )
+        cost = cost_usd(self.model, result.tokens_in, result.tokens_out)
+        with self._lock:
+            self.call_count += 1
+            self.spent_usd += cost
+        if result.error is not None:
+            retry = self.client.chat(
+                model=self.model, prompt=rendered.prompt,
+                max_tokens=self.max_tokens, max_tokens_retry=self.max_tokens_retry,
+            )
+            retry_cost = cost_usd(self.model, retry.tokens_in, retry.tokens_out)
+            cost += retry_cost
+            with self._lock:
+                self.call_count += 1
+                self.spent_usd += retry_cost
+            result = retry
+
+        if result.error is not None:
+            verdict = Verdict.ERROR
+            detail += f";detail=api_error;error={result.error}"
+        elif result.finish_reason == "length":
+            # a truncated answer says nothing about the model (Sep 25 retraction)
+            verdict = Verdict.ERROR
+            detail += ";detail=cap_hit;cap_hit=1" + (";retry_exhausted=1" if result.retried else "")
+        else:
+            tv = code_verify_answer(result.text, program, rendered)
+            verdict = tv.verdict
+            detail += f";detail={tv.detail}"
+            realized["n_foil_matches"] = float(len(tv.foil_matches))
+            if tv.normalised_tuple:
+                detail += ";normalised=tuple"
+        detail += (
+            f";n_stmts={int(realized['n_statements'])};trace_len={int(realized['trace_length'])}"
+            f";traps={traps};confusability={params.identifier_confusability:g}"
+        )
+        latent = _code_latent(params)
+        record = ExperimentRecord(
+            run_id=self.run_id, model_name=self.model, latent_params=latent,
+            realized_dims={**realized, **{k: latent[k] for k in CODE_TRAP_KEYS}},
+            render_mode=RenderMode.TEMPLATE, task_seed=seed, trial_seed=trial_seed, rendering_seed=seed,
+            prompt_text=rendered.prompt, response_text=result.text, verdict=verdict, verifier_detail=detail,
+            tokens_in=result.tokens_in, tokens_out=result.tokens_out, cost_usd=cost,
+            latency_ms=result.latency_ms, reasoning_text=result.reasoning, finish_reason=result.finish_reason,
+        )
+        with self._lock:
+            if verdict == Verdict.ERROR:
+                self.error_count += 1
+            self.store.append(record)
+            if self.spent_usd >= self.cost_cap_usd:
+                self.capped = True
+        return verdict == Verdict.PASS
+
+    def _record_error(self, params: CodeDimParams, seed: int, trial_seed: int, reason: str) -> None:
+        self.error_count += 1
+        self.store.append(ExperimentRecord(
+            run_id=self.run_id, model_name=self.model, latent_params=_code_latent(params), realized_dims={},
+            render_mode=RenderMode.TEMPLATE, task_seed=seed, trial_seed=trial_seed, rendering_seed=seed,
+            prompt_text=None, response_text=None, verdict=Verdict.ERROR,
+            verifier_detail=f"kind=code_trace;campaign=1;{reason}=1", tokens_in=0, tokens_out=0,
+            cost_usd=0.0, latency_ms=0.0, reasoning_text=None, finish_reason=None,
+        ))
+
+
+def default_code_lookalike_ray() -> EscalationRay:
+    """H1, the cross-province test: program length together with look-alike
+    variable names. Does the identifier-binding weakness that broke every
+    tier on tool names show up on variable names?"""
+    return EscalationRay(dims=(RayDim("n_statements", 6, 40, True),
+                               RayDim("identifier_confusability", 0.0, 1.0, False)))
+
+
+def default_code_trap_ray() -> EscalationRay:
+    """H2, structure: length plus the six semantic traps, all switching on at
+    t >= 0.5. Decompose at the frontier names the trap that carries a break."""
+    return EscalationRay(dims=(RayDim("n_statements", 6, 30, True),
+                               *(RayDim(k, 0, 1, True) for k in CODE_TRAP_KEYS)))
+
+
+def default_code_length_ray() -> EscalationRay:
+    """Control: magnitude only -- longer, more deeply nested programs, no
+    traps, descriptive names."""
+    return EscalationRay(dims=(RayDim("n_statements", 6, 60, True), RayDim("max_nesting", 0, 3, True)))
+
+
+def run_code_breaking_point_campaign(
+    client: Client,
+    store: ResultsStore,
+    run_id: str,
+    model: str,
+    ray: EscalationRay | None = None,
+    budget: int = 200,
+    cost_cap: float = 0.5,
+    k_trials: int = 7,
+    parallelism: int = 4,
+    max_tokens: int | None = None,
+    cancel_event: threading.Event | None = None,
+    verify: str = "auto",
+) -> BreakingPoint:
+    """Escalation over generated programs; default ray is the look-alike
+    names ray (H1). `verify` is accepted for /launch's generic kwarg
+    forwarding and unused (FAILs are deterministic interpreter outcomes)."""
+    evaluator = CodeTraceEvaluator(client=client, model=model, store=store, run_id=run_id,
+                                   cost_cap_usd=cost_cap, max_tokens=max_tokens, cancel_event=cancel_event)
+    bp = find_breaking_point(evaluator, ray if ray is not None else default_code_lookalike_ray(),
+                             budget=budget, k_trials=k_trials, parallelism=parallelism)
+    note = f"spent=${evaluator.spent_usd:.4f}" + (";cost_cap_hit" if evaluator.capped else "")
+    bp.note = f"{bp.note}; {note}" if bp.note else note
     return bp
 
 

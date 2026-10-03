@@ -75,6 +75,19 @@ CAUSE_WORDS = {
     "most_frequent_location": "answers the most frequently mentioned place",
     "abstained": "answers 'unknown' when the belief can be worked out",
     "other_wrong_answer": "gives a wrong answer that matches no known shortcut",
+    # code tracing (codeworld.verify)
+    "confused_identifier": "reports the value of a look-alike variable instead of the one asked about",
+    "foil_value_semantics": "treats `b = a` as copying a list, so changes through one name are missed",
+    "foil_early_binding": "reads a function's outside variable as it was when defined, not when called",
+    "foil_flat_scope": "lets a function's local variable overwrite the global with the same name",
+    "foil_inclusive_range": "counts `range(n)` as including n",
+    "foil_truncating_modulo": "rounds `%` / `//` toward zero for negative numbers",
+    "foil_fresh_default": "treats a list default argument as fresh on every call",
+    "foil_all_branches": "runs every branch of an if, ignoring the condition",
+    "foil_loop_once": "runs a loop body only once",
+    "wrong_value": "gives a wrong value that matches no known misreading",
+    "malformed_answer": "does not give a usable answer",
+    "empty_answer": "gives no answer",
 }
 
 
@@ -119,6 +132,23 @@ def _traps_label(value, recs) -> str:
 def _catalog_label(value, recs) -> str:
     sizes = Counter(int(r.realized_dims.get("catalog_size", value + 6)) for r in recs)
     return f"{sizes.most_common(1)[0][0]}-tool catalogs"
+
+
+def _code_len_label(value, recs) -> str:
+    lens = Counter(int(r.realized_dims.get("n_statements", value)) for r in recs)
+    return f"{lens.most_common(1)[0][0]}-statement programs"
+
+
+_CODE_TRAP_KEYS = ("aliasing_on", "late_binding_on", "shadowing_on", "inclusive_range_trap_on",
+                   "negative_modulo_on", "mutable_default_on")
+
+
+def _code_traps_on(r) -> float:
+    return float(sum(1 for k in _CODE_TRAP_KEYS if r.latent_params.get(k, 0.0) >= 0.5))
+
+
+def _code_traps_label(value, recs) -> str:
+    return f"{int(value)} of 6 traps active"
 
 
 def _interactive_label(value, recs) -> str:
@@ -186,6 +216,14 @@ SPECS: tuple[Spec, ...] = (
     Spec("interactive_fault", "Recovers when a tool call fails mid-plan (transient error, retry works)",
          "recovering from a failed call", "III · Interactive execution", "interactive", "axis",
          runs=(r"^camp-interactive-fault-",), axis=_latent("plan_depth"), axis_label=_interactive_label),
+    Spec("code_lookalike", "Traces a program when variable names look alike",
+         "code with look-alike variable names", "IV · Code tracing", "code_trace", "axis",
+         runs=(r"^camp-code-lookalike-",),
+         where=lambda r: r.latent_params.get("identifier_confusability", 0.0) >= 0.5,
+         axis=_latent("n_statements"), axis_label=_code_len_label),
+    Spec("code_traps", "Traces a program through semantic traps (aliasing, closures, off-by-one, modulo, defaults)",
+         "semantic traps in code", "IV · Code tracing", "code_trace", "axis",
+         runs=(r"^camp-code-traps-",), axis=_code_traps_on, axis_label=_code_traps_label),
     Spec("consistency", "Gets the same task right every time (pass^k)", "consistency",
          "Reliability", None, "absent",
          note="Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet."),
@@ -277,7 +315,20 @@ def _belief_cause(r) -> str:
     return classify_belief_failure(r) or "other_wrong_answer"
 
 
+def _code_cause(r) -> str:
+    """`foil:value_semantics,early_binding` -> `foil_value_semantics` (the first
+    matching reading); `confused_identifier:totl+foil:...` -> `confused_identifier`."""
+    for part in (r.verifier_detail or "").split(";"):
+        if part.startswith("detail="):
+            first = part[len("detail="):].split("+", 1)[0]
+            code, _, rest = first.partition(":")
+            return f"foil_{rest.split(',', 1)[0]}" if code == "foil" and rest else (code or "unknown")
+    return "unknown"
+
+
 def _cause_code(spec: Spec, r) -> str:
+    if spec.kind == "code_trace":
+        return _code_cause(r)
     if spec.kind in ("belief", "adversarial_belief"):
         return _belief_cause(r)
     if spec.kind in ("state", "order"):
