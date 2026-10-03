@@ -37,11 +37,14 @@ def run_episode(
     temperature: float = 0.0,
     cost_fn: Callable[[str, int, int], float] | None = None,
     may_continue: Callable[[float], bool] | None = None,
+    retry_max_tokens: int | None = 32000,
 ) -> EpisodeResult:
     """Run until the goal is reached, the model stops calling tools, the
     call budget is spent, or an infrastructure problem ends the episode.
     `may_continue(cost_so_far)` is checked before every turn so a campaign's
-    cost cap binds mid-episode, not only between episodes."""
+    cost cap binds mid-episode, not only between episodes. A turn truncated
+    at `max_tokens` is re-issued once at `retry_max_tokens` (the single-shot
+    evaluators' 16000/32000 policy) before the episode is called `cap_hit`."""
     messages = env.opening_messages()
     tools = env.tools_schema()
     t_in = t_out = 0
@@ -52,13 +55,21 @@ def run_episode(
         if may_continue is not None and not may_continue(cost):
             outcome = "cost_capped"
             break
-        r = client.chat_turn(model, messages, tools, max_tokens=max_tokens, temperature=temperature)
+        caps = [max_tokens]
+        if retry_max_tokens and retry_max_tokens > max_tokens:
+            caps.append(retry_max_tokens)
+        for cap in caps:
+            r = client.chat_turn(model, messages, tools, max_tokens=cap, temperature=temperature)
+            t_in += r.tokens_in
+            t_out += r.tokens_out
+            latency += r.latency_ms
+            if cost_fn is not None:
+                cost += cost_fn(model, r.tokens_in, r.tokens_out)
+            if r.error is not None or r.finish_reason != "length":
+                break
+            if may_continue is not None and not may_continue(cost):
+                break
         turns += 1
-        t_in += r.tokens_in
-        t_out += r.tokens_out
-        latency += r.latency_ms
-        if cost_fn is not None:
-            cost += cost_fn(model, r.tokens_in, r.tokens_out)
         finish = r.finish_reason
         if r.error is not None:
             outcome, error = "api_error", r.error

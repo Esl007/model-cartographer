@@ -168,6 +168,36 @@ def test_cost_cap_binds_mid_episode():
     assert res.outcome == "cost_capped" and res.turns == 2
 
 
+class _Truncating(ScriptedAgent):
+    """Every turn below `need` tokens is cut off with finish_reason=length."""
+
+    def __init__(self, envs, need):
+        super().__init__(envs)
+        self.need, self.caps = need, []
+
+    def chat_turn(self, model, messages, tools=None, max_tokens=0, temperature=0.0):
+        self.caps.append(max_tokens)
+        if max_tokens < self.need:
+            return ToolChatResult(message={"content": ""}, tool_calls=(), text="", tokens_in=100,
+                                  tokens_out=max_tokens, latency_ms=1.0, finish_reason="length")
+        return super().chat_turn(model, messages, tools, max_tokens, temperature)
+
+
+def test_truncated_turn_is_retried_at_the_higher_cap():
+    env = InteractiveEnv(_world(4, 1), 1, InteractiveSpec())
+    agent = _Truncating([env], need=20000)
+    res = run_episode(agent, "m", env, max_tokens=16000, retry_max_tokens=32000)
+    assert res.outcome == "goal_reached"
+    assert agent.caps[:2] == [16000, 32000]
+    assert res.tokens_out >= 16000  # the truncated attempt is still counted
+
+
+def test_turn_truncated_even_at_the_retry_cap_is_cap_hit():
+    env = InteractiveEnv(_world(4, 1), 1, InteractiveSpec())
+    res = run_episode(_Truncating([env], need=99999), "m", env, max_tokens=16000, retry_max_tokens=32000)
+    assert res.outcome == "cap_hit" and res.turns == 1
+
+
 # --- evaluator + escalation ----------------------------------------------------
 
 

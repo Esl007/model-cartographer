@@ -3400,6 +3400,57 @@ Grade: Nano mechanism B; Super pass-rate comparison C until more interactive tri
 - Super interactive at 24–31-call plans (≈ $0.20 more) to see whether its frontier moves.
 - A fresh-seed confirmation of Nano's abandonment rate.
 
+## 2026-10-03 — FINDINGS (3 confirmed by fresh seeds) + FIX — Province III finished for Nano and Super; Ultra unmeasured (per-turn token cap)
+
+Eight runs in parallel, each with its own hard cost cap ($1.39 tracked in total; Ultra
+overshot its $0.30 cap to $0.43 because 3 episodes were already in flight).
+
+**Error recovery (`camp-interactive-fault-{nano,super}-001`).** E17's ray (plan depth 4 → 16
+× value links 0 → 1), with call number 3 → 9 failing once with "temporarily
+unavailable; nothing changed; retry", so the fault lands mid-plan.
+- Super: 33/33 scored, every one after the fault fired. The ray reached 18-call
+  plans before the cost cap.
+- Nano: the fault fired in 21 scored episodes and 20 reached the goal. The one
+  fault-related failure stopped early (9 calls made, 11 optimal) after the fault and a bad ticket.
+  Its other 2 failures were early stops *before* the fault fired (0 and 2 calls made).
+- `frontier_summary` shows Nano "DEGRADES at 11-call plans" (3/5) on this row, grade C. The cause is
+  `stopped_short`, i.e. abandonment, not the fault. Versus E17 at the same levels
+  (25/25): p = 0.10, not significant.
+- **Reading:** transient-failure recovery is not a weakness of either tier in this
+  range. Grade B (one run per tier).
+
+**Super past its single-shot frontier (`camp-interactive-lookalike-super-002`).** Look-alike
+names, 23- to 25-call plans: **13/14**. Single-shot planning on the same plan lengths
+gets **15/42** (p = 0.0002, Fisher one-sided). 11 of 12 episodes that hit an error recovered.
+The single failure exhausted its call budget after 36 errors. The cost cap stopped the ray at
+25-call plans, so how far feedback moves the frontier is still open.
+
+**Ultra (`camp-interactive-lookalike-ultra-001`): no measurement.** 7 episodes ran; each
+ended on a turn that hit the 16,000-token per-turn cap (`finish_reason=length`, 16k–33k
+output tokens per episode, after 1–11 calls). 3 never started (cost cap). All 10 are
+ERROR, not FAIL. Before truncating, Ultra had made 1–10 errors in 6 of the 7 episodes
+(`precondition_violation`, `unknown_tool`). That is an observation, not a rate.
+- **Fix:** `run_episode` now re-issues a truncated turn once at 32,000 tokens (the
+  single-shot 16k/32k policy) before calling it `cap_hit`. Two offline tests added.
+- **Re-run not launched.** Ultra at 25-call plans is roughly $0.3–0.5 per episode with
+  the retry, so 10 episodes is ≈ $3–5 tracked. That needs approval.
+
+**Fresh-seed confirmations** (fixed configurations, trial seeds 500,000+, so none of
+these worlds had been seen before):
+
+| finding | fresh-seed result | verdict |
+|---|---|---|
+| F23 value passing is not a bottleneck | 19-call plans, 16 values to carry: Super 8/8, Nano 7/8; 0 bad tickets. Nano's failure stopped before its first call | **replicates** |
+| F24 feedback rescues Super's binding | 18-call plans with look-alike names: 17/17, 9 of them after an error (single-shot at 18 calls: 16/22, p = 0.023) | **replicates**; was p = 0.063 |
+| F25 Nano gives up early | 9-call plans with look-alike names: 10/15; all 5 failures early stops, 3 with no error (2 made no call at all) | **replicates** |
+
+**Where Province III stands.**
+- **Done for Nano and Super:** execution, value passing, look-alike names and error recovery, each with a frontier row.
+- **The headline:** the two provinces disagree, and the disagreement is the finding.
+  - Super breaks at 24-call plans single-shot but holds there when it can see errors.
+  - Nano can carry values and retry faults, but abandons the task, sometimes before it starts.
+- **Not done:** Ultra, and the native vs prompt-JSON comparison.
+
 ## Template for new entries
 
 ```

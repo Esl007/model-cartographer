@@ -2,7 +2,7 @@
  {
   "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
   "name": "NVIDIA-Nemotron-3-Nano-30B-A3B",
-  "verdict": "NVIDIA-Nemotron-3-Nano-30B-A3B: breaks on long plans with look-alike tool names (13-call plans); breaks on step-by-step execution with look-alike tool names (11-call plans); slips on belief tracking; slips on misleading stories; slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks. Holds on 4 of 10 capabilities tested.",
+  "verdict": "NVIDIA-Nemotron-3-Nano-30B-A3B: breaks on long plans with look-alike tool names (13-call plans); breaks on step-by-step execution with look-alike tool names (11-call plans); slips on belief tracking; slips on misleading stories; slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks; slips on recovering from a failed call (11-call plans, 2 values to carry). Holds on 4 of 11 capabilities tested.",
   "rows": [
    {
     "key": "state",
@@ -350,22 +350,22 @@
     "label": "Executes a plan step by step, carrying values between calls",
     "province": "III \u00b7 Interactive execution",
     "status": "HOLDS",
-    "headline": "Holds through 18-call plans, 14 values to carry: 34/35 pass across every tested level",
+    "headline": "Holds through 19-call plans, 16 values to carry: 43/45 pass across every tested level",
     "boundary": null,
-    "held_through": "18-call plans, 14 values to carry",
-    "n_pass": 34,
-    "n_scored": 35,
+    "held_through": "19-call plans, 16 values to carry",
+    "n_pass": 43,
+    "n_scored": 45,
     "n_error": 3,
     "ci": [
-     0.855,
-     0.995
+     0.852,
+     0.988
     ],
     "confidence": "B",
     "p_value": null,
     "cause_code": "stopped_short",
     "cause": "stops acting before the goal is reached",
     "cause_share": 1.0,
-    "cause_n": 1,
+    "cause_n": 2,
     "exemplar": null,
     "curve": [
      {
@@ -420,8 +420,8 @@
      {
       "value": 16.0,
       "label": "19-call plans, 16 values to carry",
-      "n_pass": 2,
-      "n_scored": 2,
+      "n_pass": 9,
+      "n_scored": 10,
       "n_error": 3
      }
     ],
@@ -466,8 +466,8 @@
      {
       "value": 6.0,
       "label": "9-call plans",
-      "n_pass": 12,
-      "n_scored": 21,
+      "n_pass": 22,
+      "n_scored": 36,
       "n_error": 4
      },
      {
@@ -487,6 +487,73 @@
     ],
     "note": "",
     "short": "step-by-step execution with look-alike tool names"
+   },
+   {
+    "key": "interactive_fault",
+    "label": "Recovers when a tool call fails mid-plan (transient error, retry works)",
+    "province": "III \u00b7 Interactive execution",
+    "status": "DEGRADES",
+    "headline": "Degrades at 11-call plans, 2 values to carry: 3/5 pass (was 5/5 at 9-call plans, 1 value to carry)",
+    "boundary": "11-call plans, 2 values to carry",
+    "held_through": "9-call plans, 1 value to carry",
+    "n_pass": 3,
+    "n_scored": 5,
+    "n_error": 0,
+    "ci": [
+     0.231,
+     0.882
+    ],
+    "confidence": "C",
+    "p_value": 0.10526315789473684,
+    "cause_code": "stopped_short",
+    "cause": "stops acting before the goal is reached",
+    "cause_share": 0.6666666666666666,
+    "cause_n": 3,
+    "exemplar": {
+     "record_id": "a31d0d4015bf470a967f7de4dedd11ee",
+     "run_id": "camp-interactive-fault-nano-001",
+     "detail": "stopped_short",
+     "excerpt": "[]"
+    },
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans, no values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans, 1 value to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans, 2 values to carry",
+      "n_pass": 3,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans, 4 values to carry",
+      "n_pass": 4,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans, 7 values to carry",
+      "n_pass": 3,
+      "n_scored": 3,
+      "n_error": 2
+     }
+    ],
+    "note": "",
+    "short": "recovering from a failed call"
    },
    {
     "key": "consistency",
@@ -912,6 +979,37 @@
     "label": "Executes step by step when tool names look alike (sees each error)",
     "province": "III \u00b7 Interactive execution",
     "status": "NOT TESTED",
+    "headline": "Too few trials to call",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 22.0,
+      "label": "25-call plans",
+      "n_pass": 0,
+      "n_scored": 0,
+      "n_error": 10
+     }
+    ],
+    "note": "",
+    "short": "step-by-step execution with look-alike tool names"
+   },
+   {
+    "key": "interactive_fault",
+    "label": "Recovers when a tool call fails mid-plan (transient error, retry works)",
+    "province": "III \u00b7 Interactive execution",
+    "status": "NOT TESTED",
     "headline": "Not tested yet",
     "boundary": null,
     "held_through": null,
@@ -928,7 +1026,7 @@
     "exemplar": null,
     "curve": [],
     "note": "",
-    "short": "step-by-step execution with look-alike tool names"
+    "short": "recovering from a failed call"
    },
    {
     "key": "consistency",
@@ -958,7 +1056,7 @@
  {
   "model": "nvidia/nemotron-3-super-120b-a12b",
   "name": "nemotron-3-super-120b-a12b",
-  "verdict": "nemotron-3-super-120b-a12b: breaks on long plans with look-alike tool names (24-call plans). Holds on 10 of 11 capabilities tested.",
+  "verdict": "nemotron-3-super-120b-a12b: breaks on long plans with look-alike tool names (24-call plans). Holds on 11 of 12 capabilities tested.",
   "rows": [
    {
     "key": "state",
@@ -1401,14 +1499,14 @@
     "label": "Executes a plan step by step, carrying values between calls",
     "province": "III \u00b7 Interactive execution",
     "status": "HOLDS",
-    "headline": "Holds through 19-call plans, 16 values to carry: 45/45 pass across every tested level",
+    "headline": "Holds through 19-call plans, 16 values to carry: 53/53 pass across every tested level",
     "boundary": null,
     "held_through": "19-call plans, 16 values to carry",
-    "n_pass": 45,
-    "n_scored": 45,
+    "n_pass": 53,
+    "n_scored": 53,
     "n_error": 0,
     "ci": [
-     0.921,
+     0.932,
      1.0
     ],
     "confidence": "A",
@@ -1471,8 +1569,8 @@
      {
       "value": 16.0,
       "label": "19-call plans, 16 values to carry",
-      "n_pass": 5,
-      "n_scored": 5,
+      "n_pass": 13,
+      "n_scored": 13,
       "n_error": 0
      }
     ],
@@ -1484,22 +1582,22 @@
     "label": "Executes step by step when tool names look alike (sees each error)",
     "province": "III \u00b7 Interactive execution",
     "status": "HOLDS",
-    "headline": "Holds through 22-call plans: 17/20 pass across every tested level",
+    "headline": "Holds through 24-call plans: 43/47 pass across every tested level",
     "boundary": null,
-    "held_through": "22-call plans",
-    "n_pass": 17,
-    "n_scored": 20,
-    "n_error": 5,
+    "held_through": "24-call plans",
+    "n_pass": 43,
+    "n_scored": 47,
+    "n_error": 9,
     "ci": [
-     0.64,
-     0.948
+     0.801,
+     0.966
     ],
     "confidence": "B",
     "p_value": null,
     "cause_code": "unknown_tool",
     "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
-    "cause_share": 1.0,
-    "cause_n": 3,
+    "cause_share": 0.75,
+    "cause_n": 4,
     "exemplar": null,
     "curve": [
      {
@@ -1517,6 +1615,13 @@
       "n_error": 0
      },
      {
+      "value": 15.0,
+      "label": "18-call plans",
+      "n_pass": 17,
+      "n_scored": 17,
+      "n_error": 3
+     },
+     {
       "value": 17.0,
       "label": "20-call plans",
       "n_pass": 5,
@@ -1531,15 +1636,105 @@
       "n_error": 0
      },
      {
+      "value": 20.0,
+      "label": "23-call plans",
+      "n_pass": 4,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 21.0,
+      "label": "24-call plans",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
       "value": 22.0,
       "label": "25-call plans",
-      "n_pass": 0,
-      "n_scored": 0,
-      "n_error": 5
+      "n_pass": 4,
+      "n_scored": 4,
+      "n_error": 6
      }
     ],
     "note": "",
     "short": "step-by-step execution with look-alike tool names"
+   },
+   {
+    "key": "interactive_fault",
+    "label": "Recovers when a tool call fails mid-plan (transient error, retry works)",
+    "province": "III \u00b7 Interactive execution",
+    "status": "HOLDS",
+    "headline": "Holds through 16-call plans, 10 values to carry: 30/30 pass across every tested level",
+    "boundary": null,
+    "held_through": "16-call plans, 10 values to carry",
+    "n_pass": 30,
+    "n_scored": 30,
+    "n_error": 2,
+    "ci": [
+     0.886,
+     1.0
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans, no values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans, 1 value to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans, 2 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans, 4 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans, 7 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 13.0,
+      "label": "16-call plans, 10 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 15.0,
+      "label": "18-call plans, 14 values to carry",
+      "n_pass": 3,
+      "n_scored": 3,
+      "n_error": 2
+     }
+    ],
+    "note": "",
+    "short": "recovering from a failed call"
    },
    {
     "key": "consistency",
@@ -1826,6 +2021,29 @@
     "curve": [],
     "note": "",
     "short": "step-by-step execution with look-alike tool names"
+   },
+   {
+    "key": "interactive_fault",
+    "label": "Recovers when a tool call fails mid-plan (transient error, retry works)",
+    "province": "III \u00b7 Interactive execution",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "recovering from a failed call"
    },
    {
     "key": "consistency",

@@ -3,8 +3,9 @@
 *Compiled 3 Oct 2026, from `results/campaign.sqlite` and `docs/lab-log.md`.*
 
 **Store totals:**
-- 4,682 records across 74 run ids, 17 Sep to 3 Oct 2026, **$4.55 tracked spend**.
-- Verdicts: 3,742 PASS / 828 FAIL / 101 ERROR / 11 rejected by the fidelity gate.
+- 4,818 records across 82 run ids, 17 Sep to 3 Oct 2026, **$5.93 tracked spend**.
+- Verdicts: 3,850 PASS / 838 FAIL / 119 ERROR / 11 rejected by the fidelity gate.
+- *Updated 3 Oct (evening) with the Province III completion runs: E20–E23.*
 - 285 of the records are resample-check children (`/verify`).
 
 ## How "reproducibility-checked" is defined here
@@ -20,7 +21,7 @@ A finding counts as **reproduced** when it has passed at least one of RS, FS or 
 
 ---
 
-## 1. Experiments run (19)
+## 1. Experiments run (23)
 
 ### Province I: Narrative world-model
 
@@ -55,6 +56,10 @@ A finding counts as **reproduced** when it has passed at least one of RS, FS or 
 | E17 | Plan length × value passing (tickets that must be carried between calls) | `camp-interactive-{nano,super}-001` | N, S | 80 scored | $0.54 | **Value passing is not a bottleneck**: Super 43/43, Nano 36/37 up to 19-call plans carrying 16 values. Zero mishandled tickets. |
 | E18 | Interactive with look-alike tool names (model sees each error) | `camp-interactive-lookalike-*` | N, S | 56 scored | $0.36 | **Super 17/20 vs 65% single-shot (p = 0.063)**; recovers from 9 of 12 binding errors. **Nano's interactive frontier is ~9-call plans**, and **all 17 failures are early stops**, 9 with no error at all. |
 | E19 | Feasibility probes (outside the store) | — | N, S | ~40 | $0.03 | Native function calling works; error-feedback loop works. **Consistency: Nano solves a world on 63% of single tries but on all 5 tries for only 1 of 6 worlds.** |
+| E20 | Error recovery: E17's ray with one call failing transiently mid-plan (call 3 → 9 as plans lengthen) | `camp-interactive-fault-{nano,super}-001` | N, S | 56 scored | $0.31 | **Both tiers recover.** The fault fired in 33 Super episodes: 33 reached the goal. It fired in 21 Nano episodes: 20 reached the goal. Nano's other 2 failures were early stops *before* the fault fired (F25's mechanism). |
+| E21 | Super interactive with look-alike names at 23- to 25-call plans | `camp-interactive-lookalike-super-002` | S | 14 scored | $0.25 | **13/14**, where single-shot planning gets **15/42** on the same plan lengths (p = 0.0002). Recovered from 11 of 12 errored episodes. Cost cap stopped the ray at 25-call plans. |
+| E22 | Ultra interactive with look-alike names at 25-call plans | `camp-interactive-lookalike-ultra-001` | U | **0 scored** | $0.43 | **No measurement.** All 7 episodes that ran ended on one turn that hit the 16,000-token per-turn cap (`finish_reason=length`); the other 3 never started (cost cap). Graded ERROR, not FAIL. The interactive loop had no 32k retry; fixed afterwards. |
+| E23 | Fresh-seed confirmations of F23, F24, F25 (new worlds, trial seeds 500,000+) | `camp-interactive-{nano,super}-002`, `camp-interactive-lookalike-nano-002`, `camp-interactive-lookalike-super-003` | N, S | 48 scored | $0.39 | **All three replicate.** Values at 19-call plans with 16 values: Super 8/8, Nano 7/8, 0 bad tickets. Super look-alike at 18-call plans: 17/17 (single-shot 16/22, p = 0.023). Nano at 9-call plans: 10/15, every failure an early stop. |
 
 N = Nano 30B-A3B, S = Super 120B-A12B, U = Ultra 550B-A55B.
 
@@ -86,9 +91,11 @@ N = Nano 30B-A3B, S = Super 120B-A12B, U = Ultra 550B-A55B.
 | F20 | Nano breaks on the structural-trap ray | A | — | ✓ re-run with caps lifted (location moved 0.55 → 0.675) | — | ✓ | **Yes** (break reproduced; location corrected) |
 | F21 | On impossible tasks, models skip the missing step instead of declining (11/11) | B | — | — | ✓ same mechanism on all 3 tiers | — | **No** (one run per tier) |
 | F22 | Nano has a large consistency gap (63% single-try vs 17% all-5) | C | — | — | — | — | **No** (probe outside the store) |
-| F23 | Value passing is not a bottleneck up to 19-call plans | B | — | — | — | — | **No** (one run per tier) |
-| F24 | Super recovers from binding errors when it sees feedback | C | — | — | — | p = 0.063 | **No** |
-| F25 | Nano abandons long interactive tasks early | B | — | ✓ seen in 2 separate runs (1 case, then 17) | — | — | **Partly** |
+| F23 | Value passing is not a bottleneck up to 19-call plans | A− | — | ✓ E23: Super 8/8, Nano 7/8 at the hardest setting, 0 bad tickets | — | — | **Yes** |
+| F24 | Super recovers from binding errors when it sees feedback | A− | — | ✓ E23: 17/17 at 18-call plans | ✓ E21 at longer plans: 11 of 12 errored episodes recovered | ✓ p = 0.023 (fresh run alone); p = 0.001 pooled | **Yes** |
+| F25 | Nano abandons long interactive tasks early | A− | — | ✓ E23: 10/15, all 5 failures early stops, 3 with no error at all | ✓ also the cause of Nano's 2 pre-fault failures in E20 | — | **Yes** |
+| F26 | Both Nano and Super recover from a transient tool failure (retry, then continue) | B | — | — | — | — | **No** (one run per tier; Super 33/33, Nano 20/21 when the fault fired) |
+| F27 | With feedback, Super holds past its single-shot frontier: 13/14 at 23–25-call plans vs 15/42 single-shot | B | — | — | — | ✓ p = 0.0002 | **No** (one run; the ray was stopped at 25 calls by the cost cap) |
 
 ### Retractions and corrections (all published in the lab log)
 
@@ -101,32 +108,27 @@ N = Nano 30B-A3B, S = Super 120B-A12B, U = Ultra 550B-A55B.
 | X5 | Nano's depth-ray t* "replicates" the trap-ray t* | t is ray-relative; the two numbers are not comparable. Only the mechanism replicates |
 | X6 | Nano trap-ray t* = 0.55 | Also cap-biased; re-run gives 0.675 |
 | X7 | Nano interactive "drop to 2/5" at its ceiling | 3 trials never ran (cost cap); caught before reporting, and the escalation code fixed |
+| X8 | (never claimed) Ultra interactive "0/10" | Every episode was cut off by the per-turn token cap; graded ERROR, reported as *no measurement*. The interactive loop now retries a truncated turn at 32k, matching single-shot |
 
 ### Totals
-- **25 findings**: **12 reproduced** (F1, F3, F4, F5, F8, F9, F12, F13, F14, F15, F20, plus F11 in part), 2 partly reproduced (F11, F25), **11 not yet reproduced**.
-- **7 retractions or corrections**, all caught by the project's own checks.
+- **27 findings**: **14 reproduced** (F1, F3, F4, F5, F8, F9, F12, F13, F14, F15, F20, F23, F24, F25), **1 partly** (F11), **12 not yet reproduced** (F2, F6, F7, F10, F16, F17, F18, F19, F21, F22, F26, F27). F17 was re-tested and did **not** replicate.
+- **8 retractions or corrections**, all caught by the project's own checks.
 - **Failure-level resample check:** of the 463 failures counted as evidence, **95 (21%) were resample-checked**. **65 were STABLE (68%), 30 were NOISE (32%)**, so roughly one in three single-trial failures in the narrative province was sampling noise. All 95 came from the narrative `full_map` runs. Tool-province failures were checked by hand where it mattered (Ultra 3/5 stable; Super cap replay 6/10 passes) but **not through the automatic gate**. That is the largest reproducibility gap.
 
 ---
 
 ## 3. Is Province III complete?
 
-**The core is done; the province is not finished.**
+**Yes for Nano and Super. Ultra is not measured.**
 
 | Part | Status |
 |---|---|
-| Environment: one-call-at-a-time execution, native function calling, unguessable value tickets, transient-fault injection, per-step distance to goal | ✅ built, 15 tests |
-| Plugged into escalation (ramp, bisect, t*, decompose, degradation onset) and `frontier_summary` | ✅ |
-| III-A multi-step execution + III-B value passing, run on Nano and Super | ✅ E17 |
-| Interactive × look-alike names, run on Nano and Super | ✅ E18 |
-| **III-C error recovery as a difficulty ray** (fault injected at step k, k ramped) | ❌ **built but never run live** |
-| Ultra in any Province III experiment | ❌ not run (cost: about 11 calls per episode) |
-| Super interactive past 22-call plans (does feedback move its 24-call frontier?) | ❌ stopped by the cost cap |
-| Fresh-seed confirmation of F23 / F24 / F25 | ❌ |
-| Native vs prompt-JSON protocol comparison | ❌ |
-| Launch preset in the viewer's Explore page | ❌ |
-
-Estimated cost to finish:
-- the error-recovery ray on Nano and Super: about $0.30 tracked
-- Super deep interactive: about $0.20
-- Ultra at one or two depths only: about $0.30
+| Environment: one-call-at-a-time execution, native function calling, unguessable value tickets, transient-fault injection, per-step distance to goal | ✅ built, 17 tests |
+| Plugged into escalation (ramp, bisect, t*, decompose, degradation onset) and `frontier_summary` (3 rows: interactive, look-alike, error recovery) | ✅ |
+| III-A multi-step execution + III-B value passing, run on Nano and Super | ✅ E17, fresh-seed confirmed (E23) |
+| Interactive × look-alike names, run on Nano and Super | ✅ E18, fresh-seed confirmed (E23) |
+| III-C error recovery (transient fault mid-plan) on Nano and Super | ✅ E20 |
+| Super interactive past its 24-call single-shot frontier | ✅ E21 (to 25-call plans; holds 13/14) |
+| Ultra in any Province III experiment | ❌ E22 produced no measurement (per-turn token cap); the loop is fixed, re-run needs approval |
+| Native vs prompt-JSON protocol comparison | ❌ not started |
+| Launch preset in the viewer's Explore page | ❌ not started |
