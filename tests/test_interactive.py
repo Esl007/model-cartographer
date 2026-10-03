@@ -238,3 +238,91 @@ def test_escalation_finds_the_value_passing_frontier_for_a_blind_agent(tmp_path,
     assert bp.found is True
     assert bp.degradation_onset is not None
     store.close()
+
+
+# --- text tool-call protocol ------------------------------------------------------
+
+from cartographer.interactive.textcalls import format_tool_results, parse_text_tool_calls  # noqa: E402
+
+ORDERS = {"provision_service": ["service_id"], "set_dep-th_flag_9": [], "publish": ["artifact_id", "ticket"]}
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Okay.\n```tool_code\nprovision_service(service_id='svc_0')\n```", [("provision_service", {"service_id": "svc_0"})]),
+    ("```tool_code\nprovision_service('svc_1')\n```", [("provision_service", {"service_id": "svc_1"})]),
+    ("```python\nset_dep-th_flag_9()\npublish(artifact_id=\"a1\", ticket=\"tkt-3f\")\n```",
+     [("set_dep-th_flag_9", {}), ("publish", {"artifact_id": "a1", "ticket": "tkt-3f"})]),
+    ("```tool_code\nset_dep_th_flag_9()\n```", [("set_dep_th_flag_9", {})]),  # look-alike name passes through
+    ('```json\n{"name": "provision_service", "arguments": {"service_id": "svc_2"}}\n```',
+     [("provision_service", {"service_id": "svc_2"})]),
+    ("provision_service(service_id='svc_0')", [("provision_service", {"service_id": "svc_0"})]),
+    ("First(x) we should think. DONE", []),
+    ("DONE", []),
+    ("```tool_code\nprovision_service(service_id=svc_0)\n```", [("provision_service", {})]),  # non-literal arg
+])
+def test_parse_text_tool_calls(text, expected):
+    assert parse_text_tool_calls(text, ORDERS) == expected
+
+
+def test_tool_results_are_written_back_as_tool_output():
+    out = format_tool_results([("provision_service", {"status": "ok"})])
+    assert out.startswith("```tool_output\n") and '"status": "ok"' in out
+
+
+class TextAgent(ScriptedAgent):
+    """Perfect agent that writes its call as a ```tool_code block instead of
+    using native function calling, reading tickets from tool_output text."""
+
+    def chat_turn(self, model, messages, tools=None, max_tokens=0, temperature=0.0):
+        self.turns += 1
+        env = self.envs[-1]
+        done = sum(1 for s in env.steps if s.ok)
+        if env.goal_reached or done >= len(env.plan):
+            return ToolChatResult(message={"content": "DONE"}, tool_calls=(), text="DONE",
+                                  tokens_in=100, tokens_out=10, latency_ms=1.0, finish_reason="stop")
+        call = env.plan[done]
+        args = dict(call.args)
+        if call.tool in env.producer_for:
+            for m in reversed(messages):
+                if m.get("role") == "user" and '"ticket"' in m["content"]:
+                    args["ticket"] = json.loads(m["content"].split(": ", 1)[1].split("\n")[0])["ticket"]
+                    break
+        argtxt = ", ".join(f"{k}={v!r}" for k, v in args.items())
+        text = f"Next step.\n```tool_code\n{call.tool}({argtxt})\n```"
+        return ToolChatResult(message={"content": text}, tool_calls=(), text=text,
+                              tokens_in=100, tokens_out=20, latency_ms=1.0, finish_reason="stop")
+
+
+def test_text_protocol_agent_reaches_the_goal_carrying_tickets():
+    env = InteractiveEnv(_world(4, 1), 1, InteractiveSpec(value_links=1.0))
+    res = run_episode(TextAgent([env]), "m", env, protocol="text_fallback")
+    assert res.outcome == "goal_reached" and res.protocol == "text"
+    assert res.summary["n_calls"] == env.world.optimal_depth
+    assert res.summary["invalid_tickets"] == 0
+
+
+def test_native_protocol_is_the_default_and_ignores_text_calls():
+    env = InteractiveEnv(_world(4, 1), 1, InteractiveSpec())
+    res = run_episode(TextAgent([env]), "m", env)
+    assert res.outcome == "stopped_short" and res.protocol == "none"
+    env2 = InteractiveEnv(_world(4, 1), 1, InteractiveSpec())
+    assert run_episode(ScriptedAgent([env2]), "m", env2).protocol == "native"
+
+
+def test_text_protocol_puts_the_catalog_in_the_prompt():
+    seen = {}
+
+    class Spy(TextAgent):
+        def chat_turn(self, model, messages, tools=None, max_tokens=0, temperature=0.0):
+            seen.setdefault("system", messages[0]["content"])
+            return super().chat_turn(model, messages, tools, max_tokens, temperature)
+
+    env = InteractiveEnv(_world(4, 1), 1, InteractiveSpec())
+    run_episode(Spy([env]), "m", env, protocol="text_fallback")
+    for t in env.tools_schema():
+        assert f'"name": "{t["function"]["name"]}"' in seen["system"]
+    assert "```tool_code" in seen["system"]
+    env2 = InteractiveEnv(_world(4, 1), 1, InteractiveSpec())
+    seen.clear()
+    run_episode(Spy([env2]), "m", env2)
+    assert "You have access to the following functions" not in seen["system"]

@@ -3451,6 +3451,55 @@ these worlds had been seen before):
   - Nano can carry values and retry faults, but abandons the task, sometimes before it starts.
 - **Not done:** Ultra, and the native vs prompt-JSON comparison.
 
+## 2026-10-03 — RUN (first non-Nemotron model, all four provinces) — Gemma 3 27B full map; text tool-call protocol built
+
+**Run.** `google/gemma-3-27b-it` (Nebius, non-reasoning), 12 stages launched by the new
+`scripts/run_all_provinces.py`, each with its own cost cap. $1.08 tracked in total.
+Stages ran in parallel, about 20 minutes wall-clock. This is the first live run of Province IV.
+
+**Protocol finding (fixed before measuring).** Nebius drops the `tools` request field for
+Gemma: asked to list its tools, Gemma answers "NO TOOLS" with or without the field. It writes
+calls as text (```` ```tool_code provision_service(service_id='svc_0') ``` ````) using invented
+names. Province III on the native protocol would have scored every episode as an early stop, and
+with names it was never shown, as `unknown_tool`. Both are protocol artifacts. Built:
+- `interactive/textcalls.py`: parse ```` ```tool_code ````, Python-call and JSON forms. Tool names
+  are matched literally, so look-alike misspellings still fail as `unknown_tool`.
+- `run_episode(protocol="text_fallback")`: also writes the catalog into the system prompt and
+  returns results as ```` ```tool_output ````.
+- Native stays the default, and every record carries `protocol=native|text|mixed|none`.
+- Live smoke after the fix: 3/3 episodes reached the goal, 2 of them at optimal length with
+  tickets carried.
+
+**Gemma 3 27B map** (k = 7 single-shot, k = 5 interactive; one run per stage, so every
+line is grade B/C until replicated):
+
+| province | capability | result |
+|---|---|---|
+| I | state tracking | **degrades**: 26/46, all 20 failures stable on resample (0 noise) |
+| I | event order | holds 79/80 |
+| I | belief / adversarial belief | **degrades** 80/162 and 62/145; 79–89% of failures answer the object's *true* location (belief→reality collapse, the September foil) |
+| II | plan length, clear names | holds to 13-call plans (34/42) |
+| II | plan length, look-alike names | **breaks at 17-call plans** (0/7), `unknown_tool` 92% |
+| II | structural traps | **breaks** at 4 of 5 traps (4/35) |
+| II | catalog size to 66 tools | holds (46/56) |
+| II | impossible tasks | **never declines**: 0/16; writes a plan for every impossible goal |
+| III | step-by-step + values (text protocol) | holds 40/40 to 19-call plans, 16 values |
+| III | transient fault recovery | holds 40/40 |
+| III | step-by-step, look-alike names | degrades 60–80% from 11-call plans (C; cost cap stopped at 25 calls) |
+| IV | look-alike variable names | **holds** to 42-statement programs (25/28); no `confused_identifier` failure at all |
+| IV | semantic traps | **degrades** with traps on (18/42 all-on vs 41/42 none). Signatures: copied-list reading 18, truncating-modulo reading 13, wrong value 8 |
+| IV | length-only control | slips from about 38 statements (5/7, 3/7), never breaks |
+
+**Reading.**
+- Gemma's look-alike-name weakness is **tool-catalog specific**:
+  - it breaks at 17-call plans on look-alike *tool* ids;
+  - it never once confused look-alike *variable* names in code (H1 negative for Gemma, one run).
+- In code, the traps that carry its failures are **aliasing** and **negative modulo**.
+  - Leave-one-out probes recover most when one of these is removed.
+  - The signatures agree: these two account for 31 of 48 failures. (H2 supported for Gemma: traps break it, length alone mostly does not.)
+- As with Super, **feedback helps binding**: 0/7 single-shot at 17-call look-alike plans vs 60–80% interactive.
+- **Caveat:** Province III used the text protocol, so it is not directly comparable to Nemotron's native runs.
+
 ## Template for new entries
 
 ```

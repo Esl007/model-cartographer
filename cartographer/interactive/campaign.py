@@ -55,8 +55,10 @@ class InteractiveEvaluator:
         base: ToolDimParams | None = None,
         max_tokens: int = 16000,
         cancel_event: threading.Event | None = None,
+        protocol: str = "native",
     ) -> None:
         self.client, self.model, self.store, self.run_id = client, model, store, run_id
+        self.protocol = protocol
         self.cost_cap_usd = cost_cap_usd
         self.base = base if base is not None else _default_tool_base()
         self.max_tokens = max_tokens
@@ -103,6 +105,7 @@ class InteractiveEvaluator:
         res = run_episode(
             self.client, self.model, env, max_tokens=self.max_tokens, cost_fn=cost_usd,
             may_continue=lambda ep_cost: self.spent_usd + ep_cost < self.cost_cap_usd,
+            protocol=self.protocol,
         )
         s = res.summary
         if res.outcome == "goal_reached":
@@ -112,7 +115,7 @@ class InteractiveEvaluator:
         else:
             verdict = Verdict.ERROR
         detail = (
-            f"kind=interactive;campaign=1;protocol=native;outcome={res.outcome}"
+            f"kind=interactive;campaign=1;protocol={res.protocol};outcome={res.outcome}"
             f";detail={s['first_error_kind'] or res.outcome};n_calls={s['n_calls']};optimal={s['optimal']}"
             f";errors={s['n_errors']};invalid_tickets={s['invalid_tickets']};recovered={int(s['recovered'])}"
             f";first_deviation_step={s['first_deviation_step']};links={s['n_links']}"
@@ -166,12 +169,13 @@ def run_interactive_breaking_point_campaign(
     parallelism: int = 4,
     max_tokens: int = 16000,
     cancel_event: threading.Event | None = None,
+    protocol: str = "native",
 ) -> BreakingPoint:
     """Escalation over interactive episodes (default ray: plan depth 4 -> 16
     with value passing 0 -> 1). Episodes cost several calls each, so the
     defaults are smaller than Province II's: k_trials 5, budget 60."""
     ev = InteractiveEvaluator(client, model, store, run_id, cost_cap, max_tokens=max_tokens,
-                              cancel_event=cancel_event)
+                              cancel_event=cancel_event, protocol=protocol)
     bp = find_breaking_point(ev, ray if ray is not None else default_interactive_ray(),
                              budget=budget, k_trials=k_trials, parallelism=parallelism)
     note = f"spent=${ev.spent_usd:.4f}" + (";cost_cap_hit" if ev.capped else "")

@@ -13,6 +13,8 @@ PRICES: dict[str, tuple[float, float]] = {
     "nvidia/nemotron-3-super-120b-a12b": (0.08, 0.45),
     "nvidia/Nemotron-3-Ultra-550b-a55b": (0.50, 2.20),
     "nvidia/Nemotron-3_5-Lightning": (0.08, 0.20),
+    # Nebius /models pricing, 2026-10-03
+    "google/gemma-3-27b-it": (0.10, 0.30),
 }
 
 

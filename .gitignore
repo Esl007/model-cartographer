@@ -15,3 +15,4 @@ results/*.sqlite
 results/*.sqlite-wal
 results/*.sqlite-shm
 results/*.bak-*
+results/logs/

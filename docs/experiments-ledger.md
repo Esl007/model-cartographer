@@ -21,7 +21,7 @@ A finding counts as **reproduced** when it has passed at least one of RS, FS or 
 
 ---
 
-## 1. Experiments run (23)
+## 1. Experiments run (24)
 
 ### Province I: Narrative world-model
 
@@ -64,6 +64,12 @@ A finding counts as **reproduced** when it has passed at least one of RS, FS or 
 N = Nano 30B-A3B, S = Super 120B-A12B, U = Ultra 550B-A55B.
 
 ---
+
+### Cross-model
+
+| # | Experiment | Run ids | Tiers | n | Spend | Result |
+|---|---|---|---|---|---|---|
+| E24 | Gemma 3 27B full map, all four provinces (Province III via the new text tool-call protocol; Nebius drops `tools` for Gemma) | `camp-*-gemma-*` | `google/gemma-3-27b-it` | 1,441 records | $1.08 | Breaks: look-alike tool names at 17-call plans, structural traps, impossible tasks (0/16 declined). Degrades: state (all failures resample-stable), belief (true-location collapse), semantic code traps (aliasing + negative modulo). Holds: order, interactive values and fault recovery, catalog size, look-alike *variable* names. One run per stage: not yet reproduced. |
 
 ## 2. Findings and their checks
 

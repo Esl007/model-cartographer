@@ -1,6 +1,11 @@
 """One interactive episode: the model acts through native function calling,
 each call is executed in `InteractiveEnv`, and the result (or error) is fed
-back as a `tool` message before the model's next turn."""
+back as a `tool` message before the model's next turn.
+
+`protocol="text_fallback"` additionally accepts calls written as text (see
+`textcalls.py`) on turns with no native call, feeding results back as a user
+message. Native stays the default so earlier results keep their meaning;
+every episode records which protocol it actually used."""
 
 from __future__ import annotations
 
@@ -9,6 +14,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .env import InteractiveEnv
+from .textcalls import catalog_prompt, format_tool_results, parse_text_tool_calls
 
 # Outcomes that say something about the MODEL (graded PASS/FAIL) vs. about the
 # measurement (graded ERROR, excluded from rates like every other province).
@@ -27,6 +33,7 @@ class EpisodeResult:
     latency_ms: float
     error: str | None = None
     finish_reason: str | None = None
+    protocol: str = "none"  # native | text | mixed | none (no call ever made)
 
 
 def run_episode(
@@ -38,6 +45,7 @@ def run_episode(
     cost_fn: Callable[[str, int, int], float] | None = None,
     may_continue: Callable[[float], bool] | None = None,
     retry_max_tokens: int | None = 32000,
+    protocol: str = "native",
 ) -> EpisodeResult:
     """Run until the goal is reached, the model stops calling tools, the
     call budget is spent, or an infrastructure problem ends the episode.
@@ -45,8 +53,15 @@ def run_episode(
     cost cap binds mid-episode, not only between episodes. A turn truncated
     at `max_tokens` is re-issued once at `retry_max_tokens` (the single-shot
     evaluators' 16000/32000 policy) before the episode is called `cap_hit`."""
+    if protocol not in ("native", "text_fallback"):
+        raise ValueError(f"unknown protocol {protocol!r}")
     messages = env.opening_messages()
     tools = env.tools_schema()
+    param_orders = {t["function"]["name"]: list(t["function"]["parameters"]["properties"]) for t in tools}
+    if protocol == "text_fallback":
+        # some providers drop `tools` for some models; put the catalog in the prompt too
+        messages[0] = {**messages[0], "content": messages[0]["content"] + catalog_prompt(tools)}
+    used: set[str] = set()
     t_in = t_out = 0
     cost = latency = 0.0
     outcome, error, finish = "turn_limit", None, None
@@ -78,8 +93,29 @@ def run_episode(
             outcome = "cap_hit"
             break
         if not r.tool_calls:
-            outcome = "goal_reached" if env.goal_reached else "stopped_short"
-            break
+            text_calls = parse_text_tool_calls(r.text, param_orders) if protocol == "text_fallback" else []
+            if not text_calls:
+                outcome = "goal_reached" if env.goal_reached else "stopped_short"
+                break
+            used.add("text")
+            messages.append({"role": "assistant", "content": r.text or ""})
+            results = []
+            for name, args in text_calls:
+                if env.calls_left <= 0:
+                    results.append((name, {"status": "error", "error": "call budget exhausted"}))
+                    continue
+                results.append((name, env.step(name, args if isinstance(args, dict) else {})))
+                if env.goal_reached:
+                    break
+            messages.append({"role": "user", "content": format_tool_results(results)})
+            if env.goal_reached:
+                outcome = "goal_reached"
+                break
+            if env.calls_left <= 0:
+                outcome = "budget_exhausted"
+                break
+            continue
+        used.add("native")
         messages.append(
             {"role": "assistant", "content": r.text or "", "tool_calls": r.message.get("tool_calls")}
         )
@@ -111,4 +147,5 @@ def run_episode(
         latency_ms=latency,
         error=error,
         finish_reason=finish,
+        protocol="mixed" if len(used) > 1 else (next(iter(used)) if used else "none"),
     )

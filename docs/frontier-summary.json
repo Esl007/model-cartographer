@@ -1,5 +1,831 @@
 [
  {
+  "model": "google/gemma-3-27b-it",
+  "name": "google/gemma-3-27b-it",
+  "verdict": "google/gemma-3-27b-it: breaks on long plans with look-alike tool names (17-call plans); breaks on trap-laden catalogs (4 of 5 traps active); breaks on spotting impossible tasks; slips on tracking where things are; slips on belief tracking; slips on misleading stories; slips on step-by-step execution with look-alike tool names (11-call plans); slips on semantic traps in code (5 of 6 traps active). Holds on 6 of 14 capabilities tested.",
+  "rows": [
+   {
+    "key": "state",
+    "label": "Tracks where things actually are",
+    "province": "I \u00b7 Narrative",
+    "status": "DEGRADES",
+    "headline": "57% correct (26/46)",
+    "boundary": null,
+    "held_through": "tested up to chain length 30, distractor events 2",
+    "n_pass": 26,
+    "n_scored": 46,
+    "n_error": 0,
+    "ci": [
+     0.422,
+     0.698
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "other_wrong_answer",
+    "cause": "gives a wrong answer that matches no known shortcut",
+    "cause_share": 1.0,
+    "cause_n": 20,
+    "exemplar": {
+     "record_id": "d55ca622d3ab4e4590c2daaa96b75e4a",
+     "run_id": "camp-full_map-gemma-001/state",
+     "detail": null,
+     "excerpt": "West wing"
+    },
+    "curve": [],
+    "note": "",
+    "short": "tracking where things are"
+   },
+   {
+    "key": "order",
+    "label": "Recovers the true order of events",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "99% correct (79/80)",
+    "boundary": null,
+    "held_through": "tested up to chain length 20, scramble 1.0, distractor events 30",
+    "n_pass": 79,
+    "n_scored": 80,
+    "n_error": 0,
+    "ci": [
+     0.933,
+     0.998
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "other_wrong_answer",
+    "cause": "gives a wrong answer that matches no known shortcut",
+    "cause_share": 1.0,
+    "cause_n": 1,
+    "exemplar": {
+     "record_id": "d73cbb84374147e6b71d49fecae0cbef",
+     "run_id": "camp-full_map-gemma-001/order",
+     "detail": null,
+     "excerpt": "Let's break down the timeline: * **8:00:** Wren brought the faded basket to the meditation room. * **8:01:** Quinn brought the faded basket to the basement. * **8:02:** Wren moved the cracked basket to the basement. * **8:03:** Wren brought the cracked basket to the meditation room. * **8:04:** Wren reorganized papers. * **8:05:** Wren refilled coffee. Quinn moving the faded basket to the basement"
+    },
+    "curve": [],
+    "note": "",
+    "short": "event order"
+   },
+   {
+    "key": "belief",
+    "label": "Tracks what a person believes from what they saw",
+    "province": "I \u00b7 Narrative",
+    "status": "DEGRADES",
+    "headline": "49% correct (80/162)",
+    "boundary": null,
+    "held_through": "tested up to chain length 10, scramble 1.0, pronoun pressure 5, distractor events 20, witness cutoff 0.9",
+    "n_pass": 80,
+    "n_scored": 162,
+    "n_error": 0,
+    "ci": [
+     0.418,
+     0.57
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": "final_true_state",
+    "cause": "answers where the object really is, not where the person believes it is",
+    "cause_share": 0.7926829268292683,
+    "cause_n": 82,
+    "exemplar": {
+     "record_id": "78f187b6c0ab4f1db3609bbdd073c183",
+     "run_id": "camp-full_map-gemma-001/belief",
+     "detail": null,
+     "excerpt": "photo studio"
+    },
+    "curve": [],
+    "note": "",
+    "short": "belief tracking"
+   },
+   {
+    "key": "adversarial_belief",
+    "label": "Belief tracking in deliberately misleading stories",
+    "province": "I \u00b7 Narrative",
+    "status": "DEGRADES",
+    "headline": "43% correct (62/145)",
+    "boundary": null,
+    "held_through": "tested up to chain length 10, scramble 1.0, pronoun pressure 5, distractor events 20, witness cutoff 0.9",
+    "n_pass": 62,
+    "n_scored": 145,
+    "n_error": 0,
+    "ci": [
+     0.35,
+     0.509
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": "final_true_state",
+    "cause": "answers where the object really is, not where the person believes it is",
+    "cause_share": 0.891566265060241,
+    "cause_n": 83,
+    "exemplar": {
+     "record_id": "28d3fb97a4674bde9dfc28c332c78384",
+     "run_id": "camp-full_map-gemma-001/adversarial_belief",
+     "detail": null,
+     "excerpt": "front office"
+    },
+    "curve": [],
+    "note": "",
+    "short": "misleading stories"
+   },
+   {
+    "key": "plan_length_clear",
+    "label": "Plans long tool sequences (clear tool names)",
+    "province": "II \u00b7 Tool planning",
+    "status": "HOLDS",
+    "headline": "Holds through 13-call plans: 34/42 pass across every tested level",
+    "boundary": null,
+    "held_through": "13-call plans",
+    "n_pass": 34,
+    "n_scored": 42,
+    "n_error": 0,
+    "ci": [
+     0.667,
+     0.9
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "precondition_violation",
+    "cause": "calls a real tool before the step it depends on is done",
+    "cause_share": 1.0,
+    "cause_n": 8,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans",
+      "n_pass": 11,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans",
+      "n_pass": 5,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans",
+      "n_pass": 6,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans",
+      "n_pass": 6,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 10.0,
+      "label": "13-call plans",
+      "n_pass": 6,
+      "n_scored": 7,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "long plans"
+   },
+   {
+    "key": "plan_length_lookalike",
+    "label": "Plans long tool sequences when tool names look alike",
+    "province": "II \u00b7 Tool planning",
+    "status": "BREAKS",
+    "headline": "Breaks at 17-call plans: 0/7 pass (already only 7/14 at 7-call plans)",
+    "boundary": "17-call plans",
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 7,
+    "n_error": 0,
+    "ci": [
+     0.0,
+     0.354
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "unknown_tool",
+    "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
+    "cause_share": 0.9230769230769231,
+    "cause_n": 13,
+    "exemplar": {
+     "record_id": "65946f871e2c4e80ad7c0b5dded0e901",
+     "run_id": "camp-tool-deep-gemma-001",
+     "detail": "unknown_tool:step=4:set_dep-th_flag_1",
+     "excerpt": "```json [ {\"tool\": \"build-_art_0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"publish_art_o0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"set_-flag_0\", \"args\": {\"flag\": \"flag_0\"}}, {\"tool\": \"set_dep-th_flag_0\", \"args\": {\"flag\": \"depth_flag_0\"}}, {\"tool\": \"set_dep-th_flag_1\", \"args\": {\"flag\": \"depth_flag_1\"}}, {\"tool\": \"set_dep_th_flag_2\", \"args\": {\"flag\": \"depth_flag_2\"}}, {\"tool\": \"set_dep_th_flag_"
+    },
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans",
+      "n_pass": 7,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans",
+      "n_pass": 5,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 10.0,
+      "label": "13-call plans",
+      "n_pass": 13,
+      "n_scored": 28,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans",
+      "n_pass": 7,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 13.0,
+      "label": "16-call plans",
+      "n_pass": 12,
+      "n_scored": 28,
+      "n_error": 0
+     },
+     {
+      "value": 14.0,
+      "label": "17-call plans",
+      "n_pass": 0,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 15.0,
+      "label": "18-call plans",
+      "n_pass": 1,
+      "n_scored": 7,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "long plans with look-alike tool names"
+   },
+   {
+    "key": "traps",
+    "label": "Plans around traps (poisoned tools, misleading descriptions, zero slack)",
+    "province": "II \u00b7 Tool planning",
+    "status": "BREAKS",
+    "headline": "Breaks at 4 of 5 traps active: 4/35 pass (was 20/21 at 1 of 5 traps active)",
+    "boundary": "4 of 5 traps active",
+    "held_through": "1 of 5 traps active",
+    "n_pass": 4,
+    "n_scored": 35,
+    "n_error": 0,
+    "ci": [
+     0.045,
+     0.26
+    ],
+    "confidence": "A",
+    "p_value": 6.954292883004977e-16,
+    "cause_code": "precondition_violation",
+    "cause": "calls a real tool before the step it depends on is done",
+    "cause_share": 0.7681159420289855,
+    "cause_n": 69,
+    "exemplar": {
+     "record_id": "93182c809baf4a3e8cc12443d47a5485",
+     "run_id": "camp-tool_bp-gemma-001",
+     "detail": "precondition_violation:step=7:advance_o2",
+     "excerpt": "```json [ {\"tool\": \"open_interleave_window\", \"args\": {}}, {\"tool\": \"set_flag_0\", \"args\": {\"flag\": \"flag_0\"}}, {\"tool\": \"adva-nce_0\", \"args\": {\"service\": \"svc_0\"}}, {\"tool\": \"adva-nce_0\", \"args\": {\"service\": \"svc_1\"}}, {\"tool\": \"advance_o1\", \"args\": {\"service\": \"svc_1\"}}, {\"tool\": \"build-_art_0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"publis_h_art_0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"ad"
+    },
+    "curve": [
+     {
+      "value": 0.0,
+      "label": "0 of 5 traps active",
+      "n_pass": 37,
+      "n_scored": 49,
+      "n_error": 0
+     },
+     {
+      "value": 1.0,
+      "label": "1 of 5 traps active",
+      "n_pass": 20,
+      "n_scored": 21,
+      "n_error": 0
+     },
+     {
+      "value": 4.0,
+      "label": "4 of 5 traps active",
+      "n_pass": 4,
+      "n_scored": 35,
+      "n_error": 0
+     },
+     {
+      "value": 5.0,
+      "label": "5 of 5 traps active",
+      "n_pass": 11,
+      "n_scored": 49,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "trap-laden catalogs"
+   },
+   {
+    "key": "catalog_size",
+    "label": "Picks the right tool from a large catalog",
+    "province": "II \u00b7 Tool planning",
+    "status": "HOLDS",
+    "headline": "Holds through 66-tool catalogs: 46/56 pass across every tested level",
+    "boundary": null,
+    "held_through": "66-tool catalogs",
+    "n_pass": 46,
+    "n_scored": 56,
+    "n_error": 0,
+    "ci": [
+     0.702,
+     0.9
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "precondition_violation",
+    "cause": "calls a real tool before the step it depends on is done",
+    "cause_share": 1.0,
+    "cause_n": 10,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 2.0,
+      "label": "8-tool catalogs",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "17-tool catalogs",
+      "n_pass": 5,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 19.0,
+      "label": "25-tool catalogs",
+      "n_pass": 6,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 28.0,
+      "label": "34-tool catalogs",
+      "n_pass": 4,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 37.0,
+      "label": "43-tool catalogs",
+      "n_pass": 4,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 46.0,
+      "label": "52-tool catalogs",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 54.0,
+      "label": "60-tool catalogs",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 60.0,
+      "label": "66-tool catalogs",
+      "n_pass": 6,
+      "n_scored": 7,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "large catalogs"
+   },
+   {
+    "key": "impossible",
+    "label": "Notices when a task is impossible",
+    "province": "II \u00b7 Tool planning",
+    "status": "BREAKS",
+    "headline": "Declines 0 of 16 impossible tasks; writes a plan for the other 16",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 16,
+    "n_error": 0,
+    "ci": [
+     0.0,
+     0.194
+    ],
+    "confidence": "C",
+    "p_value": null,
+    "cause_code": "fabricated_plan_on_unsolvable",
+    "cause": "writes a plan for an impossible goal instead of declining",
+    "cause_share": 1.0,
+    "cause_n": 16,
+    "exemplar": {
+     "record_id": "6911fdb1c51a4ca78b30c05758f8042d",
+     "run_id": "camp-irrelevance-gemma-001",
+     "detail": "fabricated_plan_on_unsolvable:4",
+     "excerpt": "```json [ {\"tool\": \"build_art_0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"publish_art_0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"set_flag_0\", \"args\": {\"flag\": \"flag_0\"}}, {\"tool\": \"advance_2\", \"args\": {\"service\": \"svc_0\"}} ] ```"
+    },
+    "curve": [],
+    "note": "",
+    "short": "spotting impossible tasks"
+   },
+   {
+    "key": "interactive",
+    "label": "Executes a plan step by step, carrying values between calls",
+    "province": "III \u00b7 Interactive execution",
+    "status": "HOLDS",
+    "headline": "Holds through 19-call plans, 16 values to carry: 40/40 pass across every tested level",
+    "boundary": null,
+    "held_through": "19-call plans, 16 values to carry",
+    "n_pass": 40,
+    "n_scored": 40,
+    "n_error": 0,
+    "ci": [
+     0.912,
+     1.0
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans, no values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans, 1 value to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans, 2 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans, 4 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans, 7 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 13.0,
+      "label": "16-call plans, 10 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 15.0,
+      "label": "18-call plans, 14 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 16.0,
+      "label": "19-call plans, 16 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "step-by-step execution with values to carry"
+   },
+   {
+    "key": "interactive_lookalike",
+    "label": "Executes step by step when tool names look alike (sees each error)",
+    "province": "III \u00b7 Interactive execution",
+    "status": "DEGRADES",
+    "headline": "Degrades at 11-call plans: 3/5 pass (was 5/5 at 7-call plans)",
+    "boundary": "11-call plans",
+    "held_through": "7-call plans",
+    "n_pass": 3,
+    "n_scored": 5,
+    "n_error": 0,
+    "ci": [
+     0.231,
+     0.882
+    ],
+    "confidence": "C",
+    "p_value": 0.1847922192749779,
+    "cause_code": "unknown_tool",
+    "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
+    "cause_share": 0.625,
+    "cause_n": 8,
+    "exemplar": {
+     "record_id": "1f9044ab1afc4fd48230f23232bcd5a8",
+     "run_id": "camp-interactive-lookalike-gemma-001",
+     "detail": "unknown_tool",
+     "excerpt": "step 3: set_dep_th_flag_1({'flag': 'depth_flag_1'}) -> unknown_tool:set_dep_th_flag_1"
+    },
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans",
+      "n_pass": 3,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans",
+      "n_pass": 4,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 15.0,
+      "label": "18-call plans",
+      "n_pass": 3,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 18.0,
+      "label": "21-call plans",
+      "n_pass": 4,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 22.0,
+      "label": "25-call plans",
+      "n_pass": 3,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 26.0,
+      "label": "29-call plans",
+      "n_pass": 2,
+      "n_scored": 2,
+      "n_error": 3
+     }
+    ],
+    "note": "",
+    "short": "step-by-step execution with look-alike tool names"
+   },
+   {
+    "key": "interactive_fault",
+    "label": "Recovers when a tool call fails mid-plan (transient error, retry works)",
+    "province": "III \u00b7 Interactive execution",
+    "status": "HOLDS",
+    "headline": "Holds through 19-call plans, 16 values to carry: 40/40 pass across every tested level",
+    "boundary": null,
+    "held_through": "19-call plans, 16 values to carry",
+    "n_pass": 40,
+    "n_scored": 40,
+    "n_error": 0,
+    "ci": [
+     0.912,
+     1.0
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans, no values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans, 1 value to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans, 2 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans, 4 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans, 7 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 13.0,
+      "label": "16-call plans, 10 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 15.0,
+      "label": "18-call plans, 14 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 16.0,
+      "label": "19-call plans, 16 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "recovering from a failed call"
+   },
+   {
+    "key": "code_lookalike",
+    "label": "Traces a program when variable names look alike",
+    "province": "IV \u00b7 Code tracing",
+    "status": "HOLDS",
+    "headline": "Holds through 42-statement programs: 25/28 pass across every tested level",
+    "boundary": null,
+    "held_through": "42-statement programs",
+    "n_pass": 25,
+    "n_scored": 28,
+    "n_error": 0,
+    "ci": [
+     0.728,
+     0.963
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "wrong_value",
+    "cause": "gives a wrong value that matches no known misreading",
+    "cause_share": 1.0,
+    "cause_n": 3,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 26.0,
+      "label": "28-statement programs",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 32.0,
+      "label": "34-statement programs",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 37.0,
+      "label": "39-statement programs",
+      "n_pass": 4,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 40.0,
+      "label": "42-statement programs",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "code with look-alike variable names"
+   },
+   {
+    "key": "code_traps",
+    "label": "Traces a program through semantic traps (aliasing, closures, off-by-one, modulo, defaults)",
+    "province": "IV \u00b7 Code tracing",
+    "status": "DEGRADES",
+    "headline": "Degrades at 5 of 6 traps active: 26/49 pass (was 41/42 at 0 of 6 traps active)",
+    "boundary": "5 of 6 traps active",
+    "held_through": "0 of 6 traps active",
+    "n_pass": 26,
+    "n_scored": 49,
+    "n_error": 0,
+    "ci": [
+     0.394,
+     0.663
+    ],
+    "confidence": "A",
+    "p_value": 1.984531191772338e-09,
+    "cause_code": "foil_value_semantics",
+    "cause": "treats `b = a` as copying a list, so changes through one name are missed",
+    "cause_share": 0.3829787234042553,
+    "cause_n": 47,
+    "exemplar": {
+     "record_id": "a4cb6fb62efc4d9682af1b18f581b84e",
+     "run_id": "camp-code-traps-gemma-001",
+     "detail": "foil:value_semantics",
+     "excerpt": "Let's trace the execution of the Python code step by step. 1. `limit = 6` 2. `total = 3` 3. `values = [2, 7, 2, 9]` 4. `values.append(limit)`: `values` becomes `[2, 7, 2, 9, 6]` 5. `values.extend([9, 7])`: `values` becomes `[2, 7, 2, 9, 6, 9, 7]` 6. `batch = [5, 0]` 7. `cells = batch`: `cells` is now `[5, 0]` 8. `cells.append(17)`: `cells` becomes `[5, 0, 17]` 9. `limit += batch[-1]`: `limit += 0`"
+    },
+    "curve": [
+     {
+      "value": 0.0,
+      "label": "0 of 6 traps active",
+      "n_pass": 41,
+      "n_scored": 42,
+      "n_error": 0
+     },
+     {
+      "value": 5.0,
+      "label": "5 of 6 traps active",
+      "n_pass": 26,
+      "n_scored": 49,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "6 of 6 traps active",
+      "n_pass": 18,
+      "n_scored": 42,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "semantic traps in code"
+   },
+   {
+    "key": "consistency",
+    "label": "Gets the same task right every time (pass^k)",
+    "province": "Reliability",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [],
+    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "short": "consistency"
+   }
+  ]
+ },
+ {
   "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
   "name": "NVIDIA-Nemotron-3-Nano-30B-A3B",
   "verdict": "NVIDIA-Nemotron-3-Nano-30B-A3B: breaks on long plans with look-alike tool names (13-call plans); breaks on step-by-step execution with look-alike tool names (11-call plans); slips on belief tracking; slips on misleading stories; slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks; slips on recovering from a failed call (11-call plans, 2 values to carry). Holds on 4 of 11 capabilities tested.",
