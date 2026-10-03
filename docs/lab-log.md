@@ -3262,6 +3262,100 @@ cost tracked in-script).**
 
 **Spend this entry: $0.21 tracked.**
 
+## 2026-10-03 — FINDING (confirmed) — Super's tool-planning frontier located at ~24-call plans; Ultra degrades to 43% at the new 31-call ceiling without collapsing
+
+**What we ran.** A deep depth ray (`camp-tool-deep-{nano,super,ultra}-001`, $0.49
+tracked, 0 ERRORs in 154 trials): plan_depth 4 → 28 with identifier collisions
+pinned ON at every point, so the ray's position translates directly into plan
+length (realised optimal 7 → 31 calls). The generator's ceiling moved from 19 to
+31 calls; pd 32 hits `generate`'s internal BFS bound of 32 and is not yet
+reachable. Token ceiling 16000 (no truncation risk).
+
+**Results (pass / scored, by realised plan length):**
+
+| tier | 7 | 11 | 14 | 18 | 21 | 23 | 24 | 25 | 29 | 31 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Super | 20/21 | 6/7 | 5/7 | 5/7 | 4/7 | 5/7 | **8/28** | 2/7 | | |
+| Ultra | 6/7 | 7/7 | 4/7 | 7/7 | 7/7 | | | 4/7 | 4/7 | 3/7 |
+
+- **Super: `found=True`, t* = 0.6625 [0.556, 0.781] → plan_depth ≈ 20 (≈ 23-call plans,
+  CI ≈ 20–26 calls).** Degradation onset at 14-call plans. The 24-call level is well
+  powered (8/28 = 29%). This closes the "only Nano breaks" gap: two of three tiers now
+  have a located frontier on the same axis (look-alike tool names, plans getting longer):
+  Nano at ~13 calls (and already weak at 7), Super at ~24 calls.
+- **Ultra: `found=False`, degradation onset at 14-call plans; ceiling 3/7 at 31 calls.**
+  Pooled ≤ 21 calls 31/35 vs ≥ 25 calls 11/21 (52%), Fisher one-sided p = 0.0036:
+  Ultra genuinely degrades with plan length, but never crosses the 30% collapse threshold
+  within the generator's range. Its frontier, if one exists on this axis, lies beyond
+  31-call plans.
+- **Nano:** degenerate baseline (2/7 at 7-call plans with collisions); it never had a
+  clean starting point on this ray. Its frontier comes from `camp-tool-depth-nano-003`
+  (13-call plans, 5/21).
+- Every failure on every tier is again `unknown_tool` / look-alike binding.
+
+**Next step if Ultra's frontier is wanted:** raise `generate`'s internal search bound
+past 32 (BFS cost grows; ~8 s/world at 31 calls) and extend the ray to ~40-call plans.
+
+## 2026-10-03 — FEATURE (shipped) + FINDINGS — Province III (interactive execution) built and run; frontier_summary shipped; cost-capped probes no longer read as declines
+
+**Province III** (`cartographer/interactive/`, commit `1d63d6f`). The model executes
+the toolworld one call at a time through native function calling
+(`Client.chat_turn`); each result or error is returned as a `tool` message.
+- **Value passing:** on a chosen fraction of the optimal plan's direct
+  dependency edges (the latest earlier step whose removal makes the step fail),
+  the producer returns an unguessable ticket that the consumer must be passed.
+- **Fault injection:** a transient failure at a chosen call number.
+- **Per-step BFS distance to goal:** locates the first non-progress step.
+- Ground truth and optimal plan length are unchanged.
+- Offline checks: a perfect agent reaches the goal at exactly optimal length; a
+  blind agent is stopped by `invalid_ticket`; an agent that retries recovers
+  from a fault.
+
+**Escalation runs** (plan depth 4 → 16 × value_links 0 → 1, k = 5, native protocol):
+
+| tier | scored | real failures | range covered | spend |
+|---|---|---|---|---|
+| Super (`camp-interactive-super-001`) | **43/43 PASS** | 0 | 7- to 19-call plans, up to 16 values carried | $0.225 |
+| Nano (`camp-interactive-nano-001`) | **36/37 PASS** | 1 `stopped_short` | same | $0.314 (cap hit) |
+
+- **Value passing does not break either tier in this range.** Across 80 scored
+  episodes there were zero `invalid_ticket` errors. Nano carried tickets across
+  gaps of several calls (one returned at step 7 and first used at step 11).
+- **The one real failure is a different mechanism: goal abandonment.** Nano made
+  8 perfect calls, reducing the BFS distance from 16 to 8 with no wasted step,
+  then declared itself done. The per-step distance metric makes this visible: no
+  deviation step, just an early stop. n = 1; flagged, not a finding.
+- **Contrast with Province II is the result.** Single-shot planning with
+  look-alike names breaks Nano at 13-call plans; interactive execution with
+  clear names and values to carry does not break it at 19. In this world the
+  binding difficulty is name confusability, not state or value tracking. The
+  natural next ray is interactive × look-alike names: does feedback rescue the
+  binding failure?
+- Super's 3 extra episodes came from a duplicate process that briefly ran
+  before being stopped. They are genuine, passing trials and are kept.
+
+**Bug fixed — a cost-capped probe looked like a decline.** Nano's escalation
+reported a "degradation onset" at its ceiling (2/5) only because 3 episodes
+were never run (cost cap) and `_RayProbe` scored unrun trials as non-passes:
+the same artifact class as the token-cap retraction. `find_breaking_point` now
+discards a probe whose trials were cut short by the cap or a cancellation, and
+stops with an explicit note. Regression test added.
+
+**`frontier_summary`** (`cartographer/report/frontier.py`;
+`scripts/frontier_summary.py` → `docs/frontier-summary.{json,md}`; hand-off spec
+`docs/frontier-card-handoff.md`).
+- For each model × capability: status, boundary in native units, CI,
+  confidence grade, cause in words, exemplar record, curve, plus one verdict
+  sentence per model.
+- Boundaries must be sustained (the level and everything above it below the
+  threshold), so one noisy dip is not named as a frontier.
+
+Current verdicts:
+- Nano: breaks on 13-call plans with look-alike names.
+- Super: breaks on 24-call plans with look-alike names [A].
+- Ultra: degrades from 25-call plans [A] and never collapses within the
+  31-call ceiling.
+
 ## Template for new entries
 
 ```

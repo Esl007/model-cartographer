@@ -17,7 +17,9 @@ from the store alone (no LLM, no network):
 
 Thresholds are absolute pass rates, the same everywhere: BREAKS when a level
 falls to <= 30% (the escalation's collapse threshold), DEGRADES when it falls
-to <= 75%, HOLDS otherwise. "Level" means a group of at least `MIN_N` scored
+to <= 75%, HOLDS otherwise. A boundary must be SUSTAINED: the pooled rate from
+that level upward must also be at/below the threshold (<= 40% for a break),
+so one noisy dip that recovers is not reported as the frontier. "Level" means a group of at least `MIN_N` scored
 trials at one setting of the capability's axis. Record hygiene (invalidated
 runs, resample children, fidelity-gate rejections) is inherited from
 `viewer.findings._primary_records`, so this never counts evidence the rest of
@@ -44,6 +46,7 @@ from ..viewer.findings import _primary_records, _query_kind_of, short_model_name
 MIN_N = 5
 BREAK_RATE = 0.30
 DEGRADE_RATE = 0.75
+SUSTAINED_BREAK_RATE = 0.40  # a break level's pooled rate from there upward must also be this low
 HOLD_UPPER_BOUND = 0.95  # rate-mode rows: DEGRADES only if the CI is confidently below this
 
 STATUS_ORDER = {"BREAKS": 0, "DEGRADES": 1, "HOLDS": 2, "NOT TESTED": 3}
@@ -331,8 +334,20 @@ def _row_axis(spec: Spec, recs: list) -> FrontierRow:
             row.headline = "Too few trials to call"
         return row
 
-    brk = next(((l, g) for l, g in eligible if l.rate <= BREAK_RATE), None)
-    deg = next(((l, g) for l, g in eligible if l.rate <= DEGRADE_RATE), None)
+    def sustained(i: int, own: float, pooled: float) -> bool:
+        """A boundary must hold from there on: the level itself is at/below
+        `own`, AND everything from it upward pools at/below `pooled`. Stops a
+        single noisy dip (5/7 followed by 7/7, 7/7) from being named the
+        frontier."""
+        lvl = eligible[i][0]
+        k = sum(l.n_pass for l, _ in eligible[i:])
+        n = sum(l.n_scored for l, _ in eligible[i:])
+        return lvl.rate <= own and k / n <= pooled
+
+    brk = next((eligible[i] for i in range(len(eligible))
+                if sustained(i, BREAK_RATE, SUSTAINED_BREAK_RATE)), None)
+    deg = next((eligible[i] for i in range(len(eligible))
+                if sustained(i, DEGRADE_RATE, DEGRADE_RATE)), None)
     if brk:
         row.status, (bl, _) = "BREAKS", brk
     elif deg:

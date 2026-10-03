@@ -126,3 +126,33 @@ def test_trap_ray_unchanged():
     names = {d.name for d in default_tool_ray().dims}
     assert "poison_traps" in names
     assert "decoy_tools" not in names
+
+
+class _CappingEvaluator:
+    """Passes everything, but its budget runs out partway through the probe
+    at t=0.6: later trials are recorded as errors and return False, exactly
+    like a real evaluator's cost_capped path."""
+
+    def __init__(self, cap_after: int) -> None:
+        self.calls, self.cap_after = 0, cap_after
+        self.capped, self.error_count = False, 0
+
+    def __call__(self, config: dict, seed: int) -> bool:
+        self.calls += 1
+        if self.calls > self.cap_after:
+            self.capped = True
+            self.error_count += 1
+            return False
+        return True
+
+
+def test_probe_cut_short_by_cost_cap_is_discarded_not_read_as_decline():
+    """Regression: Nano's interactive run 'degraded' to 2/5 at its ceiling
+    only because 3 trials were never run (cost cap). That must not register
+    as a degradation onset or a break."""
+    ev = _CappingEvaluator(cap_after=K * 4 + 3)  # t=0, .15, .3, .45 full; t=.6 cut short
+    bp = find_breaking_point(ev, RAY, budget=200, k_trials=K)
+    assert bp.found is False
+    assert bp.degradation_onset is None
+    assert all(rate == 1.0 for _, rate in bp.pass_curve)
+    assert "cost cap" in bp.note

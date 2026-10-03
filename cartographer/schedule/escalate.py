@@ -165,6 +165,20 @@ class _RayProbe:
     def can(self, k: int) -> bool:
         return self.spent + k <= self.budget
 
+    def probe_was_cut_short(self, errors_before: int) -> bool:
+        """True when the evaluator hit its cost cap (or was cancelled) AND
+        recorded new errors during the last probe -- i.e. some of that
+        probe's trials were never actually run. Such a probe must not be
+        read as a pass rate: unrun trials count as non-passes, which would
+        fabricate a decline exactly where the money ran out."""
+        stopped = getattr(self.evaluator, "capped", False) or getattr(self.evaluator, "cancelled", False)
+        return bool(stopped) and getattr(self.evaluator, "error_count", 0) > errors_before
+
+    def discard_last(self, k: int) -> None:
+        del self.points[-k:]
+        if self.pass_curve:
+            self.pass_curve.pop()
+
     def probe(self, t: float, k: int) -> float:
         """Run k trials at config_at(t); records every (t, outcome) point and
         appends (t, pass_rate) to the pass curve. Caller must check `can(k)`.
@@ -279,7 +293,17 @@ def find_breaking_point(
                 found=False,
                 note=f"budget exhausted during ramp before t={t:.2f}",
             )
+        errors_before = getattr(evaluator, "error_count", 0)
         rate = rp.probe(t, k_trials)
+        if rp.probe_was_cut_short(errors_before):
+            rp.discard_last(k_trials)
+            return result(
+                found=False,
+                note=(
+                    f"stopped at t={t:.2f}: cost cap or cancellation hit during this probe; "
+                    "the incomplete probe was discarded"
+                ),
+            )
         if t == 1.0:
             ceiling_rate = rate
         if onset_t is None and rate <= base_rate - degradation_drop:
@@ -301,7 +325,11 @@ def find_breaking_point(
     # --- Stage 3: BISECT + logistic fit ------------------------------------
     while (t_hi - t_lo) > _BISECT_WIDTH and rp.can(k_trials):
         mid = (t_lo + t_hi) / 2.0
+        errors_before = getattr(evaluator, "error_count", 0)
         rate = rp.probe(mid, k_trials)
+        if rp.probe_was_cut_short(errors_before):
+            rp.discard_last(k_trials)
+            break
         if rate >= 0.5:
             t_lo = mid
         else:

@@ -1,0 +1,1643 @@
+[
+ {
+  "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+  "name": "NVIDIA-Nemotron-3-Nano-30B-A3B",
+  "verdict": "NVIDIA-Nemotron-3-Nano-30B-A3B: breaks on long plans with look-alike tool names (13-call plans); slips on belief tracking; slips on misleading stories; slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks. Holds on 4 of 9 capabilities tested.",
+  "rows": [
+   {
+    "key": "state",
+    "label": "Tracks where things actually are",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "100% correct (90/90)",
+    "boundary": null,
+    "held_through": "tested up to chain length 30, distractor events 2",
+    "n_pass": 90,
+    "n_scored": 90,
+    "n_error": 0,
+    "ci": [
+     0.959,
+     1.0
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "tracking where things are"
+   },
+   {
+    "key": "order",
+    "label": "Recovers the true order of events",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "99% correct (156/158)",
+    "boundary": null,
+    "held_through": "tested up to chain length 20, scramble 1.0, distractor events 30",
+    "n_pass": 156,
+    "n_scored": 158,
+    "n_error": 2,
+    "ci": [
+     0.955,
+     0.997
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": "other_wrong_answer",
+    "cause": "gives a wrong answer that matches no known shortcut",
+    "cause_share": 1.0,
+    "exemplar": {
+     "record_id": "f4ff81b319174c539e0e56469f4655ae",
+     "run_id": "camp-full_map-nano-002/order",
+     "detail": null,
+     "excerpt": "second"
+    },
+    "curve": [],
+    "note": "",
+    "short": "event order"
+   },
+   {
+    "key": "belief",
+    "label": "Tracks what a person believes from what they saw",
+    "province": "I \u00b7 Narrative",
+    "status": "DEGRADES",
+    "headline": "90% correct (521/578)",
+    "boundary": null,
+    "held_through": "tested up to chain length 25, scramble 1.0, pronoun pressure 8, distractor events 40, witness cutoff 0.9",
+    "n_pass": 521,
+    "n_scored": 578,
+    "n_error": 29,
+    "ci": [
+     0.874,
+     0.923
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": "final_true_state",
+    "cause": "answers where the object really is, not where the person believes it is",
+    "cause_share": 0.65,
+    "exemplar": {
+     "record_id": "464c525b541b492b8d9aa84b56555b10",
+     "run_id": "camp-belief-nemotron-nano-001",
+     "detail": null,
+     "excerpt": "loading dock"
+    },
+    "curve": [],
+    "note": "",
+    "short": "belief tracking"
+   },
+   {
+    "key": "adversarial_belief",
+    "label": "Belief tracking in deliberately misleading stories",
+    "province": "I \u00b7 Narrative",
+    "status": "DEGRADES",
+    "headline": "88% correct (279/317)",
+    "boundary": null,
+    "held_through": "tested up to chain length 10, scramble 1.0, pronoun pressure 5, distractor events 20, witness cutoff 0.9",
+    "n_pass": 279,
+    "n_scored": 317,
+    "n_error": 3,
+    "ci": [
+     0.84,
+     0.911
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": "final_true_state",
+    "cause": "answers where the object really is, not where the person believes it is",
+    "cause_share": 0.868421052631579,
+    "exemplar": {
+     "record_id": "4d1da1b45d1a4d64aa0011adbc501ef7",
+     "run_id": "camp-full_map-nvidia-nemotron-3-nano-30b-a3b-001/adversarial_belief",
+     "detail": null,
+     "excerpt": "lobby"
+    },
+    "curve": [],
+    "note": "",
+    "short": "misleading stories"
+   },
+   {
+    "key": "plan_length_clear",
+    "label": "Plans long tool sequences (clear tool names)",
+    "province": "II \u00b7 Tool planning",
+    "status": "HOLDS",
+    "headline": "Holds through 13-call plans: 46/49 pass across every tested level",
+    "boundary": null,
+    "held_through": "13-call plans",
+    "n_pass": 46,
+    "n_scored": 49,
+    "n_error": 0,
+    "ci": [
+     0.835,
+     0.979
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "bad_arg",
+    "cause": "passes the wrong entity to a tool",
+    "cause_share": 0.6666666666666666,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans",
+      "n_pass": 12,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans",
+      "n_pass": 6,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 10.0,
+      "label": "13-call plans",
+      "n_pass": 14,
+      "n_scored": 14,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "long plans"
+   },
+   {
+    "key": "plan_length_lookalike",
+    "label": "Plans long tool sequences when tool names look alike",
+    "province": "II \u00b7 Tool planning",
+    "status": "BREAKS",
+    "headline": "Breaks at 13-call plans: 5/21 pass (already only 15/28 at 7-call plans)",
+    "boundary": "13-call plans",
+    "held_through": null,
+    "n_pass": 5,
+    "n_scored": 21,
+    "n_error": 0,
+    "ci": [
+     0.106,
+     0.451
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "unknown_tool",
+    "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
+    "cause_share": 0.9565217391304348,
+    "exemplar": {
+     "record_id": "f126ceb219f84c8e80104abb1433bbe1",
+     "run_id": "camp-tool-depth-nano-003",
+     "detail": "unknown_tool:step=2:adva_nce_2",
+     "excerpt": "[ {\"tool\": \"adva_nce_0\", \"args\": {\"service\": \"svc_0\"}}, {\"tool\": \"advance_o1\", \"args\": {\"service\": \"svc_0\"}}, {\"tool\": \"adva_nce_2\", \"args\": {\"service\": \"svc_0\"}}, {\"tool\": \"build_art_o0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"publish_art_o0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"set_flag_o0\", \"args\": {\"flag\": \"flag_0\"}}, {\"tool\": \"set_depth_flag_o0\", \"args\": {\"flag\": \"depth_flag_0\"}}, {\""
+    },
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans",
+      "n_pass": 15,
+      "n_scored": 28,
+      "n_error": 0
+     },
+     {
+      "value": 10.0,
+      "label": "13-call plans",
+      "n_pass": 5,
+      "n_scored": 21,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans",
+      "n_pass": 0,
+      "n_scored": 7,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "long plans with look-alike tool names"
+   },
+   {
+    "key": "traps",
+    "label": "Plans around traps (poisoned tools, misleading descriptions, zero slack)",
+    "province": "II \u00b7 Tool planning",
+    "status": "DEGRADES",
+    "headline": "Degrades at 4 of 5 traps active: 13/35 pass (was 34/35 at 0 of 5 traps active)",
+    "boundary": "4 of 5 traps active",
+    "held_through": "0 of 5 traps active",
+    "n_pass": 13,
+    "n_scored": 35,
+    "n_error": 0,
+    "ci": [
+     0.232,
+     0.537
+    ],
+    "confidence": "A",
+    "p_value": 1.2382197215884655e-11,
+    "cause_code": "precondition_violation",
+    "cause": "calls a real tool before the step it depends on is done",
+    "cause_share": 0.75,
+    "exemplar": {
+     "record_id": "9f0f1ceffbdc4ef3856ec2e30ee9c455",
+     "run_id": "camp-tool_bp-nano-002",
+     "detail": "precondition_violation:step=9:adva-nce_1",
+     "excerpt": "[ {\"tool\":\"set_flag_0\",\"args\":{\"flag\":\"flag_0\"}}, {\"tool\":\"set_-flag_1\",\"args\":{\"flag\":\"flag_1\"}}, {\"tool\":\"open_interleave_window\",\"args\":{}}, {\"tool\":\"build_art_o0\",\"args\":{\"artifact\":\"art_0\"}}, {\"tool\":\"publis-h_art_0\",\"args\":{\"artifact\":\"art_0\"}}, {\"tool\":\"advance_o0\",\"args\":{\"service\":\"svc_0\"}}, {\"tool\":\"adva-nce_1\",\"args\":{\"service\":\"svc_0\"}}, {\"tool\":\"adva-nce_2\",\"args\":{\"service\":\"svc_0\"}}"
+    },
+    "curve": [
+     {
+      "value": 0.0,
+      "label": "0 of 5 traps active",
+      "n_pass": 34,
+      "n_scored": 35,
+      "n_error": 0
+     },
+     {
+      "value": 4.0,
+      "label": "4 of 5 traps active",
+      "n_pass": 13,
+      "n_scored": 35,
+      "n_error": 0
+     },
+     {
+      "value": 5.0,
+      "label": "5 of 5 traps active",
+      "n_pass": 18,
+      "n_scored": 56,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "trap-laden catalogs"
+   },
+   {
+    "key": "catalog_size",
+    "label": "Picks the right tool from a large catalog",
+    "province": "II \u00b7 Tool planning",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "large catalogs"
+   },
+   {
+    "key": "impossible",
+    "label": "Notices when a task is impossible",
+    "province": "II \u00b7 Tool planning",
+    "status": "DEGRADES",
+    "headline": "Declines 6 of 12 impossible tasks; writes a plan for the other 6",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 6,
+    "n_scored": 12,
+    "n_error": 0,
+    "ci": [
+     0.254,
+     0.746
+    ],
+    "confidence": "C",
+    "p_value": null,
+    "cause_code": "fabricated_plan_on_unsolvable",
+    "cause": "writes a plan for an impossible goal instead of declining",
+    "cause_share": 1.0,
+    "exemplar": {
+     "record_id": "928528cfa6e4473393f647339847b347",
+     "run_id": "camp-irrelevance-nano-001",
+     "detail": "fabricated_plan_on_unsolvable:5",
+     "excerpt": "[ {\"tool\":\"set_flag_0\",\"args\":{\"flag\":\"flag_0\"}}, {\"tool\":\"build_art_0\",\"args\":{\"artifact\":\"art_0\"}}, {\"tool\":\"advance_0\",\"args\":{\"service\":\"svc_0\"}}, {\"tool\":\"advance_1\",\"args\":{\"service\":\"svc_0\"}}, {\"tool\":\"advance_2\",\"args\":{\"service\":\"svc_0\"}} ]"
+    },
+    "curve": [],
+    "note": "",
+    "short": "spotting impossible tasks"
+   },
+   {
+    "key": "interactive",
+    "label": "Executes a plan step by step, carrying values between calls",
+    "province": "III \u00b7 Interactive execution",
+    "status": "HOLDS",
+    "headline": "Holds through 18-call plans, 14 values to carry: 34/35 pass across every tested level",
+    "boundary": null,
+    "held_through": "18-call plans, 14 values to carry",
+    "n_pass": 34,
+    "n_scored": 35,
+    "n_error": 3,
+    "ci": [
+     0.855,
+     0.995
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "stopped_short",
+    "cause": "stops acting before the goal is reached",
+    "cause_share": 1.0,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans, no values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans, 1 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans, 2 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans, 4 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans, 7 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 13.0,
+      "label": "16-call plans, 10 values to carry",
+      "n_pass": 4,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 15.0,
+      "label": "18-call plans, 14 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 16.0,
+      "label": "19-call plans, 16 values to carry",
+      "n_pass": 2,
+      "n_scored": 2,
+      "n_error": 3
+     }
+    ],
+    "note": "",
+    "short": "step-by-step execution with values to carry"
+   },
+   {
+    "key": "consistency",
+    "label": "Gets the same task right every time (pass^k)",
+    "province": "Reliability",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "short": "consistency"
+   }
+  ]
+ },
+ {
+  "model": "nvidia/Nemotron-3-Ultra-550b-a55b",
+  "name": "Nemotron-3-Ultra-550b-a55b",
+  "verdict": "Nemotron-3-Ultra-550b-a55b: slips on long plans with look-alike tool names (25-call plans); slips on spotting impossible tasks. Holds on 6 of 8 capabilities tested.",
+  "rows": [
+   {
+    "key": "state",
+    "label": "Tracks where things actually are",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "100% correct (30/30)",
+    "boundary": null,
+    "held_through": "tested up to chain length 30, distractor events 2",
+    "n_pass": 30,
+    "n_scored": 30,
+    "n_error": 0,
+    "ci": [
+     0.886,
+     1.0
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "tracking where things are"
+   },
+   {
+    "key": "order",
+    "label": "Recovers the true order of events",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "100% correct (80/80)",
+    "boundary": null,
+    "held_through": "tested up to chain length 20, scramble 1.0, distractor events 30",
+    "n_pass": 80,
+    "n_scored": 80,
+    "n_error": 0,
+    "ci": [
+     0.954,
+     1.0
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "event order"
+   },
+   {
+    "key": "belief",
+    "label": "Tracks what a person believes from what they saw",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "99% correct (181/183)",
+    "boundary": null,
+    "held_through": "tested up to chain length 25, scramble 1.0, pronoun pressure 8, distractor events 40, witness cutoff 0.9",
+    "n_pass": 181,
+    "n_scored": 183,
+    "n_error": 3,
+    "ci": [
+     0.961,
+     0.997
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": "final_true_state",
+    "cause": "answers where the object really is, not where the person believes it is",
+    "cause_share": 0.5,
+    "exemplar": {
+     "record_id": "65ddb03c744541ccb79dfcc986a39c1e",
+     "run_id": "camp-full_map-ultra-002/belief",
+     "detail": null,
+     "excerpt": "print room"
+    },
+    "curve": [],
+    "note": "",
+    "short": "belief tracking"
+   },
+   {
+    "key": "adversarial_belief",
+    "label": "Belief tracking in deliberately misleading stories",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "99% correct (127/128)",
+    "boundary": null,
+    "held_through": "tested up to chain length 10, scramble 1.0, pronoun pressure 5, distractor events 20, witness cutoff 0.9",
+    "n_pass": 127,
+    "n_scored": 128,
+    "n_error": 2,
+    "ci": [
+     0.957,
+     0.999
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": "abstained",
+    "cause": "answers 'unknown' when the belief can be worked out",
+    "cause_share": 1.0,
+    "exemplar": {
+     "record_id": "7b713cba1d8b4ab09d438cf4e552d419",
+     "run_id": "camp-full_map-ultra-002/adversarial_belief",
+     "detail": null,
+     "excerpt": "unknown"
+    },
+    "curve": [],
+    "note": "",
+    "short": "misleading stories"
+   },
+   {
+    "key": "plan_length_clear",
+    "label": "Plans long tool sequences (clear tool names)",
+    "province": "II \u00b7 Tool planning",
+    "status": "HOLDS",
+    "headline": "Holds through 12-call plans: 28/28 pass across every tested level",
+    "boundary": null,
+    "held_through": "12-call plans",
+    "n_pass": 28,
+    "n_scored": 28,
+    "n_error": 0,
+    "ci": [
+     0.879,
+     1.0
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "long plans"
+   },
+   {
+    "key": "plan_length_lookalike",
+    "label": "Plans long tool sequences when tool names look alike",
+    "province": "II \u00b7 Tool planning",
+    "status": "DEGRADES",
+    "headline": "Degrades at 25-call plans: 4/7 pass (was 7/7 at 21-call plans)",
+    "boundary": "25-call plans",
+    "held_through": "21-call plans",
+    "n_pass": 4,
+    "n_scored": 7,
+    "n_error": 0,
+    "ci": [
+     0.25,
+     0.842
+    ],
+    "confidence": "A",
+    "p_value": 0.00042101930253844055,
+    "cause_code": "unknown_tool",
+    "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
+    "cause_share": 1.0,
+    "exemplar": {
+     "record_id": "080e03c9a60b421db093657371c5bc3a",
+     "run_id": "camp-tool-deep-ultra-001",
+     "detail": "unknown_tool:step=10:set_dep-th_flag_9",
+     "excerpt": "[ {\"tool\": \"set_flag_o0\", \"args\": {\"flag\": \"flag_0\"}}, {\"tool\": \"set_depth_flag_o0\", \"args\": {\"flag\": \"depth_flag_0\"}}, {\"tool\": \"set_depth_flag_o1\", \"args\": {\"flag\": \"depth_flag_1\"}}, {\"tool\": \"set_dep-th_flag_2\", \"args\": {\"flag\": \"depth_flag_2\"}}, {\"tool\": \"set_depth_flag_o3\", \"args\": {\"flag\": \"depth_flag_3\"}}, {\"tool\": \"set_dep-th_flag_4\", \"args\": {\"flag\": \"depth_flag_4\"}}, {\"tool\": \"set_dep-th"
+    },
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans",
+      "n_pass": 6,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans",
+      "n_pass": 11,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 13.0,
+      "label": "16-call plans",
+      "n_pass": 5,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 15.0,
+      "label": "18-call plans",
+      "n_pass": 13,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 16.0,
+      "label": "19-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 18.0,
+      "label": "21-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 22.0,
+      "label": "25-call plans",
+      "n_pass": 4,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 26.0,
+      "label": "29-call plans",
+      "n_pass": 4,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 28.0,
+      "label": "31-call plans",
+      "n_pass": 3,
+      "n_scored": 7,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "long plans with look-alike tool names"
+   },
+   {
+    "key": "traps",
+    "label": "Plans around traps (poisoned tools, misleading descriptions, zero slack)",
+    "province": "II \u00b7 Tool planning",
+    "status": "HOLDS",
+    "headline": "Holds through 5 of 5 traps active: 51/56 pass across every tested level",
+    "boundary": null,
+    "held_through": "5 of 5 traps active",
+    "n_pass": 51,
+    "n_scored": 56,
+    "n_error": 0,
+    "ci": [
+     0.807,
+     0.961
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "precondition_violation",
+    "cause": "calls a real tool before the step it depends on is done",
+    "cause_share": 1.0,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 0.0,
+      "label": "0 of 5 traps active",
+      "n_pass": 28,
+      "n_scored": 28,
+      "n_error": 0
+     },
+     {
+      "value": 5.0,
+      "label": "5 of 5 traps active",
+      "n_pass": 23,
+      "n_scored": 28,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "trap-laden catalogs"
+   },
+   {
+    "key": "catalog_size",
+    "label": "Picks the right tool from a large catalog",
+    "province": "II \u00b7 Tool planning",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "large catalogs"
+   },
+   {
+    "key": "impossible",
+    "label": "Notices when a task is impossible",
+    "province": "II \u00b7 Tool planning",
+    "status": "DEGRADES",
+    "headline": "Declines 5 of 8 impossible tasks; writes a plan for the other 3",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 5,
+    "n_scored": 8,
+    "n_error": 0,
+    "ci": [
+     0.306,
+     0.863
+    ],
+    "confidence": "C",
+    "p_value": null,
+    "cause_code": "fabricated_plan_on_unsolvable",
+    "cause": "writes a plan for an impossible goal instead of declining",
+    "cause_share": 1.0,
+    "exemplar": {
+     "record_id": "16a6eb20fe744dd9b9dcd49026c3f05f",
+     "run_id": "camp-irrelevance-ultra-001",
+     "detail": "fabricated_plan_on_unsolvable:5",
+     "excerpt": "[ {\"tool\": \"advance_0\", \"args\": {\"service\": \"svc_0\"}}, {\"tool\": \"advance_1\", \"args\": {\"service\": \"svc_0\"}}, {\"tool\": \"build_art_0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"set_flag_0\", \"args\": {\"flag\": \"flag_0\"}}, {\"tool\": \"advance_2\", \"args\": {\"service\": \"svc_0\"}} ]"
+    },
+    "curve": [],
+    "note": "",
+    "short": "spotting impossible tasks"
+   },
+   {
+    "key": "interactive",
+    "label": "Executes a plan step by step, carrying values between calls",
+    "province": "III \u00b7 Interactive execution",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "step-by-step execution with values to carry"
+   },
+   {
+    "key": "consistency",
+    "label": "Gets the same task right every time (pass^k)",
+    "province": "Reliability",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "short": "consistency"
+   }
+  ]
+ },
+ {
+  "model": "nvidia/nemotron-3-super-120b-a12b",
+  "name": "nemotron-3-super-120b-a12b",
+  "verdict": "nemotron-3-super-120b-a12b: breaks on long plans with look-alike tool names (24-call plans). Holds on 9 of 10 capabilities tested.",
+  "rows": [
+   {
+    "key": "state",
+    "label": "Tracks where things actually are",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "96% correct (91/95)",
+    "boundary": null,
+    "held_through": "tested up to chain length 30, distractor events 2",
+    "n_pass": 91,
+    "n_scored": 95,
+    "n_error": 0,
+    "ci": [
+     0.897,
+     0.984
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "other_wrong_answer",
+    "cause": "gives a wrong answer that matches no known shortcut",
+    "cause_share": 1.0,
+    "exemplar": {
+     "record_id": "8ac17ceb9c094aef8a11fd34ead9b910",
+     "run_id": "camp-state-nemotron-super-001",
+     "detail": null,
+     "excerpt": "wine cellar"
+    },
+    "curve": [],
+    "note": "",
+    "short": "tracking where things are"
+   },
+   {
+    "key": "order",
+    "label": "Recovers the true order of events",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "99% correct (79/80)",
+    "boundary": null,
+    "held_through": "tested up to chain length 20, scramble 1.0, distractor events 30",
+    "n_pass": 79,
+    "n_scored": 80,
+    "n_error": 0,
+    "ci": [
+     0.933,
+     0.998
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "other_wrong_answer",
+    "cause": "gives a wrong answer that matches no known shortcut",
+    "cause_share": 1.0,
+    "exemplar": {
+     "record_id": "ff62342c7913409d8fbd5b92340c3a9a",
+     "run_id": "camp-full_map-super-002/order",
+     "detail": null,
+     "excerpt": "second"
+    },
+    "curve": [],
+    "note": "",
+    "short": "event order"
+   },
+   {
+    "key": "belief",
+    "label": "Tracks what a person believes from what they saw",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "97% correct (283/291)",
+    "boundary": null,
+    "held_through": "tested up to chain length 25, scramble 1.0, pronoun pressure 8, distractor events 40, witness cutoff 0.9",
+    "n_pass": 283,
+    "n_scored": 291,
+    "n_error": 0,
+    "ci": [
+     0.947,
+     0.986
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": "other_wrong_answer",
+    "cause": "gives a wrong answer that matches no known shortcut",
+    "cause_share": 0.625,
+    "exemplar": {
+     "record_id": "3343716878d14e4bb6a309e986132b6f",
+     "run_id": "camp-belief-nemotron-super-002",
+     "detail": null,
+     "excerpt": "utility closet"
+    },
+    "curve": [],
+    "note": "",
+    "short": "belief tracking"
+   },
+   {
+    "key": "adversarial_belief",
+    "label": "Belief tracking in deliberately misleading stories",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "95% correct (152/160)",
+    "boundary": null,
+    "held_through": "tested up to chain length 10, scramble 1.0, pronoun pressure 5, distractor events 20, witness cutoff 0.9",
+    "n_pass": 152,
+    "n_scored": 160,
+    "n_error": 0,
+    "ci": [
+     0.904,
+     0.974
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": "abstained",
+    "cause": "answers 'unknown' when the belief can be worked out",
+    "cause_share": 0.875,
+    "exemplar": {
+     "record_id": "1c28851f8c764a39a0344063d89a831c",
+     "run_id": "camp-full_map-super-002/adversarial_belief",
+     "detail": null,
+     "excerpt": "unknown"
+    },
+    "curve": [],
+    "note": "",
+    "short": "misleading stories"
+   },
+   {
+    "key": "plan_length_clear",
+    "label": "Plans long tool sequences (clear tool names)",
+    "province": "II \u00b7 Tool planning",
+    "status": "HOLDS",
+    "headline": "Holds through 12-call plans: 28/28 pass across every tested level",
+    "boundary": null,
+    "held_through": "12-call plans",
+    "n_pass": 28,
+    "n_scored": 28,
+    "n_error": 0,
+    "ci": [
+     0.879,
+     1.0
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "long plans"
+   },
+   {
+    "key": "plan_length_lookalike",
+    "label": "Plans long tool sequences when tool names look alike",
+    "province": "II \u00b7 Tool planning",
+    "status": "BREAKS",
+    "headline": "Breaks at 24-call plans: 8/28 pass (was 6/7 at 11-call plans)",
+    "boundary": "24-call plans",
+    "held_through": "11-call plans",
+    "n_pass": 8,
+    "n_scored": 28,
+    "n_error": 0,
+    "ci": [
+     0.153,
+     0.471
+    ],
+    "confidence": "A",
+    "p_value": 1.458612842754066e-07,
+    "cause_code": "unknown_tool",
+    "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
+    "cause_share": 0.96,
+    "exemplar": {
+     "record_id": "acd37ba9ae30410595a647cfc55c5482",
+     "run_id": "camp-tool-deep-super-001",
+     "detail": "precondition_violation:step=1:set_depth_flag_o1",
+     "excerpt": "[ {\"tool\": \"set_flag_0\", \"args\": {\"flag\": \"flag_0\"}}, {\"tool\": \"set_depth_flag_o1\", \"args\": {\"flag\": \"depth_flag_1\"}}, {\"tool\": \"set_depth_flag_o2\", \"args\": {\"flag\": \"depth_flag_2\"}}, {\"tool\": \"set_depth_flag_o3\", \"args\": {\"flag\": \"depth_flag_3\"}}, {\"tool\": \"set_depth_flag_o4\", \"args\": {\"flag\": \"depth_flag_4\"}}, {\"tool\": \"set_dep_th_flag_5\", \"args\": {\"flag\": \"depth_flag_5\"}}, {\"tool\": \"set_dep_th_"
+    },
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans",
+      "n_pass": 20,
+      "n_scored": 21,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans",
+      "n_pass": 6,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans",
+      "n_pass": 16,
+      "n_scored": 22,
+      "n_error": 0
+     },
+     {
+      "value": 13.0,
+      "label": "16-call plans",
+      "n_pass": 9,
+      "n_scored": 15,
+      "n_error": 0
+     },
+     {
+      "value": 15.0,
+      "label": "18-call plans",
+      "n_pass": 16,
+      "n_scored": 22,
+      "n_error": 0
+     },
+     {
+      "value": 16.0,
+      "label": "19-call plans",
+      "n_pass": 7,
+      "n_scored": 15,
+      "n_error": 0
+     },
+     {
+      "value": 18.0,
+      "label": "21-call plans",
+      "n_pass": 4,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 20.0,
+      "label": "23-call plans",
+      "n_pass": 5,
+      "n_scored": 7,
+      "n_error": 0
+     },
+     {
+      "value": 21.0,
+      "label": "24-call plans",
+      "n_pass": 8,
+      "n_scored": 28,
+      "n_error": 0
+     },
+     {
+      "value": 22.0,
+      "label": "25-call plans",
+      "n_pass": 2,
+      "n_scored": 7,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "long plans with look-alike tool names"
+   },
+   {
+    "key": "traps",
+    "label": "Plans around traps (poisoned tools, misleading descriptions, zero slack)",
+    "province": "II \u00b7 Tool planning",
+    "status": "HOLDS",
+    "headline": "Holds through 5 of 5 traps active: 51/52 pass across every tested level",
+    "boundary": null,
+    "held_through": "5 of 5 traps active",
+    "n_pass": 51,
+    "n_scored": 52,
+    "n_error": 4,
+    "ci": [
+     0.899,
+     0.997
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "missing_arg",
+    "cause": "leaves out a required argument",
+    "cause_share": 1.0,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 0.0,
+      "label": "0 of 5 traps active",
+      "n_pass": 27,
+      "n_scored": 28,
+      "n_error": 0
+     },
+     {
+      "value": 5.0,
+      "label": "5 of 5 traps active",
+      "n_pass": 24,
+      "n_scored": 24,
+      "n_error": 4
+     }
+    ],
+    "note": "",
+    "short": "trap-laden catalogs"
+   },
+   {
+    "key": "catalog_size",
+    "label": "Picks the right tool from a large catalog",
+    "province": "II \u00b7 Tool planning",
+    "status": "HOLDS",
+    "headline": "Holds through 66-tool catalogs: 112/112 pass across every tested level",
+    "boundary": null,
+    "held_through": "66-tool catalogs",
+    "n_pass": 112,
+    "n_scored": 112,
+    "n_error": 0,
+    "ci": [
+     0.967,
+     1.0
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 2.0,
+      "label": "8-tool catalogs",
+      "n_pass": 14,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "17-tool catalogs",
+      "n_pass": 14,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 19.0,
+      "label": "25-tool catalogs",
+      "n_pass": 14,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 28.0,
+      "label": "34-tool catalogs",
+      "n_pass": 14,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 37.0,
+      "label": "43-tool catalogs",
+      "n_pass": 14,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 46.0,
+      "label": "52-tool catalogs",
+      "n_pass": 14,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 54.0,
+      "label": "60-tool catalogs",
+      "n_pass": 14,
+      "n_scored": 14,
+      "n_error": 0
+     },
+     {
+      "value": 60.0,
+      "label": "66-tool catalogs",
+      "n_pass": 14,
+      "n_scored": 14,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "large catalogs"
+   },
+   {
+    "key": "impossible",
+    "label": "Notices when a task is impossible",
+    "province": "II \u00b7 Tool planning",
+    "status": "HOLDS",
+    "headline": "Declines 10 of 12 impossible tasks; writes a plan for the other 2",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 10,
+    "n_scored": 12,
+    "n_error": 0,
+    "ci": [
+     0.552,
+     0.953
+    ],
+    "confidence": "C",
+    "p_value": null,
+    "cause_code": "fabricated_plan_on_unsolvable",
+    "cause": "writes a plan for an impossible goal instead of declining",
+    "cause_share": 1.0,
+    "exemplar": {
+     "record_id": "6049f24793754dd78f467db7feb44436",
+     "run_id": "camp-irrelevance-super-001",
+     "detail": "fabricated_plan_on_unsolvable:5",
+     "excerpt": "[{\"tool\":\"advance_0\",\"args\":{\"service\":\"svc_0\"}},{\"tool\":\"set_flag_0\",\"args\":{\"flag\":\"flag_0\"}},{\"tool\":\"build_art_0\",\"args\":{\"artifact\":\"art_0\"}},{\"tool\":\"publish_art_0\",\"args\":{\"artifact\":\"art_0\"}},{\"tool\":\"advance_2\",\"args\":{\"service\":\"svc_0\"}}]"
+    },
+    "curve": [],
+    "note": "",
+    "short": "spotting impossible tasks"
+   },
+   {
+    "key": "interactive",
+    "label": "Executes a plan step by step, carrying values between calls",
+    "province": "III \u00b7 Interactive execution",
+    "status": "HOLDS",
+    "headline": "Holds through 19-call plans, 16 values to carry: 45/45 pass across every tested level",
+    "boundary": null,
+    "held_through": "19-call plans, 16 values to carry",
+    "n_pass": 45,
+    "n_scored": 45,
+    "n_error": 0,
+    "ci": [
+     0.921,
+     1.0
+    ],
+    "confidence": "A",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans, no values to carry",
+      "n_pass": 10,
+      "n_scored": 10,
+      "n_error": 0
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans, 1 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans, 2 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans, 4 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans, 7 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 13.0,
+      "label": "16-call plans, 10 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 15.0,
+      "label": "18-call plans, 14 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 16.0,
+      "label": "19-call plans, 16 values to carry",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     }
+    ],
+    "note": "",
+    "short": "step-by-step execution with values to carry"
+   },
+   {
+    "key": "consistency",
+    "label": "Gets the same task right every time (pass^k)",
+    "province": "Reliability",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "short": "consistency"
+   }
+  ]
+ },
+ {
+  "model": "openai/gpt-oss-120b",
+  "name": "gpt-oss-120b",
+  "verdict": "gpt-oss-120b: holds on all 1 capabilities tested.",
+  "rows": [
+   {
+    "key": "state",
+    "label": "Tracks where things actually are",
+    "province": "I \u00b7 Narrative",
+    "status": "HOLDS",
+    "headline": "100% correct (30/30)",
+    "boundary": null,
+    "held_through": "tested up to chain length 30, distractor events 2",
+    "n_pass": 30,
+    "n_scored": 30,
+    "n_error": 0,
+    "ci": [
+     0.886,
+     1.0
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "tracking where things are"
+   },
+   {
+    "key": "order",
+    "label": "Recovers the true order of events",
+    "province": "I \u00b7 Narrative",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "event order"
+   },
+   {
+    "key": "belief",
+    "label": "Tracks what a person believes from what they saw",
+    "province": "I \u00b7 Narrative",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "belief tracking"
+   },
+   {
+    "key": "adversarial_belief",
+    "label": "Belief tracking in deliberately misleading stories",
+    "province": "I \u00b7 Narrative",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "misleading stories"
+   },
+   {
+    "key": "plan_length_clear",
+    "label": "Plans long tool sequences (clear tool names)",
+    "province": "II \u00b7 Tool planning",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "long plans"
+   },
+   {
+    "key": "plan_length_lookalike",
+    "label": "Plans long tool sequences when tool names look alike",
+    "province": "II \u00b7 Tool planning",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "long plans with look-alike tool names"
+   },
+   {
+    "key": "traps",
+    "label": "Plans around traps (poisoned tools, misleading descriptions, zero slack)",
+    "province": "II \u00b7 Tool planning",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "trap-laden catalogs"
+   },
+   {
+    "key": "catalog_size",
+    "label": "Picks the right tool from a large catalog",
+    "province": "II \u00b7 Tool planning",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "large catalogs"
+   },
+   {
+    "key": "impossible",
+    "label": "Notices when a task is impossible",
+    "province": "II \u00b7 Tool planning",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "spotting impossible tasks"
+   },
+   {
+    "key": "interactive",
+    "label": "Executes a plan step by step, carrying values between calls",
+    "province": "III \u00b7 Interactive execution",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "step-by-step execution with values to carry"
+   },
+   {
+    "key": "consistency",
+    "label": "Gets the same task right every time (pass^k)",
+    "province": "Reliability",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "exemplar": null,
+    "curve": [],
+    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "short": "consistency"
+   }
+  ]
+ }
+]
