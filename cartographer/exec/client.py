@@ -72,6 +72,27 @@ class ChatResult:
 
 
 @dataclass(frozen=True)
+class ToolChatResult:
+    """One turn of a multi-message, tool-enabled chat (`Client.chat_turn`).
+
+    `message` is the raw assistant message dict exactly as the provider
+    returned it, so callers can append it verbatim to the conversation (the
+    provider expects its own `tool_calls` objects echoed back). `tool_calls`
+    is the parsed list `[(call_id, name, arguments_json_string), ...]`.
+    """
+
+    message: dict
+    tool_calls: tuple
+    text: str
+    tokens_in: int
+    tokens_out: int
+    latency_ms: float
+    error: str | None = None
+    finish_reason: str | None = None
+    reasoning: str | None = None
+
+
+@dataclass(frozen=True)
 class RetryPolicy:
     """Retry behavior for transient failures (429 / 5xx / timeout).
 
@@ -284,6 +305,79 @@ class Client:
             return dataclasses_replace(retried, retried=True)
 
         return result
+
+    def chat_turn(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        max_tokens: int = 16000,
+        temperature: float = 0.0,
+    ) -> ToolChatResult:
+        """One assistant turn over a full message history, optionally with
+        native function-calling `tools` (OpenAI-compatible schema).
+
+        Same transport, retry policy and error contract as `chat`; never
+        raises. Used by the interactive province, where each tool result is
+        fed back as a `tool` message and the model takes another turn.
+        """
+        url = self._provider.base_url + self._provider.chat_path
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "model-cartographer/0.1",
+        }
+        payload: dict = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        body = json.dumps(payload).encode("utf-8")
+
+        start = time.monotonic()
+        status, raw, _headers, error_kind = self._post_with_retries(url, headers, body)
+        latency_ms = (time.monotonic() - start) * 1000.0
+
+        def failed(error: str) -> ToolChatResult:
+            return ToolChatResult(
+                message={}, tool_calls=(), text="", tokens_in=0, tokens_out=0,
+                latency_ms=latency_ms, error=error,
+            )
+
+        if error_kind == "timeout":
+            return failed("timeout")
+        if status < 200 or status >= 300:
+            return failed(f"http {status}: {raw[:200]!r}")
+        try:
+            data = json.loads(raw)
+            choice = data["choices"][0]
+            message = choice["message"]
+            usage = data.get("usage", {})
+            calls = tuple(
+                (
+                    str(tc.get("id", "")),
+                    str(tc["function"]["name"]),
+                    tc["function"].get("arguments") or "{}",
+                )
+                for tc in (message.get("tool_calls") or [])
+            )
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
+            return failed(f"parse error: {exc!r}")
+        return ToolChatResult(
+            message=message,
+            tool_calls=calls,
+            text=message.get("content") or "",
+            tokens_in=int(usage.get("prompt_tokens", 0)),
+            tokens_out=int(usage.get("completion_tokens", 0)),
+            latency_ms=latency_ms,
+            error=None,
+            finish_reason=choice.get("finish_reason"),
+            reasoning=message.get("reasoning") or message.get("reasoning_content"),
+        )
 
     def _chat_once(
         self,
