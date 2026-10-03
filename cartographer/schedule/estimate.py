@@ -37,7 +37,12 @@ def _stable_float(*parts: str) -> float:
 def _log_loss(points: list[tuple[float, bool]], midpoint: float, slope: float) -> float:
     total = 0.0
     for x, passed in points:
-        p_pass = 1.0 / (1.0 + math.exp(slope * (x - midpoint)))
+        # Clamp the exponent: on wide-range dims (e.g. decoy_tools 2..60) a
+        # steep candidate slope overflows math.exp and crashed /atlas. Any
+        # |z| beyond ~37 already maps to a p_pass the _EPS clamp below
+        # saturates, so this changes nothing except removing the crash.
+        z = min(max(slope * (x - midpoint), -700.0), 700.0)
+        p_pass = 1.0 / (1.0 + math.exp(z))
         p_pass = min(max(p_pass, _EPS), 1.0 - _EPS)
         total += -math.log(p_pass) if passed else -math.log(1.0 - p_pass)
     return total / len(points) if points else 0.0

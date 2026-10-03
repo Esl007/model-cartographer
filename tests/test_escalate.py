@@ -162,3 +162,14 @@ def test_to_json_dict_round_trips_through_json():
     back = json.loads(payload)
     assert back["found"] is True
     assert back["hypothesis"]["kind"] == "pairwise_interaction"
+
+
+def test_fit_logistic_survives_wide_range_dims():
+    """Regression: /atlas crashed with OverflowError in _log_loss on the
+    decoy_tools 2..60 sweep (steep candidate slope x wide x range)."""
+    from cartographer.schedule.estimate import fit_logistic
+
+    pts = [(float(x), x < 30) for x in range(2, 61)] * 3
+    fit = fit_logistic(pts)
+    assert fit is not None
+    assert 20.0 <= fit.midpoint <= 40.0
