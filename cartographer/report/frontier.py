@@ -85,6 +85,7 @@ CAUSE_WORDS = {
     "foil_fresh_default": "treats a list default argument as fresh on every call",
     "foil_all_branches": "runs every branch of an if, ignoring the condition",
     "foil_loop_once": "runs a loop body only once",
+    "foil_pattern_completion": "writes a string that completes the surrounding naming scheme instead of copying the literal",
     "wrong_value": "gives a wrong value that matches no known misreading",
     "malformed_answer": "does not give a usable answer",
     "empty_answer": "gives no answer",

@@ -17,13 +17,36 @@ changes its ground truth (the BFS-optimal plan length is identical):
   recomputed, so a trajectory shows exactly the first step that failed to
   make progress -- not just whether the episode ended well.
 
+COPY-FIDELITY DIMS (docs/spec-ticket-fabrication.md). All default to the
+behaviour above, byte for byte; none touches ground truth (BFS plan, ticket
+checking) -- only the form, timing and surroundings of the tickets:
+  * `ticket_entropy` 0..1 -- the ticket's FORM, from opaque hex (`tkt-3f9a1c`)
+    to pattern-suggestive strings that look derivable from context but are
+    not (`ticket_depth_flag_1_482913`); the value is always random.
+  * `ticket_length` -- hex characters in the ticket body (0 = legacy 6).
+  * `carry_distance` / `n_live_tickets` -- CONTROLLED links: k producers at
+    consecutive plan steps, each consumed exactly `carry_distance` steps
+    later, so up to min(k, d) tickets are held at once. 0/0 = legacy links.
+  * `decoy_tickets` -- every successful result also shows up to 3 labelled,
+    plausible but wrong ticket-like strings (previous/example/cached).
+An invalid ticket is classified by what was submitted: missing, decoy,
+stale (an older ticket of the same producer), wrong_producer, corrupted
+(a near-copy of the right one) or FABRICATED (seen nowhere).
+
+ABLATIONS (answer-key preserving, for attributing a confirmed failure):
+`restate_tickets` (every result restates the currently valid tickets),
+`copy_instruction` (one system-prompt line: copy tickets exactly) and
+`opaque_names` (tool and entity ids renamed to patternless tokens).
+
 Everything is deterministic given (world, seed, spec, sequence of calls).
 """
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
+import re
 from collections import deque
 from dataclasses import dataclass, field, replace
 
@@ -124,11 +147,82 @@ def choose_links(
     return tuple(candidates[:k])
 
 
+def controlled_links(plan: list[Call], seed: int, n_live: int, carry: int) -> tuple[tuple[ValueLink, ...], tuple]:
+    """k = `n_live` producers at consecutive plan steps, each consumed exactly
+    d = `carry` steps later, so min(k, d) tickets are live at once (k is
+    clamped to d). Returns
+    (links, positions) with positions [(producer_step, consumer_step)].
+
+    A consumer tool may not occur in the plan before its producer step, so
+    following the optimal plan always has the ticket in hand (ground truth is
+    unchanged). Values beyond what the plan can host are clamped; the
+    realised carry and live counts are reported in `InteractiveEnv.summary`."""
+    L = len(plan)
+    if L < 2:
+        return (), ()
+    d = min(max(int(carry), 1), L - 1)
+    # with k > d a consumer step would collide with a later producer step, so
+    # at most d tickets can be live at once: k is clamped to d (and the plan)
+    k = min(max(int(n_live), 1), d, L - d)
+    tools = [c.tool for c in plan]
+    first: dict[str, int] = {}
+    for i, t in enumerate(tools):
+        first.setdefault(t, i)
+    starts = list(range(0, L - d - k + 1))
+    rot = _sha_int(str(seed), "carry-start") % len(starts)
+    best: list[tuple[ValueLink, tuple[int, int]]] = []
+    for s in starts[rot:] + starts[:rot]:
+        chosen: list[tuple[ValueLink, tuple[int, int]]] = []
+        used: set[str] = set()
+        for m in range(k):
+            pi, ci = s + m, s + m + d
+            tp, tc = tools[pi], tools[ci]
+            if tp == tc or tp in used or tc in used or first[tc] <= pi:
+                continue
+            used |= {tp, tc}
+            chosen.append((ValueLink(producer=tp, consumer=tc), (pi, ci)))
+        if len(chosen) > len(best):
+            best = chosen
+        if len(best) == k:
+            break
+    return tuple(l for l, _ in best), tuple(pos for _, pos in best)
+
+
+def _ticket_form(level: int, entity: str, digest: str, length: int) -> str:
+    """Ticket text at a suggestiveness level (0 opaque .. 3 pattern-shaped)."""
+    body = digest[:length]
+    if level <= 0:
+        return f"tkt-{body}"
+    if level == 1:
+        return f"tkt-{entity}-{body}"
+    if level == 2:
+        return f"ticket_{entity}_{body}"
+    return f"ticket_{entity}_{str(int(digest, 16))[-max(length, 5):]}"
+
+
 @dataclass(frozen=True)
 class InteractiveSpec:
     value_links: float = 0.0  # fraction of dependency edges that carry a ticket
     fault_step: int = 0  # 1-based call number that fails transiently; 0 = none
     style: str = "explicit"  # tool-description style ("implicit" strips preconditions)
+    # copy-fidelity dims (module docstring); defaults = legacy behaviour
+    ticket_entropy: float = 0.0
+    ticket_length: int = 0
+    carry_distance: int = 0
+    n_live_tickets: int = 0
+    decoy_tickets: int = 0
+    # answer-key-preserving ablations
+    restate_tickets: bool = False
+    copy_instruction: bool = False
+    opaque_names: bool = False
+
+    @property
+    def controlled(self) -> bool:
+        return self.carry_distance > 0 or self.n_live_tickets > 0
+
+    @property
+    def ticket_level(self) -> int:
+        return min(3, max(0, int(self.ticket_entropy * 4)))
 
 
 @dataclass
@@ -140,6 +234,7 @@ class StepRecord:
     error_kind: str | None
     result: dict
     distance_after: int | None
+    ticket_error: str | None = None  # invalid_ticket subtype (missing/decoy/stale/...)
 
 
 @dataclass
@@ -150,7 +245,20 @@ class InteractiveEnv:
 
     def __post_init__(self) -> None:
         self.plan = optimal_plan(self.world, max_depth=max(self.world.budget, 1)) or []
-        self.links = choose_links(self.world, self.plan, self.seed, self.spec.value_links)
+        if self.spec.controlled:
+            self.links, self.link_positions = controlled_links(
+                self.plan, self.seed, self.spec.n_live_tickets, self.spec.carry_distance)
+        else:
+            self.links = choose_links(self.world, self.plan, self.seed, self.spec.value_links)
+            first: dict[str, int] = {}
+            for i, c in enumerate(self.plan):
+                first.setdefault(c.tool, i)
+            self.link_positions = tuple(
+                (first[l.producer], first[l.consumer]) for l in self.links
+                if l.producer in first and l.consumer in first)
+        self.issued: dict[str, tuple[str, int]] = {}  # ticket -> (producer, call count)
+        self.decoys_shown: set[str] = set()
+        self._fwd, self._rev = self._build_rename() if self.spec.opaque_names else ({}, {})
         self.producer_for = {l.consumer: l.producer for l in self.links}
         self.producers = {l.producer for l in self.links}
         self.state = self.world.initial_state
@@ -177,17 +285,92 @@ class InteractiveEnv:
     def calls_left(self) -> int:
         return self.call_budget - len(self.steps)
 
+    # -- naming (opaque_names ablation) --------------------------------------
+    def _build_rename(self) -> tuple[dict, dict]:
+        w = self.world
+        ids = [t.id for t in w.catalog] + [s.id for s in w.services] + [a.id for a in w.artifacts] \
+            + [f.id for f in w.flags]
+        fwd: dict[str, str] = {}
+        used: set[str] = set()
+        alphabet = "bcdfghjkmnpqrstvwxz"
+        for i, orig in enumerate(dict.fromkeys(ids)):
+            k = 0
+            while True:
+                h = _sha_int(str(self.seed), "opaque", orig, str(k))
+                tok = alphabet[h % 19] + "".join("bcdfghjkmnpqrstvwxz23456789"[(h >> (5 * j)) % 27] for j in range(1, 5))
+                if tok not in used:
+                    break
+                k += 1
+            used.add(tok)
+            fwd[orig] = tok
+        return fwd, {v: k for k, v in fwd.items()}
+
+    def _out(self, text: str) -> str:
+        """Rename every id in model-facing text (identity unless opaque_names)."""
+        if not self._fwd or not text:
+            return text
+        if not hasattr(self, "_rx"):
+            alts = "|".join(re.escape(k) for k in sorted(self._fwd, key=len, reverse=True))
+            self._rx = re.compile(rf"(?<![A-Za-z0-9_\-])({alts})(?![A-Za-z0-9_\-])")
+        return self._rx.sub(lambda m: self._fwd[m.group(1)], text)
+
+    def _out_result(self, result: dict) -> dict:
+        if not self._fwd:
+            return result
+        return {k: (self._out(v) if isinstance(v, str) and k == "error" else v) for k, v in result.items()}
+
+    def _entity_for(self, tool: str, call_args: dict) -> str:
+        raw = next(iter(call_args.values()), tool) if call_args else tool
+        return self._out(str(raw)).replace("-", "_")
+
+    def _new_ticket(self, tool: str, count: int, entity: str) -> str:
+        digest = hashlib.sha256(f"{self.seed}|{tool}|{count}".encode("utf-8")).hexdigest()
+        length = min(max(self.spec.ticket_length, 4), 64) if self.spec.ticket_length else 6
+        return _ticket_form(self.spec.ticket_level, entity, digest, length)
+
+    def _decoys(self, n: int, entity: str) -> dict:
+        out: dict[str, str] = {}
+        length = min(max(self.spec.ticket_length, 4), 64) if self.spec.ticket_length else 6
+        for k, label in enumerate(("previous_ticket", "example_ticket", "cached_ticket")[: self.spec.decoy_tickets]):
+            digest = hashlib.sha256(f"{self.seed}|decoy|{n}|{k}".encode("utf-8")).hexdigest()
+            out[label] = _ticket_form(self.spec.ticket_level, entity, digest, length)
+            self.decoys_shown.add(out[label])
+        return out
+
+    def classify_ticket_error(self, submitted, producer: str) -> str:
+        expected = self.tickets.get(producer)
+        if submitted is None or str(submitted).strip() == "":
+            return "missing"
+        sub = str(submitted).strip()
+        if sub in self.decoys_shown:
+            return "decoy"
+        if sub in self.issued:
+            return "stale" if self.issued[sub][0] == producer else "wrong_producer"
+        # "corrupted" = a near-copy of the ticket's RANDOM part. Comparing whole
+        # strings would credit a pattern-shaped fabrication for sharing the
+        # `ticket_<entity>_` scaffold with a pattern-shaped real ticket.
+        if expected is not None:
+            body = re.split(r"[-_]", expected)[-1]
+            tail = re.split(r"[-_]", sub)[-1]
+            if difflib.SequenceMatcher(None, tail, body).ratio() >= 0.75:
+                return "corrupted"
+        return "fabricated"
+
     # -- acting ------------------------------------------------------------
     def step(self, tool: str, args: dict) -> dict:
         n = len(self.steps) + 1
         args = {str(k): v for k, v in (args or {}).items()}
-        ok, kind = False, None
+        if self._rev:  # opaque_names: translate model-facing ids back
+            tool = self._rev.get(tool, tool)
+            args = {k: (self._rev.get(v, v) if isinstance(v, str) and k != "ticket" else v) for k, v in args.items()}
+        ok, kind, ticket_error = False, None, None
         if self.spec.fault_step and n == self.spec.fault_step and not self._fault_fired:
             self._fault_fired = True
             kind, result = "transient", {"status": "error", "error": TRANSIENT_ERROR}
         elif tool in self.producer_for and args.get("ticket") != self.tickets.get(self.producer_for[tool]):
             producer = self.producer_for[tool]
             kind = "invalid_ticket"
+            ticket_error = self.classify_ticket_error(args.get("ticket"), producer)
             result = {
                 "status": "error",
                 "error": (
@@ -205,16 +388,23 @@ class InteractiveEnv:
                 ok = True
                 self.state = r.state
                 result = {"status": "ok"}
+                entity = self._entity_for(tool, call_args)
                 if tool in self.producers:
                     count = self.producer_calls.get(tool, 0) + 1
                     self.producer_calls[tool] = count
-                    ticket = "tkt-" + hashlib.sha256(
-                        f"{self.seed}|{tool}|{count}".encode("utf-8")
-                    ).hexdigest()[:6]
+                    ticket = self._new_ticket(tool, count, entity)
                     self.tickets[tool] = ticket
+                    self.issued[ticket] = (tool, count)
                     result["ticket"] = ticket
+                if self.spec.decoy_tickets:
+                    result.update(self._decoys(n, entity))
+        if self.spec.restate_tickets and self.tickets:
+            result["valid_tickets"] = {
+                f"from {self._out(p)}": t for p, t in sorted(self.tickets.items())
+            }
+        result = self._out_result(result)
         self.steps.append(
-            StepRecord(n, tool, args, ok, kind, result, self.distance(self.state))
+            StepRecord(n, tool, args, ok, kind, result, self.distance(self.state), ticket_error)
         )
         return result
 
@@ -245,11 +435,14 @@ class InteractiveEnv:
                 }
                 required.append("ticket")
                 desc += f" Requires `ticket` from the most recent successful call to {producer}."
+            if self._fwd:
+                desc = self._out(desc)
+                props = {k: {**v, "description": self._out(v["description"])} for k, v in props.items()}
             out.append(
                 {
                     "type": "function",
                     "function": {
-                        "name": t.id,
+                        "name": self._out(t.id),
                         "description": desc,
                         "parameters": {"type": "object", "properties": props, "required": required},
                     },
@@ -273,7 +466,10 @@ class InteractiveEnv:
             "read the error and adjust. When the goal is reached, reply DONE without calling "
             "a tool."
         )
-        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        if self.spec.copy_instruction:
+            system += (" Ticket values are opaque: always copy them exactly as returned, "
+                       "never construct or guess them.")
+        return [{"role": "system", "content": system}, {"role": "user", "content": self._out(user)}]
 
     # -- outcome -----------------------------------------------------------
     def summary(self) -> dict:
@@ -297,13 +493,31 @@ class InteractiveEnv:
             "first_deviation_step": first_dev,
             "n_links": len(self.links),
             "final_distance": self.distance(self.state),
+            "ticket_errors": self._ticket_error_counts(),
+            "fabricated_tickets": sum(1 for s in self.steps if s.ticket_error == "fabricated"),
+            "carry_distance": (
+                sum(c - p for p, c in self.link_positions) / len(self.link_positions)
+                if self.link_positions else 0.0
+            ),
+            "max_live_tickets": max(
+                (sum(1 for p, c in self.link_positions if p <= t < c) for t in range(len(self.plan))),
+                default=0,
+            ),
         }
+
+    def _ticket_error_counts(self) -> dict:
+        out: dict[str, int] = {}
+        for st in self.steps:
+            if st.ticket_error:
+                out[st.ticket_error] = out.get(st.ticket_error, 0) + 1
+        return out
 
     def transcript(self) -> str:
         return json.dumps(
             [
                 {"step": s.step, "tool": s.tool, "args": s.args, "ok": s.ok,
-                 "error_kind": s.error_kind, "result": s.result, "distance_after": s.distance_after}
+                 "error_kind": s.error_kind, "result": s.result, "distance_after": s.distance_after,
+                 **({"ticket_error": s.ticket_error} if s.ticket_error else {})}
                 for s in self.steps
             ]
         )

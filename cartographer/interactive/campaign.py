@@ -28,6 +28,13 @@ _TRAP_DIMS = (
     "poison_traps", "dishonest_decoys_on", "implicit_preconditions_on",
     "zero_slack_on", "id_collisions_on",
 )
+# copy-fidelity dims (docs/spec-ticket-fabrication.md) and the answer-key-
+# preserving ablation switches. Ablations are excluded from the task seed, so
+# an ablated rerun sees the IDENTICAL world -- the only thing that changes is
+# the surface the ablation touches.
+_TICKET_INT_DIMS = ("ticket_length", "carry_distance", "n_live_tickets", "decoy_tickets")
+_TICKET_FLOAT_DIMS = ("ticket_entropy",)
+ABLATION_KEYS = ("restate_tickets", "copy_instruction", "opaque_names")
 
 
 def default_interactive_ray() -> EscalationRay:
@@ -70,9 +77,9 @@ class InteractiveEvaluator:
         self.cancelled = False
         self._lock = threading.Lock()
 
-    def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
+    def __call__(self, config: dict[str, float], trial_seed: int, run_suffix: str = "") -> bool:
         params = _apply_tool_config(self.base, {k: v for k, v in config.items() if k in _TOOL_KNOWN_KEYS})
-        seed = _task_seed(config, trial_seed)
+        seed = _task_seed({k: v for k, v in config.items() if k not in ABLATION_KEYS}, trial_seed)
         latent = {
             "plan_depth": float(params.plan_depth),
             "decoy_tools": float(params.decoy_tools),
@@ -83,6 +90,15 @@ class InteractiveEvaluator:
             "fault_step": float(int(round(config.get("fault_step", 0.0)))),
             **{k: float(1.0 if config.get(k, 0.0) >= 0.5 else 0.0) for k in _TRAP_DIMS},
         }
+        for k in _TICKET_INT_DIMS:
+            if k in config:
+                latent[k] = float(int(round(config[k])))
+        for k in _TICKET_FLOAT_DIMS:
+            if k in config:
+                latent[k] = float(config[k])
+        for k in ABLATION_KEYS:
+            if config.get(k, 0.0) >= 0.5:
+                latent[k] = 1.0
 
         with self._lock:
             reason = None
@@ -100,7 +116,17 @@ class InteractiveEvaluator:
         world, style = _apply_tool_trap_config(world, config, seed)
         env = InteractiveEnv(
             world, seed,
-            InteractiveSpec(value_links=latent["value_links"], fault_step=int(latent["fault_step"]), style=style),
+            InteractiveSpec(
+                value_links=latent["value_links"], fault_step=int(latent["fault_step"]), style=style,
+                ticket_entropy=latent.get("ticket_entropy", 0.0),
+                ticket_length=int(latent.get("ticket_length", 0)),
+                carry_distance=int(latent.get("carry_distance", 0)),
+                n_live_tickets=int(latent.get("n_live_tickets", 0)),
+                decoy_tickets=int(latent.get("decoy_tickets", 0)),
+                restate_tickets=bool(latent.get("restate_tickets", 0.0)),
+                copy_instruction=bool(latent.get("copy_instruction", 0.0)),
+                opaque_names=bool(latent.get("opaque_names", 0.0)),
+            ),
         )
         res = run_episode(
             self.client, self.model, env, max_tokens=self.max_tokens, cost_fn=cost_usd,
@@ -121,6 +147,10 @@ class InteractiveEvaluator:
             f";first_deviation_step={s['first_deviation_step']};links={s['n_links']}"
             f";fault_step={int(latent['fault_step'])};turns={res.turns}"
         )
+        if s["ticket_errors"]:
+            detail += ";ticket_errors=" + ",".join(f"{k}:{v}" for k, v in sorted(s["ticket_errors"].items()))
+        if any(k in latent for k in ABLATION_KEYS):
+            detail += ";ablation=" + "+".join(k for k in ABLATION_KEYS if k in latent)
         if res.error:
             detail += f";error={res.error}"
         realized = dict(tool_measure(world))
@@ -130,6 +160,10 @@ class InteractiveEvaluator:
             "recovered": 1.0 if s["recovered"] else 0.0,
             "first_deviation_step": float(s["first_deviation_step"] or -1),
             "final_distance": float(s["final_distance"] if s["final_distance"] is not None else -1),
+            "fabricated_tickets": float(s["fabricated_tickets"]),
+            "realized_carry_distance": float(s["carry_distance"]),
+            "realized_live_tickets": float(s["max_live_tickets"]),
+            **{f"ticket_error_{k}": float(v) for k, v in s["ticket_errors"].items()},
         })
         prompt = env.opening_messages()[1]["content"]
         with self._lock:
@@ -140,14 +174,15 @@ class InteractiveEvaluator:
             if self.spent_usd >= self.cost_cap_usd:
                 self.capped = True
             self._append(latent, realized, seed, trial_seed, prompt, env.transcript(), verdict, detail,
-                         res.tokens_in, res.tokens_out, res.cost_usd, res.latency_ms, res.finish_reason)
+                         res.tokens_in, res.tokens_out, res.cost_usd, res.latency_ms, res.finish_reason,
+                         run_suffix)
         return verdict == Verdict.PASS
 
     def _append(self, latent, realized, seed, trial_seed, prompt, response, verdict, detail,
-                t_in, t_out, cost, latency, finish) -> None:
+                t_in, t_out, cost, latency, finish, run_suffix: str = "") -> None:
         self.store.append(
             ExperimentRecord(
-                run_id=self.run_id, model_name=self.model, latent_params=latent,
+                run_id=self.run_id + run_suffix, model_name=self.model, latent_params=latent,
                 realized_dims=realized, render_mode=RenderMode.TEMPLATE, task_seed=seed,
                 trial_seed=trial_seed, rendering_seed=seed, prompt_text=prompt,
                 response_text=response, verdict=verdict, verifier_detail=detail,
@@ -179,5 +214,122 @@ def run_interactive_breaking_point_campaign(
     bp = find_breaking_point(ev, ray if ray is not None else default_interactive_ray(),
                              budget=budget, k_trials=k_trials, parallelism=parallelism)
     note = f"spent=${ev.spent_usd:.4f}" + (";cost_cap_hit" if ev.capped else "")
+    bp.note = f"{bp.note}; {note}" if bp.note else note
+    return bp
+
+
+# ---------------------------------------------------------------------------
+# Resample gate for interactive FAILs (closes the gap in findings §5.4)
+# ---------------------------------------------------------------------------
+
+
+class ResampleGatedEvaluator:
+    """Wraps an `InteractiveEvaluator`: every FAIL is re-run `n` more times on
+    the byte-identical task (same config, same trial seed, temperature 0)
+    before escalation sees it. Reruns are stored under `<run_id>/verify`.
+
+    STABLE (at most half the reruns pass) -> the FAIL stands. NOISE (more
+    than half pass) -> the trial is scored as a pass for escalation, so a
+    sampling fluke can never become a frontier or enter decomposition. The
+    original FAIL record is kept (records are append-only); `noise` /
+    `stable` counts are on the wrapper, and every rerun is in the store.
+    Infrastructure outcomes (errors, cost cap) are not resampled."""
+
+    def __init__(self, inner: InteractiveEvaluator, n: int = 3, stable_threshold: float = 0.5) -> None:
+        self.inner, self.n, self.stable_threshold = inner, n, stable_threshold
+        self.stable = 0
+        self.noise = 0
+        self._lock = threading.Lock()
+
+    def __getattr__(self, name):  # spent_usd, capped, error_count, ... come from the inner evaluator
+        return getattr(self.inner, name)
+
+    def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
+        errors_before = self.inner.error_count
+        if self.inner(config, trial_seed):
+            return True
+        if self.inner.error_count > errors_before or self.inner.capped:
+            return False  # ERROR (infra / cap), not a model failure: nothing to resample
+        passes = sum(bool(self.inner(config, trial_seed, run_suffix="/verify")) for _ in range(self.n))
+        noise = passes / self.n > self.stable_threshold
+        with self._lock:
+            if noise:
+                self.noise += 1
+            else:
+                self.stable += 1
+        return noise
+
+
+# ---------------------------------------------------------------------------
+# Copy-fidelity rays (docs/spec-ticket-fabrication.md, Part C)
+# ---------------------------------------------------------------------------
+
+
+def ticket_mechanism_ray() -> EscalationRay:
+    """Ray 1, the mechanism: ticket form opaque -> pattern-suggestive, together
+    with carry distance 1 -> 10, one live ticket, plan depth pinned at 12
+    (about 15-call plans, enough room for a 10-step carry)."""
+    return EscalationRay(dims=(
+        RayDim("plan_depth", 12, 12, True),
+        RayDim("n_live_tickets", 1, 1, True),
+        RayDim("ticket_entropy", 0.0, 1.0, False),
+        RayDim("carry_distance", 1, 10, True),
+    ))
+
+
+def ticket_trap_ray() -> EscalationRay:
+    """Ray 2, the trap: decoy tickets 0 -> 3 with live tickets 1 -> 6, carry
+    distance pinned at 6 so all six can be held at once."""
+    return EscalationRay(dims=(
+        RayDim("plan_depth", 12, 12, True),
+        RayDim("carry_distance", 6, 6, True),
+        RayDim("decoy_tickets", 0, 3, True),
+        RayDim("n_live_tickets", 1, 6, True),
+    ))
+
+
+def ticket_length_ray() -> EscalationRay:
+    """Ray 3, the rival-explanation control: opaque tickets 8 -> 64 hex
+    characters, one live ticket, short carry. Run BEFORE believing any
+    salience story: if length alone breaks the model, it is not the prior."""
+    return EscalationRay(dims=(
+        RayDim("plan_depth", 8, 8, True),
+        RayDim("n_live_tickets", 1, 1, True),
+        RayDim("carry_distance", 3, 3, True),
+        RayDim("ticket_length", 8, 64, True),
+    ))
+
+
+TICKET_RAYS = {"mechanism": ticket_mechanism_ray, "trap": ticket_trap_ray, "length": ticket_length_ray}
+
+
+def run_ticket_fidelity_campaign(
+    client: Client,
+    store: ResultsStore,
+    run_id: str,
+    model: str,
+    ray: EscalationRay | str = "mechanism",
+    budget: int = 60,
+    cost_cap: float = 0.75,
+    k_trials: int = 5,
+    parallelism: int = 4,
+    max_tokens: int = 16000,
+    protocol: str = "text_fallback",
+    resample_gate: bool = True,
+    resample_n: int = 3,
+    cancel_event: threading.Event | None = None,
+) -> BreakingPoint:
+    """Escalation over a copy-fidelity ray with every FAIL resample-gated
+    before it reaches bisect / decompose / confirm. Run id convention:
+    `camp-ticket-<ray>-<label>-NNN`; gate reruns land in `<run_id>/verify`."""
+    if isinstance(ray, str):
+        ray = TICKET_RAYS[ray]()
+    inner = InteractiveEvaluator(client, model, store, run_id, cost_cap, max_tokens=max_tokens,
+                                 cancel_event=cancel_event, protocol=protocol)
+    ev = ResampleGatedEvaluator(inner, n=resample_n) if resample_gate else inner
+    bp = find_breaking_point(ev, ray, budget=budget, k_trials=k_trials, parallelism=parallelism)
+    note = f"spent=${inner.spent_usd:.4f}" + (";cost_cap_hit" if inner.capped else "")
+    if resample_gate:
+        note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
     bp.note = f"{bp.note}; {note}" if bp.note else note
     return bp

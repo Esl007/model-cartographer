@@ -102,6 +102,17 @@ class Call:
 
 
 @dataclass(frozen=True)
+class OpaqueLit:
+    """An opaque string literal (`"tkt-3f9a1c"`) sitting inside a naming
+    scheme it breaks. `value` is what Python evaluates; `pattern` is what a
+    reader who COMPLETES the scheme instead of copying the literal would
+    write (`"ticket_audit_3"`). Only the `pattern_completion` foil reads it."""
+
+    value: str
+    pattern: str
+
+
+@dataclass(frozen=True)
 class MethodCall:
     obj: str  # variable id
     method: str  # append | pop | extend | get | upper | replace
@@ -109,7 +120,7 @@ class MethodCall:
 
 
 Expr = Union[Const, ListLit, DictLit, Name, BinOp, Compare, BoolOp, Not, Index, Slice, Len, IfExp, Call,
-             MethodCall]
+             MethodCall, OpaqueLit]
 
 METHODS = {"append", "pop", "extend", "get", "upper", "replace"}
 
@@ -204,6 +215,10 @@ TRAP_KEYS = (
     "negative_modulo_on",
     "mutable_default_on",
 )
+# Traps outside the six-trap family, so the code_traps ray and its frontier row
+# keep their meaning. `opaque_literal_on` is the code-tracing replication of the
+# interactive ticket-fabrication finding (docs/spec-ticket-fabrication.md, Part D).
+EXTRA_TRAP_KEYS = ("opaque_literal_on",)
 
 
 @dataclass(frozen=True)
@@ -219,6 +234,7 @@ class CodeDimParams:
     inclusive_range_trap_on: bool = False
     negative_modulo_on: bool = False
     mutable_default_on: bool = False
+    opaque_literal_on: bool = False
 
     def __post_init__(self) -> None:
         if not 2 <= self.n_statements <= 80:

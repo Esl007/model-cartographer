@@ -33,6 +33,7 @@ from .model import (
     MethodCall,
     Name,
     Not,
+    OpaqueLit,
     Print,
     Program,
     RangeIter,
@@ -74,6 +75,7 @@ class Semantics:
     scoping: str = "lexical"  # "lexical" (Python) | "flat"
     conditionals: str = "evaluate"  # "evaluate" (Python) | "all_branches"
     loops: str = "iterate"  # "iterate" (Python) | "once"
+    literals: str = "copy"  # "copy" (Python) | "pattern" (complete the naming scheme instead)
 
 
 TRUE = Semantics()
@@ -281,6 +283,8 @@ class Interpreter:
     def _eval(self, e, frame: _Frame):
         if isinstance(e, Const):
             return e.value
+        if isinstance(e, OpaqueLit):
+            return e.pattern if self.sem.literals == "pattern" else e.value
         if isinstance(e, ListLit):
             return [self._eval(x, frame) for x in e.items]
         if isinstance(e, DictLit):

@@ -34,7 +34,7 @@ import copy
 import hashlib
 from dataclasses import replace
 
-from .foils import FOILS, TRAP_FOILS
+from .foils import ALL_TRAP_FOILS, FOILS
 from .interpret import TRUE, Closure, InterpError, Interpreter, answer, answer_from_trace, run
 from .model import (
     TRAP_KEYS,
@@ -55,6 +55,7 @@ from .model import (
     ListLit,
     MethodCall,
     Name,
+    OpaqueLit,
     Print,
     Program,
     Query,
@@ -550,11 +551,37 @@ class _Builder:
         fold = self.fold_expr(Name(a2) if self.rng.chance(0.5) else BinOp("+", Name(a1), Name(a2)))
         return [site, c1, c2, fold], 0
 
+    def trap_opaque_literal(self) -> list:
+        """An opaque literal inside a naming scheme it breaks, carried through
+        an assignment and a concatenation into the target. Copying gives
+        `tkt-3f9a1c/ok`; completing the scheme gives `ticket_audit_3/ok`."""
+        words = []
+        while len(words) < 3:
+            w = self.rng.choice(("build", "deploy", "stage", "audit", "sync", "cache", "release"))
+            if w not in words:
+                words.append(w)
+        stmts = []
+        for i, w in enumerate(words[:-1], 1):
+            stmts.append(Assign(self.sid(), self.add_var("str", "trap"), Const(f"ticket_{w}_{i}")))
+        opaque = self.add_var("str", "trap")
+        hexv = format(self.rng.randint(0, 0xFFFFFF), "06x")
+        site = Assign(self.sid(), opaque, OpaqueLit(f"tkt-{hexv}", f"ticket_{words[-1]}_{len(words)}"))
+        carry, tagged = self.add_var("str", "trap"), self.add_var("str", "trap")
+        stmts += [
+            site,
+            Assign(self.sid(), carry, Name(opaque)),
+            Assign(self.sid(), tagged, BinOp("+", Name(carry), Const(self.rng.choice(("/ok", ":v2", "#done"))))),
+            self.fold_expr(Name(tagged)),
+        ]
+        return stmts, len(words) - 1
+
     # -- driver ----------------------------------------------------------------
 
     def build(self) -> Program:
         p = self.p
         tkind = "list" if self.rng.chance(0.3) else "int"
+        if p.opaque_literal_on:
+            tkind = "list"  # the carried string must reach the answer (rng draw kept: off-programs unchanged)
         self.target = self.add_var(tkind, "target")
         others = []
         for _ in range(p.n_variables - 1):
@@ -577,7 +604,7 @@ class _Builder:
         twin_t = {v.id for v in self.vars.values() if v.twin_of == self.target}
         self.unfolded = {v for v in self.live() if v != self.target and v not in twin_t}
 
-        traps = list(p.traps_on())
+        traps = list(p.traps_on()) + (["opaque_literal_on"] if p.opaque_literal_on else [])
         budget = max(p.n_statements, self.n_nodes + 1)
         # trap blocks land at evenly spread fractions of the live budget
         start = self.n_nodes
@@ -589,6 +616,7 @@ class _Builder:
             "inclusive_range_trap_on": self.trap_inclusive_range,
             "negative_modulo_on": self.trap_negative_modulo,
             "mutable_default_on": self.trap_mutable_default,
+            "opaque_literal_on": self.trap_opaque_literal,
         }
         stalls = 0
         while self.n_nodes < budget or traps:
@@ -679,11 +707,11 @@ def validate(program: Program) -> str | None:
         return "too many steps"
     truth = answer_from_trace(program, tr)
     foils = {name: answer(program, sem) for name, sem in FOILS.items()}
-    on = set(program.params.traps_on())
-    for trap, foil in TRAP_FOILS.items():
-        if trap in on and foils[foil] == truth:
+    for trap, foil in ALL_TRAP_FOILS.items():
+        on = bool(getattr(program.params, trap))
+        if on and foils[foil] == truth:
             return f"trap {trap} is not answer-relevant"
-        if trap not in on and foils[foil] != truth:
+        if not on and foils[foil] != truth:
             return f"disabled trap {trap} still changes the answer"
     twin = program.twin_of_target()
     if twin is not None and program.query.kind == "final_value":

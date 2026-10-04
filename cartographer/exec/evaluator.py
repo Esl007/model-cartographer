@@ -1935,7 +1935,7 @@ def run_tool_breaking_point_campaign(
 
 _CODE_INT_KEYS = {"n_statements", "max_nesting", "n_variables"}
 _CODE_FLOAT_KEYS = {"distractor_fraction", "identifier_confusability"}
-_CODE_BOOL_KEYS = set(CODE_TRAP_KEYS)
+_CODE_BOOL_KEYS = set(CODE_TRAP_KEYS) | {"opaque_literal_on"}
 _CODE_KNOWN_KEYS = _CODE_INT_KEYS | _CODE_FLOAT_KEYS | _CODE_BOOL_KEYS
 _CODE_LIMITS = {
     "n_statements": (2, 80), "max_nesting": (0, 3), "n_variables": (2, 12),
@@ -1982,6 +1982,7 @@ def _code_latent(params: CodeDimParams) -> dict[str, float]:
         "distractor_fraction": float(params.distractor_fraction),
         "identifier_confusability": float(params.identifier_confusability),
         **{k: float(getattr(params, k)) for k in CODE_TRAP_KEYS},
+        "opaque_literal_on": float(params.opaque_literal_on),
     }
 
 
@@ -2044,7 +2045,7 @@ class CodeTraceEvaluator:
             return False
 
         realized = code_measure(program)
-        traps = ";".join(f"{k}={int(getattr(params, k))}" for k in CODE_TRAP_KEYS)
+        traps = ";".join(f"{k}={int(getattr(params, k))}" for k in (*CODE_TRAP_KEYS, "opaque_literal_on"))
         detail = (
             f"kind=code_trace;campaign=1;query={program.query.kind}"
         )
@@ -2089,7 +2090,7 @@ class CodeTraceEvaluator:
         latent = _code_latent(params)
         record = ExperimentRecord(
             run_id=self.run_id, model_name=self.model, latent_params=latent,
-            realized_dims={**realized, **{k: latent[k] for k in CODE_TRAP_KEYS}},
+            realized_dims={**realized, **{k: latent[k] for k in (*CODE_TRAP_KEYS, "opaque_literal_on")}},
             render_mode=RenderMode.TEMPLATE, task_seed=seed, trial_seed=trial_seed, rendering_seed=seed,
             prompt_text=rendered.prompt, response_text=result.text, verdict=verdict, verifier_detail=detail,
             tokens_in=result.tokens_in, tokens_out=result.tokens_out, cost_usd=cost,
@@ -2127,6 +2128,15 @@ def default_code_trap_ray() -> EscalationRay:
     t >= 0.5. Decompose at the frontier names the trap that carries a break."""
     return EscalationRay(dims=(RayDim("n_statements", 6, 30, True),
                                *(RayDim(k, 0, 1, True) for k in CODE_TRAP_KEYS)))
+
+
+def default_code_copy_ray() -> EscalationRay:
+    """Copy fidelity in code (docs/spec-ticket-fabrication.md, Part D): length
+    with the opaque-literal trap switching on at t >= 0.5. A break whose
+    failures match `pattern_completion` means the reader completed the naming
+    scheme instead of copying the literal -- the code analogue of a
+    fabricated ticket."""
+    return EscalationRay(dims=(RayDim("n_statements", 6, 30, True), RayDim("opaque_literal_on", 0, 1, True)))
 
 
 def default_code_length_ray() -> EscalationRay:

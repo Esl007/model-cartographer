@@ -34,6 +34,7 @@ from .model import (
     MethodCall,
     Name,
     Not,
+    OpaqueLit,
     Print,
     Program,
     RangeIter,
@@ -194,6 +195,8 @@ def _expr(e, n: dict) -> tuple[str, int]:
     if isinstance(e, Const):
         if isinstance(e.value, int) and not isinstance(e.value, bool) and e.value < 0:
             return repr(e.value), 8
+        return repr(e.value), 10
+    if isinstance(e, OpaqueLit):
         return repr(e.value), 10
     if isinstance(e, Name):
         return n[e.id], 10

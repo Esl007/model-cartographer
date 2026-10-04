@@ -28,6 +28,7 @@ FOILS: dict[str, Semantics] = {
     "fresh_default": Semantics(default_args="fresh"),
     "all_branches": Semantics(conditionals="all_branches"),
     "loop_once": Semantics(loops="once"),
+    "pattern_completion": Semantics(literals="pattern"),
 }
 
 TRAP_FOILS: dict[str, str] = {
@@ -38,7 +39,10 @@ TRAP_FOILS: dict[str, str] = {
     "negative_modulo_on": "truncating_modulo",
     "mutable_default_on": "fresh_default",
 }
-FOIL_TRAPS = {v: k for k, v in TRAP_FOILS.items()}
+# Foils for traps outside the six-trap family (model.EXTRA_TRAP_KEYS).
+EXTRA_TRAP_FOILS: dict[str, str] = {"opaque_literal_on": "pattern_completion"}
+ALL_TRAP_FOILS: dict[str, str] = {**TRAP_FOILS, **EXTRA_TRAP_FOILS}
+FOIL_TRAPS = {v: k for k, v in ALL_TRAP_FOILS.items()}
 
 
 def foil_answers(program: Program) -> dict[str, object]:
