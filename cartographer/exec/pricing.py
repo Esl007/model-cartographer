@@ -15,6 +15,15 @@ PRICES: dict[str, tuple[float, float]] = {
     "nvidia/Nemotron-3_5-Lightning": (0.08, 0.20),
     # Nebius /models pricing, 2026-10-03
     "google/gemma-3-27b-it": (0.10, 0.30),
+    # Self-hosted on Modal (scripts/modal_serve_gemma4.py) -- the real cost
+    # is L40S time (~$2/h), not tokens. Priced as a gemma-3-27b proxy so
+    # campaign cost caps still bind instead of the $0 unknown-model path.
+    "gemma-4-31b-it-qat-w4a16-ct": (0.10, 0.30),
+    # OpenRouter :free via Google AI Studio -- genuinely $0 per token, but
+    # priced at the gemma-3-27b proxy anyway so cost caps bind the same
+    # way as the Modal run it is the bf16 contrast for (comparable spend
+    # ledgers; the tracked dollars are notional on both sides).
+    "google/gemma-4-31b-it:free": (0.10, 0.30),
 }
 
 

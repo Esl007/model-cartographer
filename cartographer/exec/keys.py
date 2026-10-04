@@ -13,6 +13,8 @@ from pathlib import Path
 _GROQ_KEY_RE = re.compile(r"gsk_[A-Za-z0-9_]+")
 # Tavily search keys are conventionally prefixed "tvly-".
 _TAVILY_KEY_RE = re.compile(r"tvly-[A-Za-z0-9_\-]+")
+# OpenRouter keys are prefixed "sk-or-".
+_OPENROUTER_KEY_RE = re.compile(r"sk-or-[A-Za-z0-9_\-]+")
 
 
 def load_keys(path: str = "env/Nebius api.txt") -> dict[str, str]:
@@ -50,5 +52,25 @@ def load_keys(path: str = "env/Nebius api.txt") -> dict[str, str]:
             if match:
                 keys["tavily"] = match.group(0)
                 break
+
+    for line in lines:
+        if "openrouter" in line.lower() or "sk-or-" in line:
+            match = _OPENROUTER_KEY_RE.search(line)
+            if match:
+                keys["openrouter"] = match.group(0)
+                break
+
+    # Modal line: `modal <endpoint api key> <https://...modal.run/v1>`.
+    # Order of key and URL doesn't matter; the URL is whichever token
+    # starts with http. Yields both "modal" and "modal_url", or neither.
+    for line in lines:
+        parts = line.split()
+        if parts and parts[0].lower() == "modal" and len(parts) >= 3:
+            url = next((p for p in parts[1:] if p.startswith("http")), None)
+            key = next((p for p in parts[1:] if not p.startswith("http")), None)
+            if url and key:
+                keys["modal"] = key
+                keys["modal_url"] = url
+            break
 
     return keys

@@ -43,7 +43,7 @@ from typing import Callable
 
 from ..confirm.replicate import next_replication_run_id, run_finding_replication
 from ..exec import client as client_mod
-from ..exec.client import GROQ, NEBIUS, Client, Provider
+from ..exec.client import GROQ, NEBIUS, OPENROUTER, Client, Provider, modal_provider
 from ..exec.evaluator import (
     _KNOWN_KEYS,
     run_adversarial_belief_campaign,
@@ -68,7 +68,24 @@ VERIFY_FAILURES_COST_NOTE = (
     "uncheck to skip and verify later by hand"
 )
 
-_PROVIDERS: dict[str, Provider] = {"groq": GROQ, "nebius": NEBIUS}
+_PROVIDERS: dict[str, Provider] = {"groq": GROQ, "nebius": NEBIUS, "openrouter": OPENROUTER}
+
+
+def _providers() -> dict[str, Provider]:
+    """The static providers plus, when the env/ key file carries a
+    `modal` line (endpoint key + deployment URL), the self-hosted Modal
+    endpoint serving the Gemma 4 QAT checkpoint
+    (scripts/modal_serve_gemma4.py). Built per call because the URL
+    lives in the key file, not in code."""
+    out = dict(_PROVIDERS)
+    try:
+        keys = load_keys()
+    except OSError:
+        return out
+    url = keys.get("modal_url")
+    if url:
+        out["modal"] = modal_provider(url)
+    return out
 
 # Campaign presets (mirrors the defaults of run_state_campaign /
 # run_belief_campaign in exec/evaluator.py).
@@ -305,7 +322,7 @@ def _reset_for_tests() -> None:
 def _provider_options(selected: str = "nebius") -> str:
     return "".join(
         f'<option value="{name}"{" selected" if name == selected else ""}>{name}</option>'
-        for name in sorted(_PROVIDERS)
+        for name in sorted(_providers())
     )
 
 
@@ -506,7 +523,7 @@ def _resolve_key(provider_name: str, api_key: str, deps: LaunchDeps) -> str | No
 
 def handle_models_step(form: dict[str, str], deps: LaunchDeps) -> str:
     provider_name = form.get("provider", "")
-    provider = _PROVIDERS.get(provider_name)
+    provider = _providers().get(provider_name)
     if provider is None:
         return error_html(f"unknown provider: {provider_name}")
 
@@ -594,7 +611,7 @@ def handle_start(
     verify = "auto" if form.get("verify_failures") else "manual"
 
     run_id = next_run_id(deps.db_path, campaign_type, model)
-    provider = _PROVIDERS[provider_name]
+    provider = _providers()[provider_name]
     cancel_event = threading.Event()
 
     with _lock:
@@ -690,7 +707,7 @@ def handle_verify_now(
     """
     global _CURRENT_RUN
 
-    provider = _PROVIDERS.get(provider_name)
+    provider = _providers().get(provider_name)
     if provider is None:
         return False, error_html(f"unknown provider: {provider_name}")
 
@@ -798,7 +815,7 @@ def handle_replicate_now(
     global _CURRENT_RUN
 
     provider_name = form.get("provider", "")
-    provider = _PROVIDERS.get(provider_name)
+    provider = _providers().get(provider_name)
     if provider is None:
         return False, error_html(f"unknown provider: {provider_name}")
 

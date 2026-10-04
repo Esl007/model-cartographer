@@ -35,6 +35,26 @@ GROQ = Provider(
     "groq", "https://api.groq.com/openai/v1", "/chat/completions", suggested_parallelism=2
 )
 NEBIUS = Provider("nebius", "https://api.studio.nebius.com/v1", "/chat/completions")
+# OpenRouter fronts Google AI Studio's free Gemma 4 endpoints (model ids
+# ending ":free"). Free tier is heavily rate-limited (~20 req/min), so
+# keep parallelism at 2 and let the 429 backoff do the pacing, same as
+# the old Groq free-tier posture.
+OPENROUTER = Provider(
+    "openrouter", "https://openrouter.ai/api/v1", "/chat/completions", suggested_parallelism=2
+)
+
+
+def modal_provider(base_url: str) -> Provider:
+    """A self-hosted vLLM endpoint on Modal (scripts/modal_serve_gemma4.py).
+
+    The URL is deployment-specific (``https://<workspace>--gemma4-qat-serve
+    .modal.run/v1``), so unlike GROQ/NEBIUS it can't be a module constant;
+    `load_keys` reads it from the key file and callers build the Provider
+    here. One L40S runs the single subject model, so parallelism stays
+    modest: vLLM batches concurrent requests fine, but past ~4 the extra
+    workers mostly just lengthen each other's latency.
+    """
+    return Provider("modal", base_url.rstrip("/"), "/chat/completions", suggested_parallelism=4)
 
 # Model-id substrings that mark an entry in a provider's /models listing as
 # not chat-capable (audio, embeddings, safety classifiers, etc.).

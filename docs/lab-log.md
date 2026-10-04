@@ -3509,3 +3509,19 @@ line is grade B/C until replicated):
 **Root cause / reasoning:** ...
 **Fix / decision / next step:** ...
 ```
+
+## 2026-10-03 — Modal provider for the Gemma 4 QAT subject model
+- Goal: probe the Kaggle competition checkpoint `gemma-4-31b-it-qat-w4a16-ct` (not on any hosted API) with the existing instrument. Nemotron roles (renderer/proposer/analyst) stay on Nebius; Modal serves only the subject.
+- Added `scripts/modal_serve_gemma4.py`: vLLM OpenAI-compatible server on one L40S, weights pulled once from Kaggle Models into a Modal volume, endpoint key via Modal secret, scales to zero after 5 min idle (~$2/h only while warm).
+- Wiring: `modal_provider(url)` in exec/client.py (parallelism 4); key file now takes a `modal <key> <url>` line (keys.py); /launch builds the provider dynamically when that line exists; `run_all_provinces.py --provider modal`; pricing entry for the served name (gemma-3-27b proxy prices so cost caps bind — real cost is GPU time).
+- Not yet run: weight download + first deploy + smoke. Open question: exact kagglehub handle for the checkpoint (placeholder in the script; copy from the Kaggle model page).
+
+## 2026-10-04 — Gemma 4 31B QAT (the Kaggle competition checkpoint): first full map, via Modal
+- Served `google/gemma-4-31B-it-qat-w4a16-ct` (HF, public, byte-source for the competition model pending a hash check against the competition copy) on one Modal L40S via vLLM; text tool protocol; full 12-stage map + Province III rerun. App stopped after each run; ~1.3 GPU-hours total, token ledger ~$0.08 (proxy prices).
+- **Two instrument bugs found and fixed before any finding was trusted:**
+  - episode.py sent `tools` even in text_fallback; vLLM (no tool parser for this model) 400'd every episode → api_error/protocol=none. Nebius had merely dropped the field for Gemma 3, masking this. Fixed: text_fallback now omits `tools` (30/30 province tests pass).
+  - Campaigns fired at a cold scale-to-zero endpoint scored startup timeouts as failures and poisoned the baseline gate ("degenerate"). Standing rule: warm until /v1/models=200 before any campaign; rerun scripts now do.
+- **Results (vs Gemma 3 27B, same instrument, same protocol):** state 57%→100%; order 99%→100%; code semantic traps 18/42→100% (exceeds generator); code length control→100%; impossible tasks bal.acc. 0.46→0.875; single-shot look-alike plans break 17→~22 calls (t*=0.78); structural traps break only at full stack + harder dims (t*=0.76); interactive look-alike holds to 27-call episodes (t*=0.89).
+- **Belief did NOT improve in kind: 56% / adversarial 60%** (G3: 49%/43%). The belief→reality collapse survives a full model generation.
+- **NEW BREAK, causally suggestive: value passing.** Interactive ray breaks at 8-call plans when value_links are on (t*=0.22, CI [0.15,0.29]); fault ray likewise (t*=0.27). 61/61 failing episodes carry invalid tickets; spot-check shows the model FABRICATES a pattern-plausible ticket (`ticket_depth_flag_1_12345`) instead of copying the opaque sha256 returned two steps earlier, then stops. Gemma 3: 0 invalid tickets in 136 episodes. Same mechanism family as Nano's `set_dep_th_flag_4` pattern-completion and the belief collapse: **prior overrides observation**. Confound alert: generation × quantization × provider all changed vs G3 — the bf16 Gemma 4 31B on OpenRouter (:free) is the clean contrast and is cheap to run next.
+- Resample gate NOT yet applied to these interactive FAILs (tool/code failures still bypass the gate — known gap); treat t* values as grade B until fresh-seed + resample.

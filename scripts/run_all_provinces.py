@@ -46,11 +46,20 @@ STAGES = {
 }
 
 
-def _client():
-    from cartographer.exec.client import NEBIUS, Client
+def _client(provider_name: str = "nebius"):
+    from cartographer.exec.client import GROQ, NEBIUS, OPENROUTER, Client, modal_provider
     from cartographer.exec.keys import load_keys
 
-    return Client(NEBIUS, load_keys()["nebius"])
+    keys = load_keys()
+    if provider_name == "modal":
+        # Self-hosted Gemma 4 QAT endpoint (scripts/modal_serve_gemma4.py);
+        # key file line: `modal <endpoint key> <https://...modal.run/v1>`.
+        if "modal_url" not in keys:
+            sys.exit("no `modal <key> <url>` line in the env/ key file; deploy "
+                     "scripts/modal_serve_gemma4.py first and add one.")
+        return Client(modal_provider(keys["modal_url"]), keys["modal"])
+    provider = {"nebius": NEBIUS, "groq": GROQ, "openrouter": OPENROUTER}[provider_name]
+    return Client(provider, keys[provider_name])
 
 
 def _summary(obj) -> dict:
@@ -67,7 +76,8 @@ def _summary(obj) -> dict:
     return {k: d[k] for k in keep if k in d} or d
 
 
-def run_stage(stage: str, model: str, label: str, protocol: str = "native") -> dict:
+def run_stage(stage: str, model: str, label: str, protocol: str = "native",
+              provider_name: str = "nebius") -> dict:
     from cartographer.exec import evaluator as E
     from cartographer.interactive.campaign import default_interactive_ray, run_interactive_breaking_point_campaign
     from cartographer.schedule.escalate import EscalationRay, RayDim
@@ -75,7 +85,7 @@ def run_stage(stage: str, model: str, label: str, protocol: str = "native") -> d
 
     tmpl, cap, _ = STAGES[stage]
     run_id = tmpl.format(label=label)
-    client, store = _client(), ResultsStore(DB)
+    client, store = _client(provider_name), ResultsStore(DB)
     try:
         if stage == "narrative":
             res = E.run_full_map_campaign(client, store, run_id, model, budget=600, cost_cap=cap, parallelism=6)
@@ -123,13 +133,13 @@ def run_stage(stage: str, model: str, label: str, protocol: str = "native") -> d
         store.close()
 
 
-def smoke(model: str, label: str) -> None:
+def smoke(model: str, label: str, provider_name: str = "nebius") -> None:
     """One trial per province evaluator, written under `smoke-<label>-*` run ids."""
     from cartographer.exec import evaluator as E
     from cartographer.interactive.campaign import InteractiveEvaluator
     from cartographer.store.store import ResultsStore
 
-    client, store = _client(), ResultsStore(DB)
+    client, store = _client(provider_name), ResultsStore(DB)
     try:
         trials = {
             "I narrative (state)": lambda: E.PipelineEvaluator(client, model, store, f"smoke-{label}-state",
@@ -166,15 +176,18 @@ def main() -> None:
     ap.add_argument("--only", default="", help="comma-separated stages to run (default: all)")
     ap.add_argument("--text-tools", action="store_true",
                     help="Province III: also accept tool calls written as text (models without native calling)")
+    ap.add_argument("--provider", default="nebius", choices=["nebius", "groq", "modal", "openrouter"],
+                    help="modal = the self-hosted Gemma 4 QAT endpoint (scripts/modal_serve_gemma4.py)")
     args = ap.parse_args()
     if args.model not in PRICES:
         sys.exit(f"{args.model} has no entry in cartographer/exec/pricing.py; cost caps would not bind.")
     if args.smoke:
-        smoke(args.model, args.label)
+        smoke(args.model, args.label, args.provider)
         return
     if args.stage:
         t = time.time()
-        out = run_stage(args.stage, args.model, args.label, "text_fallback" if args.text_tools else "native")
+        out = run_stage(args.stage, args.model, args.label,
+                        "text_fallback" if args.text_tools else "native", args.provider)
         out["minutes"] = round((time.time() - t) / 60, 1)
         print(f"DONE {args.stage} {json.dumps(out, default=str)}", flush=True)
         return
@@ -190,7 +203,8 @@ def main() -> None:
     procs = []
     for stage in stages:
         log = open(f"results/logs/{args.label}-{stage}.log", "w")
-        cmd = [sys.executable, __file__, "--model", args.model, "--label", args.label, "--stage", stage]
+        cmd = [sys.executable, __file__, "--model", args.model, "--label", args.label, "--stage", stage,
+               "--provider", args.provider]
         if args.text_tools:
             cmd.append("--text-tools")
         procs.append((stage, subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)))

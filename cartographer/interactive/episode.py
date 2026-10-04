@@ -61,6 +61,12 @@ def run_episode(
     if protocol == "text_fallback":
         # some providers drop `tools` for some models; put the catalog in the prompt too
         messages[0] = {**messages[0], "content": messages[0]["content"] + catalog_prompt(tools)}
+    # In text_fallback the request must not carry `tools` at all: a server
+    # with no tool-call parser for the model 400s the whole request (the
+    # self-hosted vLLM Gemma 4 endpoint did exactly this on 2026-10-03,
+    # turning every episode into api_error/protocol=none). Nebius merely
+    # dropped the field, which is why the Gemma 3 runs never hit it.
+    request_tools = None if protocol == "text_fallback" else tools
     used: set[str] = set()
     t_in = t_out = 0
     cost = latency = 0.0
@@ -74,7 +80,7 @@ def run_episode(
         if retry_max_tokens and retry_max_tokens > max_tokens:
             caps.append(retry_max_tokens)
         for cap in caps:
-            r = client.chat_turn(model, messages, tools, max_tokens=cap, temperature=temperature)
+            r = client.chat_turn(model, messages, request_tools, max_tokens=cap, temperature=temperature)
             t_in += r.tokens_in
             t_out += r.tokens_out
             latency += r.latency_ms
