@@ -16,3 +16,4 @@ results/*.sqlite-wal
 results/*.sqlite-shm
 results/*.bak-*
 results/logs/
+results/consistency/

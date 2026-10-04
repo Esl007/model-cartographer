@@ -80,6 +80,23 @@ class Semantics:
 
 TRUE = Semantics()
 
+# Each declared dialect rule (model.DIALECT_RULES) is one Semantics field set
+# to its non-Python value -- the same values the matching foil uses.
+DIALECT_SEMANTICS: dict[str, tuple[str, str]] = {
+    "inclusive_range": ("range_upper", "inclusive"),
+    "truncating_modulo": ("modulo", "truncate"),
+    "copy_on_assign": ("list_assignment", "copy"),
+    "fresh_defaults": ("default_args", "fresh"),
+}
+
+
+def semantics_for(dialect=()) -> Semantics:
+    """The semantics a program with this declared dialect runs under
+    (`TRUE` for plain Python)."""
+    if not dialect:
+        return TRUE
+    return Semantics(**dict(DIALECT_SEMANTICS[r] for r in dialect))
+
 
 class InterpError(Exception):
     """The program did something outside the subset or raised at runtime."""
@@ -399,10 +416,11 @@ class Interpreter:
         return out
 
 
-def run(program: Program, semantics: Semantics = TRUE, step_cap: int = STEP_CAP) -> Trace:
+def run(program: Program, semantics: Semantics | None = None, step_cap: int = STEP_CAP) -> Trace:
     """Execute the whole program. Never raises on program errors: a crash is
-    reported in `Trace.error` (foils crash legitimately)."""
-    it = Interpreter(semantics, step_cap)
+    reported in `Trace.error` (foils crash legitimately). `semantics=None`
+    means the program's own declared semantics (`program.semantics`)."""
+    it = Interpreter(program.semantics if semantics is None else semantics, step_cap)
     target = program.query.target
     track: list = []
     aliases: set = set()
@@ -437,7 +455,8 @@ def answer_from_trace(program: Program, trace: Trace):
     return trace.globals.get(program.query.target, FOIL_ERROR)
 
 
-def answer(program: Program, semantics: Semantics = TRUE):
-    """The answer to the program's query under `semantics`; `FOIL_ERROR` if
-    that reading of the program crashes."""
+def answer(program: Program, semantics: Semantics | None = None):
+    """The answer to the program's query under `semantics` (default: the
+    program's declared semantics, i.e. the truth); `FOIL_ERROR` if that
+    reading of the program crashes."""
     return answer_from_trace(program, run(program, semantics))

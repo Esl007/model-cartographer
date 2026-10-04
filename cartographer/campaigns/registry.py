@@ -1,0 +1,455 @@
+"""The campaign registry: every campaign the cartographer can run, one name each.
+
+Before this, campaign names mixed three different things -- the province
+(`tool_*`, `code_*`), the query kind (`state`, `belief`) and the method
+(`breaking_point`, `full_map`) -- and half the campaigns existed only as
+stages inside scripts. Here every campaign is `<province>.<stressor>`:
+which part of the map it explores, and what it turns up until the model
+breaks. Every older name (/launch preset, `run_all_provinces.py` stage,
+ticket ray) is kept as a legacy alias that resolves to exactly one id.
+
+Run-id templates are the contract with `cartographer/report/frontier.py`:
+`frontier.SPECS` finds evidence by regex over run ids, so each template here
+must keep matching the rows it declares in `frontier_rows`. Some of those
+regexes pin a run number (`camp-tool-depth-<label>-003`) or whitelist model
+labels (`camp-interactive-(nano|super|ultra|gemma)-NNN`); the pinned ones are
+templates without `{n}`, and the label whitelists are recorded in
+`frontier_labels` so a launcher can warn before a run lands off the page.
+
+    python3 -m cartographer.campaigns.registry --write-catalog   # docs/campaign-catalog.md
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sqlite3
+import sys
+from dataclasses import dataclass, field
+from typing import Callable
+
+from ..exec import evaluator as E
+from ..interactive import campaign as IC
+from ..schedule.escalate import EscalationRay, RayDim
+from .consistency import run_consistency_campaign
+
+PROVINCES: dict[str, str] = {
+    "I": "Narrative (state, order, belief)",
+    "II": "Tool planning (one-shot JSON plans)",
+    "III": "Interactive execution (multi-turn tool calls)",
+    "IV": "Code tracing",
+    "X": "Cross-cutting",
+}
+
+EVIDENCE_KINDS = ("axis", "rate", "battery")
+
+
+@dataclass(frozen=True)
+class CampaignSpec:
+    id: str  # "<province>.<stressor>"
+    province: str  # "I" | "II" | "III" | "IV" | "X"
+    title: str
+    question: str  # one plain-English sentence a non-expert understands
+    stressor: str  # what is turned up
+    evidence_kind: str  # "axis" (escalation ray) | "rate" (pass rate) | "battery" (several campaigns)
+    runner: Callable
+    run_id_template: str  # str.format(label=..., n=...); no `{n}` = pinned run id
+    ray_factory: Callable | None = None
+    frontier_rows: tuple[str, ...] = ()  # keys in frontier.SPECS this feeds
+    protocol_note: str = ""
+    legacy_aliases: tuple[str, ...] = ()
+    default_kwargs: dict = field(default_factory=dict, hash=False, compare=False)
+    # Labels frontier.SPECS accepts for this campaign's rows when its regex
+    # whitelists model labels; empty = any `\w+` label.
+    frontier_labels: tuple[str, ...] = ()
+
+    @property
+    def pinned(self) -> bool:
+        """True when the run id carries a fixed number frontier.SPECS expects."""
+        return "{n" not in self.run_id_template
+
+    def run_id(self, label: str, n: int = 1) -> str:
+        return self.run_id_template.format(label=label, n=n)
+
+
+# --- rays that today exist only inline in scripts/run_all_provinces.py ----
+
+
+def tool_depth_ray() -> EscalationRay:
+    """Plan length 7 -> 19 calls; look-alike tool names switch on at t >= 0.5."""
+    return EscalationRay(dims=(RayDim("plan_depth", 4, 16, True), RayDim("id_collisions_on", 0, 1, True)))
+
+
+def tool_deep_ray() -> EscalationRay:
+    """Plan length 7 -> 31 calls with look-alike tool names on throughout."""
+    return EscalationRay(dims=(RayDim("plan_depth", 4, 28, True), RayDim("id_collisions_on", 1, 1, True)))
+
+
+def interactive_lookalike_ray() -> EscalationRay:
+    return EscalationRay(dims=(RayDim("plan_depth", 4, 28, True), RayDim("id_collisions_on", 1, 1, True)))
+
+
+def interactive_fault_ray() -> EscalationRay:
+    return EscalationRay(dims=(RayDim("plan_depth", 4, 16, True), RayDim("value_links", 0.0, 1.0, False),
+                               RayDim("fault_step", 3, 10, True)))
+
+
+_TEXT_TOOLS = ("Native tool calling by default; `--text-tools` switches to protocol=text_fallback "
+               "for models without native calling.")
+_ONE_SHOT = "One-shot prompt, JSON plan out; the verifier simulates the plan step by step."
+_NARRATIVE = "One-shot story + question; answers checked against the generator's ground truth."
+_CODE = "One-shot program + question; ground truth from the project's own interpreter."
+_TICKET = ("Interactive, text_fallback protocol by default; resample-gated (failures re-run before "
+           "they count). Attribution ablations: scripts/run_ticket_fidelity.py --attribute.")
+
+_SPECS: tuple[CampaignSpec, ...] = (
+    # ---- Province I: narrative ------------------------------------------
+    CampaignSpec(
+        "I.state", "I", "Object-state tracking",
+        "After a long chain of moves, can the model say where each object really is?",
+        "chain length (2 -> 30 moves)", "rate", E.run_state_campaign, "camp-state-{label}-{n:03d}",
+        frontier_rows=("state",), protocol_note=_NARRATIVE, legacy_aliases=("state",),
+        default_kwargs={"budget": 160, "cost_cap": 0.5}),
+    CampaignSpec(
+        "I.order", "I", "Event order",
+        "When a story is told out of order, can the model recover what really happened first?",
+        "chain length, scrambling, distractor and filler events", "rate", E.run_order_campaign,
+        "camp-order-{label}-{n:03d}", frontier_rows=("order",), protocol_note=_NARRATIVE,
+        legacy_aliases=("order",), default_kwargs={"budget": 400, "cost_cap": 0.5}),
+    CampaignSpec(
+        "I.belief", "I", "Belief tracking (theory of mind)",
+        "Can the model tell where a person thinks an object is, based only on what that person saw?",
+        "chain length, scrambling, coreference pressure, distractors, witness cutoff", "rate",
+        E.run_belief_campaign, "camp-belief-{label}-{n:03d}", frontier_rows=("belief",),
+        protocol_note=_NARRATIVE, legacy_aliases=("belief",), default_kwargs={"budget": 700, "cost_cap": 1.0}),
+    CampaignSpec(
+        "I.adversarial_belief", "I", "Belief tracking in misleading stories",
+        "Does belief tracking survive stories built so the tempting wrong answer is right there?",
+        "adversarially searched trap worlds (foil answers planted)", "rate",
+        E.run_adversarial_belief_campaign, "camp-adversarial_belief-{label}-{n:03d}",
+        frontier_rows=("adversarial_belief",), protocol_note=_NARRATIVE,
+        legacy_aliases=("adversarial_belief",), default_kwargs={"budget": 300, "cost_cap": 1.0}),
+    CampaignSpec(
+        "I.breaking_point", "I", "Narrative breaking point",
+        "If every kind of story difficulty is turned up at once, at what point does the model break?",
+        "all six narrative difficulty dims jointly, base -> generator ceiling", "axis",
+        E.run_breaking_point_campaign, "camp-breaking_point-{label}-{n:03d}",
+        frontier_rows=("belief",), protocol_note=_NARRATIVE + " Bisection, then decompose + confirm.",
+        legacy_aliases=("breaking_point",), default_kwargs={"budget": 350, "cost_cap": 0.75}),
+    # ---- Province II: tool planning -------------------------------------
+    CampaignSpec(
+        "II.sweep", "II", "Tool-planning difficulty sweep",
+        "Across many mixes of plan length, decoy tools and prerequisites, how often is the plan right?",
+        "plan depth, decoys, precondition chains, state obscurity, parallel goals (scheduler sweep)", "rate",
+        E.run_tool_planning_campaign, "camp-tool_planning-{label}-{n:03d}", protocol_note=_ONE_SHOT,
+        legacy_aliases=("tool_planning",), default_kwargs={"budget": 400, "cost_cap": 0.75}),
+    CampaignSpec(
+        "II.plan_length", "II", "Plan length (clear, then look-alike names)",
+        "How long a sequence of tool calls can the model plan before it gets one wrong?",
+        "plan length 7 -> 19 calls; look-alike tool names switch on halfway", "axis",
+        E.run_tool_breaking_point_campaign, "camp-tool-depth-{label}-003", ray_factory=tool_depth_ray,
+        frontier_rows=("plan_length_clear", "plan_length_lookalike"), protocol_note=_ONE_SHOT,
+        legacy_aliases=("tool_depth",), default_kwargs={"budget": 250, "cost_cap": 0.30, "parallelism": 6}),
+    CampaignSpec(
+        "II.plan_length_lookalike", "II", "Long plans with look-alike tool names",
+        "With tool names that look alike, how long a plan can the model write before it calls the wrong one?",
+        "plan length 7 -> 31 calls, look-alike names on throughout", "axis",
+        E.run_tool_breaking_point_campaign, "camp-tool-deep-{label}-001", ray_factory=tool_deep_ray,
+        frontier_rows=("plan_length_lookalike",), protocol_note=_ONE_SHOT, legacy_aliases=("tool_deep",),
+        default_kwargs={"budget": 250, "cost_cap": 0.30, "parallelism": 6}),
+    CampaignSpec(
+        "II.traps", "II", "Structural traps",
+        "Can the model plan around poisoned tools, misleading descriptions and a zero-slack call budget?",
+        "trap mechanisms 0 -> 5 (poison, dishonest decoys, implicit preconditions, zero slack, id collisions)",
+        "axis", E.run_tool_breaking_point_campaign, "camp-tool_bp-{label}-001", ray_factory=E.default_tool_ray,
+        frontier_rows=("traps",), protocol_note=_ONE_SHOT, legacy_aliases=("tool_traps", "tool_breaking_point"),
+        default_kwargs={"budget": 250, "cost_cap": 0.30, "parallelism": 6}),
+    CampaignSpec(
+        "II.catalog_size", "II", "Catalog size",
+        "Can the model still pick the right tool when the catalog grows to dozens of plausible ones?",
+        "catalog size 8 -> 66 plausible tools", "axis", E.run_tool_breaking_point_campaign,
+        "camp-tool-confuse-{label}-001", ray_factory=E.default_tool_confusability_ray,
+        frontier_rows=("catalog_size",), protocol_note=_ONE_SHOT, legacy_aliases=("tool_catalog",),
+        default_kwargs={"budget": 120, "cost_cap": 0.20, "parallelism": 6}),
+    CampaignSpec(
+        "II.impossible", "II", "Impossible tasks",
+        "When a goal cannot be reached with the tools given, does the model say so instead of inventing a plan?",
+        "share of unsolvable goals (40%)", "rate", E.run_tool_irrelevance_campaign,
+        "camp-irrelevance-{label}-{n:03d}", frontier_rows=("impossible",), protocol_note=_ONE_SHOT,
+        legacy_aliases=("tool_impossible",), default_kwargs={"n_trials": 40, "cost_cap": 0.20, "parallelism": 6}),
+    # ---- Province III: interactive execution ------------------------------
+    CampaignSpec(
+        "III.values", "III", "Step-by-step execution with values to carry",
+        "Calling tools one at a time, can the model carry each returned value into the next call?",
+        "plan depth 4 -> 16 together with value passing 0 -> 100% of links", "axis",
+        IC.run_interactive_breaking_point_campaign, "camp-interactive-{label}-{n:03d}",
+        ray_factory=IC.default_interactive_ray, frontier_rows=("interactive",), protocol_note=_TEXT_TOOLS,
+        legacy_aliases=("interactive",),
+        default_kwargs={"budget": 60, "cost_cap": 0.40, "k_trials": 5, "parallelism": 4}),
+    CampaignSpec(
+        "III.lookalike", "III", "Step-by-step execution with look-alike tool names",
+        "Seeing each error as it happens, can the model avoid calling a look-alike tool by mistake?",
+        "plan depth 4 -> 28, look-alike tool names on", "axis",
+        IC.run_interactive_breaking_point_campaign, "camp-interactive-lookalike-{label}-{n:03d}",
+        ray_factory=interactive_lookalike_ray, frontier_rows=("interactive_lookalike",),
+        protocol_note=_TEXT_TOOLS, legacy_aliases=("interactive_lookalike",),
+        default_kwargs={"budget": 45, "cost_cap": 0.40, "k_trials": 5, "parallelism": 4}),
+    CampaignSpec(
+        "III.fault", "III", "Recovery from a failed call",
+        "When a tool call fails once mid-plan and a retry would work, does the model retry and finish?",
+        "plan depth, value passing, and where the transient failure hits", "axis",
+        IC.run_interactive_breaking_point_campaign, "camp-interactive-fault-{label}-{n:03d}",
+        ray_factory=interactive_fault_ray, frontier_rows=("interactive_fault",), protocol_note=_TEXT_TOOLS,
+        legacy_aliases=("interactive_fault",),
+        default_kwargs={"budget": 60, "cost_cap": 0.30, "k_trials": 5, "parallelism": 4}),
+    CampaignSpec(
+        "III.ticket_mechanism", "III", "Ticket fidelity: form x carry distance",
+        "Does the model copy an opaque ticket exactly, or 'complete' it when it looks like a pattern?",
+        "ticket form opaque -> pattern-suggestive, carry distance 1 -> 10 steps", "axis",
+        IC.run_ticket_fidelity_campaign, "camp-ticket-mechanism-{label}-{n:03d}",
+        ray_factory=IC.TICKET_RAYS["mechanism"], protocol_note=_TICKET, legacy_aliases=("ticket_mechanism",),
+        default_kwargs={"budget": 60, "cost_cap": 0.75, "k_trials": 5, "parallelism": 4,
+                        "protocol": "text_fallback"}),
+    CampaignSpec(
+        "III.ticket_trap", "III", "Ticket fidelity: decoys x live tickets",
+        "With several real tickets and some decoys in play, does the model hand back the right one?",
+        "decoy tickets 0 -> 3 with live tickets 1 -> 6", "axis",
+        IC.run_ticket_fidelity_campaign, "camp-ticket-trap-{label}-{n:03d}",
+        ray_factory=IC.TICKET_RAYS["trap"], protocol_note=_TICKET, legacy_aliases=("ticket_trap",),
+        default_kwargs={"budget": 60, "cost_cap": 0.75, "k_trials": 5, "parallelism": 4,
+                        "protocol": "text_fallback"}),
+    CampaignSpec(
+        "III.ticket_length", "III", "Ticket fidelity: length control",
+        "Before blaming anything subtler, does the model garble a ticket simply because it is long?",
+        "opaque ticket length 8 -> 64 characters", "axis",
+        IC.run_ticket_fidelity_campaign, "camp-ticket-length-{label}-{n:03d}",
+        ray_factory=IC.TICKET_RAYS["length"], protocol_note=_TICKET, legacy_aliases=("ticket_length",),
+        default_kwargs={"budget": 60, "cost_cap": 0.75, "k_trials": 5, "parallelism": 4,
+                        "protocol": "text_fallback"}),
+    # ---- Province IV: code tracing -----------------------------------------
+    CampaignSpec(
+        "IV.lookalike", "IV", "Look-alike variable names",
+        "As programs get longer, does the model confuse variables with look-alike names (total / totl)?",
+        "program length 6 -> 40 statements x look-alike variable names", "axis",
+        E.run_code_breaking_point_campaign, "camp-code-lookalike-{label}-{n:03d}",
+        ray_factory=E.default_code_lookalike_ray, frontier_rows=("code_lookalike",), protocol_note=_CODE,
+        legacy_aliases=("code_lookalike", "code_tracing"),
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "IV.traps", "IV", "Semantic traps",
+        "Does the model trace code correctly through aliasing, closures, off-by-one ranges and modulo?",
+        "program length + six semantic traps switching on halfway", "axis",
+        E.run_code_breaking_point_campaign, "camp-code-traps-{label}-{n:03d}",
+        ray_factory=E.default_code_trap_ray, frontier_rows=("code_traps",), protocol_note=_CODE,
+        legacy_aliases=("code_traps",),
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "IV.length", "IV", "Length and nesting (control)",
+        "With no traps and clear names, how long and deeply nested a program can the model trace?",
+        "program length 6 -> 60 statements, nesting 0 -> 3", "axis",
+        E.run_code_breaking_point_campaign, "camp-code-length-{label}-{n:03d}",
+        ray_factory=E.default_code_length_ray, protocol_note=_CODE, legacy_aliases=("code_length",),
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "IV.copy", "IV", "Copying literals in code",
+        "Does the model copy an odd string literal exactly, or 'fix' it to match the naming pattern around it?",
+        "program length + an opaque literal that breaks the naming scheme", "axis",
+        E.run_code_breaking_point_campaign, "camp-code-copy-{label}-{n:03d}",
+        ray_factory=E.default_code_copy_ray, protocol_note=_CODE,
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "I.noop", "I", "Moves that never happened",
+        "Does it keep track of where things are when the story mentions moves that were only considered, planned or refused?",
+        "no-op events about the queried object 0 -> 8, chain length pinned at 8", "axis",
+        E.run_breaking_point_campaign, "camp-noop-{label}-{n:03d}", ray_factory=E.default_noop_ray,
+        protocol_note="plain prompt, one story", legacy_aliases=(),
+        default_kwargs={"query_kind": "state", "budget": 120, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "I.premise_order", "I", "Order from relative cues (control)",
+        "Can it recover the order of events when the story gives 'before/after' cues instead of clock times, told out of order?",
+        "relational cues 0 -> 100% together with scrambled narration 0 -> 100%, chain length pinned at 8", "axis",
+        E.run_breaking_point_campaign, "camp-premise-order-{label}-{n:03d}", ray_factory=E.default_premise_order_ray,
+        protocol_note="plain prompt, one story; expected small effect (control)", legacy_aliases=(),
+        default_kwargs={"query_kind": "order", "budget": 120, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "I.trivial_belief", "I", "The false-belief story with the trap removed",
+        "When the person actually saw the last move, does the model answer the true place, or the classic false-belief trap?",
+        "full witness on; chain length 2 -> 10 with distractors 0 -> 12", "axis",
+        E.run_breaking_point_campaign, "camp-trivial-belief-{label}-{n:03d}", ray_factory=E.default_trivial_belief_ray,
+        protocol_note="plain prompt, one story", legacy_aliases=(),
+        default_kwargs={"query_kind": "belief", "budget": 120, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "IV.dialect", "IV", "Declared code dialect (counterfactual conventions)",
+        "When the program declares rules that differ from standard Python, does the model follow them, or its Python habit?",
+        "program length + 0 -> 4 declared deviations from Python (inclusive range, truncating %, copy on assign, fresh defaults)",
+        "axis", E.run_code_breaking_point_campaign, "camp-code-dialect-{label}-{n:03d}",
+        ray_factory=E.default_code_dialect_ray, protocol_note=_CODE,
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    # ---- Cross-cutting -----------------------------------------------------
+    CampaignSpec(
+        "X.full_map", "X", "Full narrative battery",
+        "What can this model do with stories, in one launch: state, order, belief, traps and breaking point?",
+        "everything in Province I, one budget", "battery", E.run_full_map_campaign,
+        "camp-full_map-{label}-{n:03d}", frontier_rows=("state", "order", "belief", "adversarial_belief"),
+        protocol_note=_NARRATIVE + " Child runs per stage under <run_id>/<stage>.",
+        legacy_aliases=("full_map", "narrative"), default_kwargs={"budget": 600, "cost_cap": 1.00,
+                                                                 "parallelism": 6}),
+    CampaignSpec(
+        "X.consistency", "X", "Consistency (pass^k)",
+        "If you give the model the exact same task five times, does it get it right all five times?",
+        "repeats of one fixed mid-difficulty task (k = 5 per task)", "rate", run_consistency_campaign,
+        "camp-consistency-{label}-{n:03d}", frontier_rows=("consistency",),
+        protocol_note=("Default: Province II tool planning at plan_depth 11 with look-alike names; "
+                       "evaluator_kind='interactive'|'code' switches province. Temperature 0, so repeats "
+                       "measure serving non-determinism. pass^k is in the result + "
+                       "results/consistency/<run_id>.json; the frontier row shows pass^1."),
+        default_kwargs={"m_tasks": 12, "k": 5, "cost_cap": 0.5, "parallelism": 4}),
+)
+
+REGISTRY: dict[str, CampaignSpec] = {s.id: s for s in _SPECS}
+assert len(REGISTRY) == len(_SPECS), "duplicate campaign id"
+
+_ALIASES: dict[str, str] = {}
+for _s in _SPECS:
+    for _a in _s.legacy_aliases:
+        assert _a not in _ALIASES and _a not in REGISTRY, f"alias {_a!r} is ambiguous"
+        _ALIASES[_a] = _s.id
+
+
+def resolve(name: str) -> CampaignSpec:
+    """A registry id (`II.traps`) or any legacy alias (`tool_traps`,
+    `tool_breaking_point`) -> its `CampaignSpec`. Case-insensitive on aliases."""
+    if name in REGISTRY:
+        return REGISTRY[name]
+    for key in (name, name.lower(), name.replace("-", "_").lower()):
+        if key in _ALIASES:
+            return REGISTRY[_ALIASES[key]]
+    lowered = {k.lower(): k for k in REGISTRY}
+    if name.lower() in lowered:
+        return REGISTRY[lowered[name.lower()]]
+    raise KeyError(f"unknown campaign {name!r}; see `python3 scripts/run_campaign.py --list`")
+
+
+def by_province() -> dict[str, list[CampaignSpec]]:
+    out: dict[str, list[CampaignSpec]] = {p: [] for p in PROVINCES}
+    for s in _SPECS:
+        out[s.province].append(s)
+    return out
+
+
+def _existing_run_ids(store_path: str) -> set[str]:
+    if not store_path or not os.path.exists(store_path):
+        return set()
+    con = sqlite3.connect(f"file:{store_path}?mode=ro", uri=True)
+    try:
+        return {rid for (rid,) in con.execute("SELECT DISTINCT run_id FROM experiments")}
+    except sqlite3.OperationalError:
+        return set()
+    finally:
+        con.close()
+
+
+def next_run_id(spec: CampaignSpec, label: str, store_path: str) -> str:
+    """The run id for a new run of `spec` under `label`.
+
+    Templates with `{n}` get the next free number after the highest one in
+    the store (the `-NNN` convention the interactive and ticket scripts use
+    today: gaps are never refilled). Pinned templates return their fixed id
+    -- frontier.SPECS matches that exact number -- so a re-run appends to the
+    existing run, exactly as `scripts/run_all_provinces.py` does."""
+    if spec.pinned:
+        return spec.run_id(label)
+    head, _, tail = spec.run_id_template.partition("{n")
+    tail = tail.split("}", 1)[1]
+    rx = re.compile("^" + re.escape(head.format(label=label)) + r"(\d+)" + re.escape(tail.format(label=label)) + "$")
+    nums = [int(m.group(1)) for rid in _existing_run_ids(store_path) if (m := rx.match(rid))]
+    return spec.run_id(label, max(nums, default=0) + 1)
+
+
+# ---------------------------------------------------------------------------
+# Catalog (docs/campaign-catalog.md)
+# ---------------------------------------------------------------------------
+
+
+def _cell(text: str) -> str:
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def catalog_markdown() -> str:
+    from .tiers import TIERS
+
+    lines = [
+        "# Campaign catalog",
+        "",
+        "Generated by `python3 -m cartographer.campaigns.registry --write-catalog` from",
+        "`cartographer/campaigns/registry.py` -- edit the registry, not this file.",
+        "",
+        "Every campaign is named `<province>.<stressor>`: which part of the map it explores and what it",
+        "turns up until the model breaks. Older names (/launch presets, `run_all_provinces.py` stages,",
+        "ticket rays) still work as aliases. Run one with",
+        "`python3 scripts/run_campaign.py --campaign II.traps --tier standard --model ... --label ...`.",
+        "",
+        "Evidence kinds: **axis** = an escalation ray, bisected to the level where the pass rate collapses;",
+        "**rate** = a pass rate at fixed difficulty (or over a sweep); **battery** = several campaigns in one",
+        "launch.",
+        "",
+    ]
+    for prov, specs in by_province().items():
+        if not specs:
+            continue
+        lines += [f"## Province {prov} -- {PROVINCES[prov]}", "",
+                  "| id | question | what is turned up | evidence | legacy alias | frontier rows fed |",
+                  "|---|---|---|---|---|---|"]
+        for s in specs:
+            alias = ", ".join(f"`{a}`" for a in s.legacy_aliases) or "--"
+            rows = ", ".join(f"`{r}`" for r in s.frontier_rows) or "--"
+            if s.frontier_labels:
+                rows += f" (labels: {', '.join(s.frontier_labels)} only)"
+            lines.append(f"| `{s.id}` | {_cell(s.question)} | {_cell(s.stressor)} | {s.evidence_kind} | "
+                         f"{alias} | {rows} |")
+        lines.append("")
+    lines += [
+        "## Evidence tiers",
+        "",
+        "One dial for how much evidence to buy -- not how hard the tasks are (escalation finds that).",
+        "",
+        "| tier | trials per level | budget | cost cap | early stop | resample gate | confirm | decompose "
+        "| reportable |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    yn = {True: "yes", False: "no"}
+    for name, t in TIERS.items():
+        rep = "yes" if t.reportable else f"no (grade {t.grade_ceiling} ceiling)"
+        lines.append(f"| `{name}` | {t.k_trials} | x{t.budget_scale:g} | x{t.cost_scale:g} | {yn[t.early_stop]} | "
+                     f"{yn[t.resample_gate]} | {yn[t.confirm]} | {yn[t.decompose]} | {rep} |")
+    lines += [
+        "",
+        "## Run-id notes",
+        "",
+        "- Pinned run ids (no `NNN` increment) -- `frontier.SPECS` matches the exact number, so a re-run",
+        "  appends to the same run: " + ", ".join(f"`{s.run_id_template}`" for s in _SPECS if s.pinned) + ".",
+        *(["- Label whitelists in `frontier.SPECS` -- runs under other labels are stored but do not show on the",
+           "  frontier page: " + "; ".join(f"`{s.id}` ({', '.join(s.frontier_labels)})"
+                                           for s in _SPECS if s.frontier_labels) + "."]
+          if any(s.frontier_labels for s in _SPECS) else []),
+        "- /launch builds its own run ids (`camp-<preset>-<model-short>-NNN`); for presets whose frontier",
+        "  rows filter by run id (`tool_breaking_point`, `code_tracing`) those runs do not reach the frontier.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def write_catalog(path: str = "docs/campaign-catalog.md") -> str:
+    text = catalog_markdown()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+    return path
+
+
+if __name__ == "__main__":
+    if "--write-catalog" in sys.argv:
+        rest = [a for a in sys.argv[1:] if a != "--write-catalog"]
+        print(f"wrote {write_catalog(rest[0] if rest else 'docs/campaign-catalog.md')}")
+    else:
+        print(catalog_markdown())

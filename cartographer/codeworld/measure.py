@@ -4,7 +4,7 @@ traps on really produces ~20 statements)."""
 
 from __future__ import annotations
 
-from .interpret import TRUE, answer_from_trace, run
+from .interpret import answer_from_trace, run
 from .model import FuncDef, Program, iter_stmts, nesting_depth
 
 
@@ -16,7 +16,7 @@ def _free_reads(fd: FuncDef) -> set[str]:
 
 
 def measure(program: Program) -> dict[str, float]:
-    tr = run(program, TRUE)
+    tr = run(program)  # the program's own (dialect) semantics
     nodes = list(iter_stmts(program.body))
     data_vars = [k for k in tr.globals if program.var(k) is not None]
     twin_ids = {v.id for v in program.variables if v.twin_of} | {v.twin_of for v in program.variables if v.twin_of}

@@ -25,13 +25,16 @@ from typing import Callable
 from ..llmrender.gate import gated_render, record_gate_rejection
 from ..llmrender.renderer import assemble_prompt
 from ..render import build_name_map, render, verify
+from ..schedule.certificate import certify
 from ..schedule.escalate import BreakingPoint, EscalationRay, RayDim, find_breaking_point
+from ..schedule.gate import ResampleGatedEvaluator
 from ..schedule.scheduler import CampaignState, DimSpec, SchedulerConfig, run_campaign
 from ..store.schema import ExperimentRecord, RenderMode, Verdict
 from ..store.store import ResultsStore
 from ..world.generate import DimParams, generate
 from ..world.measure import measure
 from ..world.search import search_adversarial_seeds
+from ..world.trivial import FullWitnessUnavailable, make_full_witness
 from ..toolworld.generate import ToolDimParams
 from ..toolworld.generate import generate as tool_generate
 from ..toolworld.measure import measure as tool_measure
@@ -49,9 +52,9 @@ from .client import Client
 from .pricing import cost_usd
 
 # Config keys that map onto integer-valued DimParams fields.
-_INT_KEYS = {"chain_length", "coref_pressure", "distractor_events", "filler_events"}
+_INT_KEYS = {"chain_length", "coref_pressure", "distractor_events", "filler_events", "noop_distractors"}
 # Config keys that map onto float-valued DimParams fields.
-_FLOAT_KEYS = {"scramble", "witness_cutoff"}
+_FLOAT_KEYS = {"scramble", "witness_cutoff", "relational_time"}
 _KNOWN_KEYS = _INT_KEYS | _FLOAT_KEYS
 
 # Default token budgets. These are CEILINGS, not targets: a model is billed
@@ -116,6 +119,8 @@ def _default_base(query_kind: str) -> DimParams:
 def _apply_config(base: DimParams, config: dict[str, float]) -> DimParams:
     overrides: dict[str, object] = {}
     for key, value in config.items():
+        if key == "full_witness":
+            continue  # a world transform, not a DimParams field (world/trivial.py)
         if key in _INT_KEYS:
             overrides[key] = int(round(value))
         elif key in _FLOAT_KEYS:
@@ -123,6 +128,25 @@ def _apply_config(base: DimParams, config: dict[str, float]) -> DimParams:
         else:
             raise ValueError(f"unknown config key: {key!r}")
     return replace(base, **overrides)
+
+
+def _narrative_latent(params: DimParams, config: dict[str, float]) -> dict[str, float]:
+    """Latent params as stored on a narrative record: every DimParams knob a
+    config can set, plus the `full_witness` transform flag, so a record's
+    world can be rebuilt from `latent_params` alone."""
+    out = {
+        "chain_length": float(params.chain_length),
+        "scramble": float(params.scramble),
+        "coref_pressure": float(params.coref_pressure),
+        "distractor_events": float(params.distractor_events),
+        "filler_events": float(params.filler_events),
+        "witness_cutoff": float(params.witness_cutoff),
+        "noop_distractors": float(params.noop_distractors),
+        "relational_time": float(params.relational_time),
+    }
+    if config.get("full_witness", 0.0) >= 0.5:
+        out["full_witness"] = 1.0
+    return out
 
 
 def _task_seed(config: dict[str, float], trial_seed: int) -> int:
@@ -225,7 +249,7 @@ class PipelineEvaluator:
         self.cancelled = False
         self._lock = threading.Lock()
 
-    def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
+    def __call__(self, config: dict[str, float], trial_seed: int, run_suffix: str = "") -> bool:
         params = _apply_config(self.base, config)
         seed = _task_seed(config, trial_seed)
 
@@ -263,6 +287,13 @@ class PipelineEvaluator:
                 adversarial_n_diverging = 0.0
 
         world = generate(params, seed)
+        if config.get("full_witness", 0.0) >= 0.5:
+            try:
+                world = make_full_witness(world, seed)
+            except FullWitnessUnavailable:
+                with self._lock:
+                    self._record_capped(params, config, seed, trial_seed, reason="full_witness_unavailable")
+                return False
         name_map = build_name_map(world, seed)
         rendered = render(world, name_map, seed)
         realized_dims = measure(world)
@@ -352,16 +383,9 @@ class PipelineEvaluator:
                     verifier_detail += ";retry_exhausted=1"
 
         record = ExperimentRecord(
-            run_id=self.run_id,
+            run_id=self.run_id + run_suffix,
             model_name=self.model,
-            latent_params={
-                "chain_length": float(params.chain_length),
-                "scramble": float(params.scramble),
-                "coref_pressure": float(params.coref_pressure),
-                "distractor_events": float(params.distractor_events),
-                "filler_events": float(params.filler_events),
-                "witness_cutoff": float(params.witness_cutoff),
-            },
+            latent_params=_narrative_latent(params, config),
             realized_dims=realized_dims,
             render_mode=render_mode,
             task_seed=seed,
@@ -408,14 +432,7 @@ class PipelineEvaluator:
         record = ExperimentRecord(
             run_id=self.run_id,
             model_name=self.model,
-            latent_params={
-                "chain_length": float(params.chain_length),
-                "scramble": float(params.scramble),
-                "coref_pressure": float(params.coref_pressure),
-                "distractor_events": float(params.distractor_events),
-                "filler_events": float(params.filler_events),
-                "witness_cutoff": float(params.witness_cutoff),
-            },
+            latent_params=_narrative_latent(params, config),
             realized_dims={},
             render_mode=RenderMode.TEMPLATE,
             task_seed=seed,
@@ -691,6 +708,8 @@ def _regenerate_for_verify(record: ExperimentRecord):
     base = _default_base(query_kind)
     params = _apply_config(base, record.latent_params)
     world = generate(params, record.task_seed)
+    if record.latent_params.get("full_witness", 0.0) >= 0.5:
+        world = make_full_witness(world, record.task_seed)  # verify against the trivialized world
     name_map = build_name_map(world, record.rendering_seed)
     rendered = render(world, name_map, record.rendering_seed)
     return world, name_map, rendered, name_map
@@ -1076,6 +1095,12 @@ def run_breaking_point_campaign(
     cost_cap: float = 0.75,
     max_tokens: int | None = None,
     cancel_event: threading.Event | None = None,
+    ray: EscalationRay | None = None,
+    k_trials: int = 7,
+    parallelism: int = 1,
+    early_stop: bool = False,
+    resample_gate: bool = False,
+    resample_n: int = 3,
 ) -> BreakingPoint:
     """Escalation mode: walk the default all-dims ray from easy baseline to
     the generator's hard ceilings and find where the model actually breaks
@@ -1099,12 +1124,42 @@ def run_breaking_point_campaign(
         max_tokens=max_tokens,
         cancel_event=cancel_event,
     )
-    bp = find_breaking_point(evaluator, default_belief_ray(), budget=budget)
+    ev = ResampleGatedEvaluator(evaluator, n=resample_n) if resample_gate else evaluator
+    bp = find_breaking_point(ev, ray if ray is not None else default_belief_ray(), budget=budget,
+                             k_trials=k_trials, parallelism=parallelism, early_stop=early_stop)
     bp_note = f"spent=${evaluator.spent_usd:.4f}"
     if evaluator.capped:
         bp_note += ";cost_cap_hit"
+    if resample_gate:
+        bp_note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
+        bp.certificate = certify(bp, gate_stable=ev.stable, gate_noise=ev.noise)
     bp.note = f"{bp.note}; {bp_note}" if bp.note else bp_note
     return bp
+
+
+# Literature-driven structural rays for Province I (docs/spec-frontier-breaking-points.md §2).
+# Each pins chain_length so that length is not the lever; the structure is.
+
+
+def default_noop_ray() -> EscalationRay:
+    """GSM-NoOp (Mirzadeh et al. 2024): clauses about the queried object that
+    change nothing. Query kind: state. Control: `distractor_events` (known null)."""
+    return EscalationRay(dims=(RayDim("chain_length", 8, 8, True), RayDim("noop_distractors", 0, 8, True)))
+
+
+def default_premise_order_ray() -> EscalationRay:
+    """Premise order (Chen et al. 2024), kept as a control: timestamps replaced
+    by relational cues while narration order is scrambled. Query kind: order."""
+    return EscalationRay(dims=(RayDim("chain_length", 8, 8, True), RayDim("relational_time", 0.0, 1.0, False),
+                               RayDim("scramble", 0.0, 1.0, False)))
+
+
+def default_trivial_belief_ray() -> EscalationRay:
+    """Trivialized false belief (Malek et al. 2025; SimpleToM): the query agent
+    saw the last move, so the true location is the answer; the classic trap
+    answer (`stale_belief`) is the foil. Query kind: belief, witness_cutoff 0."""
+    return EscalationRay(dims=(RayDim("full_witness", 1, 1, True), RayDim("witness_cutoff", 0.0, 0.0, False),
+                               RayDim("chain_length", 2, 10, True), RayDim("distractor_events", 0, 12, True)))
 
 
 def run_belief_campaign(
@@ -1709,7 +1764,7 @@ class ToolBreakingPointEvaluator:
         self.cancelled = False
         self._lock = threading.Lock()
 
-    def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
+    def __call__(self, config: dict[str, float], trial_seed: int, run_suffix: str = "") -> bool:
         scalar_cfg = {
             k: v
             for k, v in config.items()
@@ -1796,7 +1851,7 @@ class ToolBreakingPointEvaluator:
                     verifier_detail += ";retry_exhausted=1"
 
         record = ExperimentRecord(
-            run_id=self.run_id,
+            run_id=self.run_id + run_suffix,
             model_name=self.model,
             latent_params={
                 "plan_depth": float(params.plan_depth),
@@ -1882,6 +1937,9 @@ def run_tool_breaking_point_campaign(
     verify: str = "auto",
     ray: EscalationRay | None = None,
     parallelism: int = 1,
+    early_stop: bool = False,
+    resample_gate: bool = False,
+    resample_n: int = 3,
 ) -> BreakingPoint:
     """Escalation mode over the toolworld's STRUCTURAL trap mutators (see
     `default_tool_ray`): walk the ray from no-traps baseline to full-trap
@@ -1912,15 +1970,20 @@ def run_tool_breaking_point_campaign(
         max_tokens=max_tokens,
         cancel_event=cancel_event,
     )
+    ev = ResampleGatedEvaluator(evaluator, n=resample_n) if resample_gate else evaluator
     bp = find_breaking_point(
-        evaluator,
+        ev,
         ray if ray is not None else default_tool_ray(),
         budget=budget,
         parallelism=parallelism,
+        early_stop=early_stop,
     )
     bp_note = f"spent=${evaluator.spent_usd:.4f}"
     if evaluator.capped:
         bp_note += ";cost_cap_hit"
+    if resample_gate:
+        bp_note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
+        bp.certificate = certify(bp, gate_stable=ev.stable, gate_noise=ev.noise)
     bp.note = f"{bp.note}; {bp_note}" if bp.note else bp_note
     return bp
 
@@ -1933,13 +1996,13 @@ def run_tool_breaking_point_campaign(
 # `kind=code_trace` so /findings, /atlas and frontier_summary pick it up.
 # ---------------------------------------------------------------------------
 
-_CODE_INT_KEYS = {"n_statements", "max_nesting", "n_variables"}
+_CODE_INT_KEYS = {"n_statements", "max_nesting", "n_variables", "dialect_rules"}  # dialect_rules -> dialect
 _CODE_FLOAT_KEYS = {"distractor_fraction", "identifier_confusability"}
 _CODE_BOOL_KEYS = set(CODE_TRAP_KEYS) | {"opaque_literal_on"}
 _CODE_KNOWN_KEYS = _CODE_INT_KEYS | _CODE_FLOAT_KEYS | _CODE_BOOL_KEYS
 _CODE_LIMITS = {
     "n_statements": (2, 80), "max_nesting": (0, 3), "n_variables": (2, 12),
-    "distractor_fraction": (0.0, 0.6), "identifier_confusability": (0.0, 1.0),
+    "distractor_fraction": (0.0, 0.6), "identifier_confusability": (0.0, 1.0), "dialect_rules": (0, 4),
 }
 
 
@@ -1961,6 +2024,10 @@ def _apply_code_config(base: CodeDimParams, config: dict[str, float]) -> CodeDim
             overrides[key] = int(round(v)) if key in _CODE_INT_KEYS else float(v)
         else:
             raise ValueError(f"unknown code config key: {key!r}")
+    if "dialect_rules" in overrides:  # the first k declared rules, in the fixed DIALECT_RULES order
+        from ..codeworld.model import DIALECT_RULES
+
+        overrides["dialect"] = DIALECT_RULES[:overrides.pop("dialect_rules")]
     return replace(base, **overrides)
 
 
@@ -1983,6 +2050,7 @@ def _code_latent(params: CodeDimParams) -> dict[str, float]:
         "identifier_confusability": float(params.identifier_confusability),
         **{k: float(getattr(params, k)) for k in CODE_TRAP_KEYS},
         "opaque_literal_on": float(params.opaque_literal_on),
+        "dialect_rules": float(len(params.dialect)),
     }
 
 
@@ -2025,7 +2093,7 @@ class CodeTraceEvaluator:
         self.cancelled = False
         self._lock = threading.Lock()
 
-    def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
+    def __call__(self, config: dict[str, float], trial_seed: int, run_suffix: str = "") -> bool:
         params = _apply_code_config(self.base, {k: v for k, v in config.items() if k in _CODE_KNOWN_KEYS})
         seed = _task_seed(config, trial_seed)
         with self._lock:
@@ -2046,6 +2114,7 @@ class CodeTraceEvaluator:
 
         realized = code_measure(program)
         traps = ";".join(f"{k}={int(getattr(params, k))}" for k in (*CODE_TRAP_KEYS, "opaque_literal_on"))
+        traps += f";dialect_rules={len(params.dialect)}"
         detail = (
             f"kind=code_trace;campaign=1;query={program.query.kind}"
         )
@@ -2089,7 +2158,7 @@ class CodeTraceEvaluator:
         )
         latent = _code_latent(params)
         record = ExperimentRecord(
-            run_id=self.run_id, model_name=self.model, latent_params=latent,
+            run_id=self.run_id + run_suffix, model_name=self.model, latent_params=latent,
             realized_dims={**realized, **{k: latent[k] for k in (*CODE_TRAP_KEYS, "opaque_literal_on")}},
             render_mode=RenderMode.TEMPLATE, task_seed=seed, trial_seed=trial_seed, rendering_seed=seed,
             prompt_text=rendered.prompt, response_text=result.text, verdict=verdict, verifier_detail=detail,
@@ -2139,6 +2208,14 @@ def default_code_copy_ray() -> EscalationRay:
     return EscalationRay(dims=(RayDim("n_statements", 6, 30, True), RayDim("opaque_literal_on", 0, 1, True)))
 
 
+def default_code_dialect_ray() -> EscalationRay:
+    """Counterfactual dialect (Wu et al. 2023, "Reasoning or Reciting?"):
+    length together with 0 -> 4 declared deviations from Python, stated in a
+    header before the code. A break whose failures match `python_prior`
+    means the reader's Python prior overrode the rule it was given."""
+    return EscalationRay(dims=(RayDim("n_statements", 6, 24, True), RayDim("dialect_rules", 0, 4, True)))
+
+
 def default_code_length_ray() -> EscalationRay:
     """Control: magnitude only -- longer, more deeply nested programs, no
     traps, descriptive names."""
@@ -2158,15 +2235,22 @@ def run_code_breaking_point_campaign(
     max_tokens: int | None = None,
     cancel_event: threading.Event | None = None,
     verify: str = "auto",
+    early_stop: bool = False,
+    resample_gate: bool = False,
+    resample_n: int = 3,
 ) -> BreakingPoint:
     """Escalation over generated programs; default ray is the look-alike
     names ray (H1). `verify` is accepted for /launch's generic kwarg
     forwarding and unused (FAILs are deterministic interpreter outcomes)."""
     evaluator = CodeTraceEvaluator(client=client, model=model, store=store, run_id=run_id,
                                    cost_cap_usd=cost_cap, max_tokens=max_tokens, cancel_event=cancel_event)
-    bp = find_breaking_point(evaluator, ray if ray is not None else default_code_lookalike_ray(),
-                             budget=budget, k_trials=k_trials, parallelism=parallelism)
+    ev = ResampleGatedEvaluator(evaluator, n=resample_n) if resample_gate else evaluator
+    bp = find_breaking_point(ev, ray if ray is not None else default_code_lookalike_ray(),
+                             budget=budget, k_trials=k_trials, parallelism=parallelism, early_stop=early_stop)
     note = f"spent=${evaluator.spent_usd:.4f}" + (";cost_cap_hit" if evaluator.capped else "")
+    if resample_gate:
+        note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
+        bp.certificate = certify(bp, gate_stable=ev.stable, gate_noise=ev.noise)
     bp.note = f"{bp.note}; {note}" if bp.note else note
     return bp
 

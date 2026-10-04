@@ -80,7 +80,31 @@ class Filler:
     witnesses: frozenset[str] = field(default_factory=frozenset)
 
 
-Event = Move | Transfer | Tell | Filler
+@dataclass(frozen=True)
+class NoOp:
+    """A seemingly relevant but INERT clause about `obj` (GSM-NoOp-style
+    distractor, Mirzadeh et al. 2024): `actor` considers / declines / plans /
+    is asked to relocate `obj` to `loc`, but nothing happens.
+
+    `kind` is one of "declined" | "negated" | "planned" | "refused" (the
+    surface family; `other` is the asking entity for "refused"). The
+    simulator applies it as a no-op: no location, holder, or belief changes,
+    even for its witnesses -- so a reader who treats it as a real move is
+    wrong by construction.
+    """
+
+    actor: str
+    obj: str
+    loc: str
+    kind: str
+    time: int
+    witnesses: frozenset[str] = field(default_factory=frozenset)
+    other: str | None = None
+
+
+NOOP_KINDS = ("declined", "negated", "planned", "refused")
+
+Event = Move | Transfer | Tell | Filler | NoOp
 
 
 @dataclass(frozen=True)
@@ -100,3 +124,9 @@ class World:
     events: list[Event]  # chronological order, indexed by event.time
     narration_order: list[int]  # permutation of event indices: presentation order
     query: Query
+    relative_times: frozenset[int] = frozenset()
+    """Event TIMES (not indices) whose sentences drop the clock anchor and
+    instead carry a relative cue ("Later, ...", "Before that, ...") stated
+    against the previously NARRATED event. Keyed by time so it survives
+    reindexing ablations that keep surviving events' times. Empty = every
+    sentence carries its clock time (pre-relational_time behavior)."""

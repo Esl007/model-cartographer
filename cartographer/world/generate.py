@@ -60,6 +60,17 @@ class DimParams:
     docs/lab-log.md (Nemotron Nano finding). Only has any effect for
     belief queries; ignored otherwise.
     """
+    noop_distractors: int = 0
+    """Number (0..8) of inert NoOp events about the queried object / query
+    agent ("X thought about moving Y to Z, but left it where it was").
+    Structural, answer-preserving stressor after GSM-NoOp (Mirzadeh et al.
+    2024). See `mutate.add_noop_distractors` for placement guarantees."""
+    relational_time: float = 0.0
+    """Fraction (0..1) of narrated events whose clock anchor is replaced by
+    a true relative cue ("Later, ...", "Before that, ..."). Combined with
+    scramble > 0 on order queries, the compared pair is narrated in
+    reverse chronological order so the cue is the only evidence (Premise
+    Order Matters, Chen et al. 2024). See `mutate.add_relational_time`."""
 
 
 def _make_entities(n: int, seed: int) -> list[Entity]:
@@ -339,6 +350,17 @@ def generate(params: DimParams, seed: int) -> World:
     )
 
     assert not validate(world)
+
+    if params.noop_distractors > 0:
+        from .mutate import add_noop_distractors
+
+        world = add_noop_distractors(world, max(0, min(8, int(params.noop_distractors))), seed)
+    if params.relational_time > 0.0:
+        from .mutate import add_relational_time
+
+        world = add_relational_time(
+            world, params.relational_time, seed, invert_order_pair=params.scramble > 0
+        )
     return world
 
 

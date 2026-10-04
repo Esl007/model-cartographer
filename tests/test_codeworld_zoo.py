@@ -224,3 +224,32 @@ def test_campaign_runner_wires_the_default_ray(seen, store):
                                           budget=40, cost_cap=1.0, k_trials=4, parallelism=2)
     assert not bp.found and "spent=$" in bp.note
     assert all("kind=code_trace" in r.verifier_detail for r in store.by_run("zoo-camp"))
+
+
+# --- generic resample gate on the code evaluator ------------------------------------
+
+
+def test_resample_gate_wraps_the_code_evaluator(seen, store):
+    from cartographer.schedule.gate import ResampleGatedEvaluator
+
+    calls = {"n": 0}
+
+    def flaky(prog, rendered):  # first answer on each task wrong, every rerun right
+        calls["n"] += 1
+        return answer(prog) + 1 if calls["n"] % 4 == 1 else answer(prog)
+
+    ev = CodeTraceEvaluator(ZooClient(flaky, seen), "zoo-model", store, "g", 1e9)
+    gated = ResampleGatedEvaluator(ev, n=3)
+    assert gated({"n_statements": 8}, 1) is True  # the fluke is scored as a pass
+    assert gated.noise == 1 and gated.stable == 0
+    assert [r.verdict for r in store.by_run("g")] == [Verdict.FAIL]
+    assert [r.verdict for r in store.by_run("g/verify")] == [Verdict.PASS] * 3
+
+
+def test_code_campaign_runner_gates_and_certifies(seen, store):
+    bp = run_code_breaking_point_campaign(ZooClient(foil_reader("value_semantics"), seen), store, "camp-code-traps-zoo-001",
+                                          "zoo-model", ray=default_code_trap_ray(), budget=120, cost_cap=1e9,
+                                          k_trials=5, parallelism=1, resample_gate=True, early_stop=True)
+    assert bp.found and "gate_stable=" in bp.note
+    assert bp.certificate is not None and bp.certificate.gate_noise == 0
+    assert store.by_run("camp-code-traps-zoo-001/verify")  # every FAIL was rerun before escalation used it

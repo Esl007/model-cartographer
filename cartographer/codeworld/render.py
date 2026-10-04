@@ -5,7 +5,9 @@ only get names here. `naming="auto"` gives each look-alike twin pair a
 confusable spelling (`total` / `totl`, `items` / `item`); `naming=
 "descriptive"` gives every variable an unrelated descriptive name -- that is
 the `rename_descriptive` ablation. `annotate` adds a comment on a trap's
-line, which states the semantics without changing them.
+line, which states the semantics without changing them. A program with a
+declared dialect gets a plain header BEFORE the code, one numbered line per
+rule (`DIALECT_HEADER`); nothing else in the prompt changes.
 """
 
 from __future__ import annotations
@@ -58,6 +60,25 @@ _POOLS = {
     "x": ("x", "elem", "entry", "cur", "e"),
     "i": ("i", "j", "idx", "r"),
 }
+DIALECT_HEADER = {
+    "inclusive_range": "`range(a, b)` INCLUDES its upper bound `b` (so `range(3)` is 0, 1, 2, 3).",
+    "truncating_modulo": "`//` and `%` round toward zero (so `-7 // 2` is -3 and `-7 % 2` is -1).",
+    "copy_on_assign": "Assigning a list to a new name (`b = a`) COPIES it, so later changes through "
+                      "`b` do not affect `a`.",
+    "fresh_defaults": "A default argument value (such as `q=[]`) is created fresh on EVERY call, "
+                      "never shared between calls.",
+}
+
+
+def dialect_header(dialect) -> str:
+    """The plain statement of a declared dialect ('' for plain Python)."""
+    if not dialect:
+        return ""
+    lines = ["This program runs under a Python dialect with these differences from standard Python:"]
+    lines += [f"({i}) {DIALECT_HEADER[r]}" for i, r in enumerate(dialect, 1)]
+    return "\n".join(lines)
+
+
 _RESERVED = set(keyword.kwlist) | {"range", "len", "print", "list", "dict", "str", "int", "sum", "min", "max"}
 
 
@@ -341,6 +362,8 @@ def render(program: Program, rendering_seed: int = 0, naming: str = "auto",
             f"After this program runs, what is the value of `{target_name}`? Work through it carefully, "
             "then give the final answer on its own last line as `ANSWER: <python literal>`."
         )
-    prompt = f"Here is a short Python program.\n\n```python\n{source}```\n\n{question}"
+    header = dialect_header(program.params.dialect)
+    intro = "Here is a short Python program.\n\n" + (f"{header}\n\n" if header else "")
+    prompt = f"{intro}```python\n{source}```\n\n{question}"
     return RenderedProgram(source=source, prompt=prompt, name_map=names, naming=style,
                            target_name=target_name, query_kind=program.query.kind)

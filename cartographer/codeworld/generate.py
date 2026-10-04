@@ -26,6 +26,15 @@ Invariants enforced by `validate` (a program failing any is re-drawn):
     `%`/`//` only on non-negative operands);
   * the target's look-alike twin, if any, ends with a different value;
   * deleting every distractor changes no reading's answer.
+
+A program with a declared DIALECT (`CodeDimParams.dialect`) is grown and
+checked under the dialect's semantics (truth = `program.semantics`). Each
+declared rule gets its own site from the matching trap builder
+(`DIALECT_TRAPS`), and `validate` additionally requires that the plain
+Python reading (`python_prior`) differs from the truth AND that undoing any
+single declared rule changes the answer -- every rule is load-bearing. The
+disabled-trap invariant is checked with the foils relative to the dialect
+(`foils_for`). An empty dialect leaves generation byte-identical.
 """
 
 from __future__ import annotations
@@ -34,9 +43,11 @@ import copy
 import hashlib
 from dataclasses import replace
 
-from .foils import ALL_TRAP_FOILS, FOILS
-from .interpret import TRUE, Closure, InterpError, Interpreter, answer, answer_from_trace, run
+from .foils import ALL_TRAP_FOILS, PYTHON_PRIOR, foils_for
+from .interpret import DIALECT_SEMANTICS, TRUE, Closure, InterpError, Interpreter, answer, answer_from_trace, run, \
+    semantics_for
 from .model import (
+    DIALECT_TRAPS,
     TRAP_KEYS,
     Assign,
     AugAssign,
@@ -134,7 +145,7 @@ class _Builder:
         self.n_nodes = 0
         self._sid = 0
         self.vars: dict[str, VarInfo] = {}
-        self.interp = Interpreter(TRUE)
+        self.interp = Interpreter(semantics_for(params.dialect))
         self.distractor_ids: set[int] = set()
         self.trap_sites: list[tuple[str, int]] = []
         self.locals_used: list[str] = []
@@ -605,6 +616,7 @@ class _Builder:
         self.unfolded = {v for v in self.live() if v != self.target and v not in twin_t}
 
         traps = list(p.traps_on()) + (["opaque_literal_on"] if p.opaque_literal_on else [])
+        traps += [f"dialect:{r}" for r in p.dialect]  # one load-bearing site per declared rule
         budget = max(p.n_statements, self.n_nodes + 1)
         # trap blocks land at evenly spread fractions of the live budget
         start = self.n_nodes
@@ -618,6 +630,7 @@ class _Builder:
             "mutable_default_on": self.trap_mutable_default,
             "opaque_literal_on": self.trap_opaque_literal,
         }
+        builders.update({f"dialect:{r}": builders[DIALECT_TRAPS[r]] for r in p.dialect})
         stalls = 0
         while self.n_nodes < budget or traps:
             if traps and self.n_nodes >= due[0]:
@@ -700,14 +713,26 @@ def without_distractors(program: Program) -> Program:
 def validate(program: Program) -> str | None:
     """None if the program satisfies every generation invariant (module
     docstring), else the reason it does not."""
-    tr = run(program, TRUE)
+    truth_sem = program.semantics
+    tr = run(program, truth_sem)
     if tr.error is not None:
         return f"runtime error: {tr.error}"
     if tr.steps > MAX_GEN_STEPS:
         return "too many steps"
     truth = answer_from_trace(program, tr)
-    foils = {name: answer(program, sem) for name, sem in FOILS.items()}
+    readings = foils_for(program)
+    foils = {name: answer(program, sem) for name, sem in readings.items()}
+    if program.params.dialect:
+        if foils[PYTHON_PRIOR] == truth:
+            return "the plain Python reading agrees with the dialect"
+        for rule in program.params.dialect:
+            field_name, _ = DIALECT_SEMANTICS[rule]
+            undone = replace(truth_sem, **{field_name: getattr(TRUE, field_name)})
+            if answer(program, undone) == truth:
+                return f"dialect rule {rule} is not answer-relevant"
     for trap, foil in ALL_TRAP_FOILS.items():
+        if foil not in readings:  # the dialect declares this semantic; checked per rule above
+            continue
         on = bool(getattr(program.params, trap))
         if on and foils[foil] == truth:
             return f"trap {trap} is not answer-relevant"
@@ -719,9 +744,9 @@ def validate(program: Program) -> str | None:
             return "target's twin ends with the same value"
     if program.distractor_ids:
         stripped = without_distractors(program)
-        if answer(stripped, TRUE) != truth:
+        if answer(stripped, truth_sem) != truth:
             return "a distractor changes the answer"
-        for name, sem in FOILS.items():
+        for name, sem in readings.items():
             if answer(stripped, sem) != foils[name]:
                 return f"a distractor changes the {name} reading"
     return None

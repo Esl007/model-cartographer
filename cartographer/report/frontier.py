@@ -69,6 +69,7 @@ CAUSE_WORDS = {
     "turn_limit": "runs out of turns",
     # narrative belief foils (classify_belief_failure)
     "final_true_state": "answers where the object really is, not where the person believes it is",
+    "stale_belief": "answers the classic false-belief trap even though the person saw the last move (matches the story template instead of the observation)",
     "last_mentioned_location": "answers the last place mentioned in the story",
     "last_witnessed_by_anyone": "answers where anyone last saw it, not what this person saw",
     "query_agent_own_last_move": "answers where the person last put it themselves",
@@ -86,6 +87,7 @@ CAUSE_WORDS = {
     "foil_all_branches": "runs every branch of an if, ignoring the condition",
     "foil_loop_once": "runs a loop body only once",
     "foil_pattern_completion": "writes a string that completes the surrounding naming scheme instead of copying the literal",
+    "foil_python_prior": "follows standard Python instead of the dialect the program declares",
     "wrong_value": "gives a wrong value that matches no known misreading",
     "malformed_answer": "does not give a usable answer",
     "empty_answer": "gives no answer",
@@ -197,7 +199,8 @@ SPECS: tuple[Spec, ...] = (
          where=_flag("id_collisions_on", True), axis=_latent("plan_depth"), axis_label=_plan_len_label),
     Spec("traps", "Plans around traps (poisoned tools, misleading descriptions, zero slack)",
          "trap-laden catalogs", "II · Tool planning", "tool_plan", "axis",
-         runs=(r"^camp-tool_bp-nano-002$", r"^camp-tool_bp-(super|ultra|gemma)-001$"),
+         # nano-001 is the cap-biased run (X6); nano-002 is its re-run. Any other label, any number.
+         runs=(r"^camp-tool_bp-nano-002$", r"^camp-tool_bp-(?!nano-)[A-Za-z0-9]+-\d{3}$"),
          axis=_traps_on, axis_label=_traps_label),
     Spec("catalog_size", "Picks the right tool from a large catalog", "large catalogs",
          "II · Tool planning", "tool_plan", "axis",
@@ -208,7 +211,7 @@ SPECS: tuple[Spec, ...] = (
          runs=(r"^camp-irrelevance-\w+-\d+$",), where=lambda r: "unsolvable=1" in (r.verifier_detail or "")),
     Spec("interactive", "Executes a plan step by step, carrying values between calls",
          "step-by-step execution with values to carry", "III · Interactive execution", "interactive", "axis",
-         runs=(r"^camp-interactive-(nano|super|ultra|gemma)-\d+$",), axis=_latent("plan_depth"),
+         runs=(r"^camp-interactive-(?!lookalike-|fault-)[A-Za-z0-9]+-\d+$",), axis=_latent("plan_depth"),
          axis_label=_interactive_label),
     Spec("interactive_lookalike", "Executes step by step when tool names look alike (sees each error)",
          "step-by-step execution with look-alike tool names", "III · Interactive execution", "interactive",
@@ -226,8 +229,10 @@ SPECS: tuple[Spec, ...] = (
          "semantic traps in code", "IV · Code tracing", "code_trace", "axis",
          runs=(r"^camp-code-traps-",), axis=_code_traps_on, axis_label=_code_traps_label),
     Spec("consistency", "Gets the same task right every time (pass^k)", "consistency",
-         "Reliability", None, "absent",
-         note="Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet."),
+         "Reliability", None, "rate", runs=(r"^camp-consistency-",), where=lambda r: True,
+         note="Rate shown is pass^1 over repeats of the same tasks (X.consistency campaign); pass^k needs "
+              "per-task grouping and is in results/consistency/<run_id>.json. Earlier hand measurement: "
+              "Nano 63% single-try vs 17% on all 5 tries."),
 )
 
 

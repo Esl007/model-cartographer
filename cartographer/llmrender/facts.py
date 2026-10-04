@@ -25,7 +25,7 @@ import string
 
 from ..render.naming import NameMap
 from ..render.templates import _time_anchor
-from ..world.model import Filler, Move, Tell, Transfer, World
+from ..world.model import Filler, Move, NoOp, Tell, Transfer, World
 
 _ARTICLES = {"the", "a", "an"}
 
@@ -106,7 +106,9 @@ def world_facts(world: World, name_map: NameMap) -> list[dict]:
                     "witnesses": _witness_names(event, name_map),
                 }
             )
-        elif isinstance(event, Filler):
+        elif isinstance(event, (Filler, NoOp)):
+            # NoOps are inert (no state change) -- like Filler, they carry no
+            # fact the fidelity gate must preserve.
             continue
         else:
             raise TypeError(f"unknown event type: {type(event)!r}")

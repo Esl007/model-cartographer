@@ -220,6 +220,20 @@ TRAP_KEYS = (
 # interactive ticket-fabrication finding (docs/spec-ticket-fabrication.md, Part D).
 EXTRA_TRAP_KEYS = ("opaque_literal_on",)
 
+# Counterfactual dialects (Wu et al. 2023, "Reasoning or Reciting?"): a program
+# may DECLARE deviations from Python, stated in a header before the code. Truth
+# is the interpreter under the declared semantics; the Python reading becomes
+# the `python_prior` foil. Fixed order: `dialect_rules=k` turns on the first k.
+DIALECT_RULES = ("inclusive_range", "truncating_modulo", "copy_on_assign", "fresh_defaults")
+# The trap builder whose site makes each rule load-bearing (and the toggle that
+# would double-book the same semantic, so the two are mutually exclusive).
+DIALECT_TRAPS = {
+    "inclusive_range": "inclusive_range_trap_on",
+    "truncating_modulo": "negative_modulo_on",
+    "copy_on_assign": "aliasing_on",
+    "fresh_defaults": "mutable_default_on",
+}
+
 
 @dataclass(frozen=True)
 class CodeDimParams:
@@ -235,8 +249,17 @@ class CodeDimParams:
     negative_modulo_on: bool = False
     mutable_default_on: bool = False
     opaque_literal_on: bool = False
+    dialect: tuple = ()  # declared deviations from Python, a subset of DIALECT_RULES
 
     def __post_init__(self) -> None:
+        dialect = tuple(self.dialect)
+        unknown = [r for r in dialect if r not in DIALECT_RULES]
+        if unknown or len(set(dialect)) != len(dialect):
+            raise ValueError(f"dialect must be distinct rules from {DIALECT_RULES}, got {dialect}")
+        for r in dialect:
+            if getattr(self, DIALECT_TRAPS[r]):
+                raise ValueError(f"dialect rule {r!r} conflicts with trap toggle {DIALECT_TRAPS[r]!r}")
+        object.__setattr__(self, "dialect", tuple(r for r in DIALECT_RULES if r in dialect))
         if not 2 <= self.n_statements <= 80:
             raise ValueError("n_statements must be in 2..80")
         if not 0 <= self.max_nesting <= 3:
@@ -280,6 +303,14 @@ class Program:
     distractor_ids: frozenset = frozenset()  # sids of top-level distractor statements
     trap_sites: tuple = ()  # tuple[(trap_key, sid), ...] -- the line that carries the trap
     locals_pool: tuple = ()  # function-local / loop names (ids) used, for rendering
+
+    @property
+    def semantics(self):
+        """The semantics this program DECLARES (Python unless it has a dialect):
+        ground truth for every answer."""
+        from .interpret import semantics_for
+
+        return semantics_for(self.params.dialect)
 
     def var(self, vid: str) -> VarInfo | None:
         for v in self.variables:

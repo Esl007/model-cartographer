@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 
-from ..world.model import Filler, Move, Query, Tell, Transfer, World
+from ..world.model import Filler, Move, NoOp, Query, Tell, Transfer, World
 from ..world.simulate import answer as sim_answer
 from .naming import NameMap
 
@@ -60,6 +60,31 @@ _FILLER_TEMPLATES = [
     "{actor} reorganized some papers on the desk.",
     "{actor} glanced at the clock.",
 ]
+# NoOp (inert) templates, keyed by NoOp.kind. Every variant states
+# explicitly that the relocation did NOT happen, so the story stays
+# well-posed; the stressor is salience, not ambiguity.
+_NOOP_TEMPLATES = {
+    "declined": [
+        "{actor} thought about moving {obj} to {loc}, but left it where it was.",
+        "{actor} picked up {obj} to take it to {loc}, then changed their mind and set it back down where it had been.",
+    ],
+    "negated": [
+        "{actor} did not take {obj} to {loc}.",
+        "{actor} almost carried {obj} into {loc}, but decided against it.",
+    ],
+    "planned": [
+        "{actor} planned to bring {obj} to {loc} later, but never did.",
+        "{actor} meant to move {obj} into {loc}, but it never happened.",
+    ],
+    "refused": [
+        "{actor} refused when {other} asked for {obj} to be moved to {loc}.",
+        "{actor} was asked by {other} to carry {obj} to {loc}, but declined and left it alone.",
+    ],
+}
+# Relative-time cues (relational_time), stated against the previously
+# narrated event. Index 3 of each list is the explicit-referent form.
+_CUE_AFTER = ["Later,", "Afterward,", "After that,", "After {clause},"]
+_CUE_BEFORE = ["Before that,", "Earlier,", "Earlier the same morning,", "Before {clause},"]
 _WITNESS_SINGLE_TEMPLATES = [
     "{witness} was nearby and saw this happen.",
     "{witness} happened to be watching.",
@@ -84,6 +109,8 @@ def _event_actor_ids(event) -> set[str]:
         return {event.speaker, event.listener}
     if isinstance(event, Filler):
         return {event.actor}
+    if isinstance(event, NoOp):
+        return {event.actor} | ({event.other} if event.other else set())
     return set()
 
 
@@ -95,13 +122,17 @@ def _join_names(names: list[str]) -> str:
     return ", ".join(names[:-1]) + f", and {names[-1]}"
 
 
-def _render_witness_sentence(event, idx: int, seed: int, name_map: NameMap) -> str | None:
+def _render_witness_sentence(
+    event, idx: int, seed: int, name_map: NameMap, anchored: bool = True
+) -> str | None:
     """A sentence marking the presence of any non-actor witnesses to `event`,
-    sharing `event`'s time anchor. Returns None if there are none."""
+    sharing `event`'s time anchor (or no anchor at all when the event is
+    narrated with a relative cue, so the clock time cannot leak). Returns
+    None if there are none."""
     non_actor_witnesses = sorted(getattr(event, "witnesses", frozenset()) - _event_actor_ids(event))
     if not non_actor_witnesses:
         return None
-    anchor = _time_anchor(event.time)
+    anchor = _time_anchor(event.time) if anchored else ""
     names = [_entity_name(eid, name_map) for eid in non_actor_witnesses]
     if len(names) == 1:
         template = _WITNESS_SINGLE_TEMPLATES[
@@ -113,7 +144,7 @@ def _render_witness_sentence(event, idx: int, seed: int, name_map: NameMap) -> s
             _stable_int("tpl_witnessN", str(seed), str(idx), modulus=len(_WITNESS_MULTI_TEMPLATES))
         ]
         sentence = template.format(witnesses=_join_names(names))
-    return f"{anchor} {sentence}"
+    return f"{anchor} {sentence}" if anchor else sentence
 
 
 @dataclass(frozen=True)
@@ -145,11 +176,17 @@ def _event_participants(event) -> list[str]:
         return [event.speaker, event.listener]
     if isinstance(event, Filler):
         return [event.actor]
+    if isinstance(event, NoOp):
+        # Only the actor is pronoun-eligible: the asker of a "refused" NoOp
+        # is named in object position, where "she"/"he" would be ungrammatical.
+        return [event.actor]
     return []
 
 
-def _render_event_sentence(event, idx: int, seed: int, name_map: NameMap) -> str:
-    anchor = _time_anchor(event.time)
+def _render_event_sentence(
+    event, idx: int, seed: int, name_map: NameMap, anchor: str | None = None
+) -> str:
+    anchor = _time_anchor(event.time) if anchor is None else anchor
     if isinstance(event, Move):
         template = _MOVE_TEMPLATES[
             _stable_int("tpl_move", str(seed), str(idx), modulus=len(_MOVE_TEMPLATES))
@@ -183,9 +220,71 @@ def _render_event_sentence(event, idx: int, seed: int, name_map: NameMap) -> str
             _stable_int("tpl_filler", str(event.description_seed), modulus=len(_FILLER_TEMPLATES))
         ]
         sentence = template.format(actor=_entity_name(event.actor, name_map))
+    elif isinstance(event, NoOp):
+        variants = _NOOP_TEMPLATES[event.kind]
+        template = variants[
+            _stable_int("tpl_noop", str(seed), str(idx), modulus=len(variants))
+        ]
+        sentence = template.format(
+            actor=_entity_name(event.actor, name_map),
+            other=_entity_name(event.other, name_map) if event.other else "someone",
+            obj=_obj_name(event.obj, name_map),
+            loc=_loc_name(event.loc, name_map),
+        )
     else:
         raise TypeError(f"unknown event type: {type(event)!r}")
     return f"{anchor} {sentence}"
+
+
+def _event_clause(event, name_map: NameMap) -> str | None:
+    """Past-tense clause naming `event`, for explicit relative cues
+    ("After Silas moved the wrench to the lobby, ..."). None for NoOps --
+    an inert event is never used as a temporal referent."""
+    if isinstance(event, Move):
+        return (
+            f"{_entity_name(event.actor, name_map)} moved {_obj_name(event.obj, name_map)}"
+            f" to {_loc_name(event.dst, name_map)}"
+        )
+    if isinstance(event, Transfer):
+        return (
+            f"{_entity_name(event.giver, name_map)} handed {_obj_name(event.obj, name_map)}"
+            f" to {_entity_name(event.receiver, name_map)}"
+        )
+    if isinstance(event, Tell):
+        return (
+            f"{_entity_name(event.speaker, name_map)} told {_entity_name(event.listener, name_map)}"
+            f" about {_obj_name(event.obj, name_map)}"
+        )
+    if isinstance(event, Filler):
+        template = _FILLER_TEMPLATES[
+            _stable_int("tpl_filler", str(event.description_seed), modulus=len(_FILLER_TEMPLATES))
+        ]
+        return template.format(actor=_entity_name(event.actor, name_map)).rstrip(".")
+    return None
+
+
+def _relative_cue(
+    world: World, pos: int, seed: int, name_map: NameMap, clause_counts: dict[str, int]
+) -> tuple[str, int, str]:
+    """(cue text, referent event index, "after"|"before") for the event at
+    narration position `pos` (> 0), stated against the previously narrated
+    event and TRUE under the real chronology."""
+    idx = world.narration_order[pos]
+    ref = world.narration_order[pos - 1]
+    event, ref_event = world.events[idx], world.events[ref]
+    relation = "after" if ref_event.time < event.time else "before"
+    pool = _CUE_AFTER if relation == "after" else _CUE_BEFORE
+    choice = _stable_int("tpl_cue", str(seed), str(idx), modulus=len(pool))
+    clause = _event_clause(ref_event, name_map)
+    explicit_ok = (
+        clause is not None
+        and clause_counts.get(clause, 0) == 1
+        and not (set(_event_participants(ref_event)) & _event_actor_ids(event))
+    )
+    if choice == len(pool) - 1 and not explicit_ok:
+        choice = _stable_int("tpl_cue_generic", str(seed), str(idx), modulus=len(pool) - 1)
+    cue = pool[choice].format(clause=clause) if choice == len(pool) - 1 else pool[choice]
+    return cue, ref, relation
 
 
 def _apply_pronouns(
@@ -296,6 +395,11 @@ def _describe_event(event, name_map: NameMap) -> str:
         )
     if isinstance(event, Filler):
         return _EVENT_DESC_TEMPLATES[Filler].format(actor=_entity_name(event.actor, name_map))
+    if isinstance(event, NoOp):
+        return (
+            f"{_entity_name(event.actor, name_map)} considering moving "
+            f"{_obj_name(event.obj, name_map)} to {_loc_name(event.loc, name_map)}"
+        )
     raise TypeError(f"unknown event type: {type(event)!r}")
 
 
@@ -336,14 +440,29 @@ def render(world: World, name_map: NameMap, seed: int) -> RenderedTask:
     sentence_event_idx: list[int] = []
     sentence_is_witness: list[bool] = []
     witness_sentence_count = 0
-    for idx in world.narration_order:
+    time_cues: list[dict] = []
+    clause_counts: dict[str, int] = {}
+    if world.relative_times:
+        for ev in world.events:
+            c = _event_clause(ev, name_map)
+            if c is not None:
+                clause_counts[c] = clause_counts.get(c, 0) + 1
+    for pos, idx in enumerate(world.narration_order):
         event = world.events[idx]
-        sentences.append(_render_event_sentence(event, idx, seed, name_map))
+        cued = pos > 0 and event.time in world.relative_times
+        anchor = None
+        if cued:
+            anchor, ref, relation = _relative_cue(world, pos, seed, name_map, clause_counts)
+            time_cues.append(
+                {"sentence_index": len(sentences), "event_idx": idx, "ref_event_idx": ref,
+                 "relation": relation, "cue": anchor}
+            )
+        sentences.append(_render_event_sentence(event, idx, seed, name_map, anchor=anchor))
         participants_per_sentence.append(_event_participants(event))
         sentence_event_idx.append(idx)
         sentence_is_witness.append(False)
 
-        witness_sentence = _render_witness_sentence(event, idx, seed, name_map)
+        witness_sentence = _render_witness_sentence(event, idx, seed, name_map, anchored=not cued)
         if witness_sentence is not None:
             sentences.append(witness_sentence)
             non_actor_witnesses = sorted(
@@ -355,6 +474,10 @@ def render(world: World, name_map: NameMap, seed: int) -> RenderedTask:
             witness_sentence_count += 1
 
     sentences, pronoun_meta = _apply_pronouns(sentences, participants_per_sentence, world, name_map)
+    # Un-anchored (relative-cue) witness sentences can now begin with a
+    # pronoun; anchored sentences always start with "At", so this is a
+    # no-op for every pre-relational_time story.
+    sentences = [x[:1].upper() + x[1:] for x in sentences]
 
     story = " ".join(sentences)
     question, answer_key = _render_question(world, name_map)
@@ -366,6 +489,7 @@ def render(world: World, name_map: NameMap, seed: int) -> RenderedTask:
         "sentence_event_idx": sentence_event_idx,
         "sentence_is_witness": sentence_is_witness,
         "query_kind": world.query.kind,
+        "time_cues": time_cues,
         **pronoun_meta,
     }
     return RenderedTask(prompt=prompt, answer_key=answer_key, meta=meta)

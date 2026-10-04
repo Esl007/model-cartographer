@@ -8,7 +8,7 @@ generated/mutated `World`.
 
 from __future__ import annotations
 
-from .model import Filler, Move, Tell, Transfer, World
+from .model import Filler, Move, NoOp, Tell, Transfer, World
 
 
 def _causal_chain_indices(world: World) -> set[int]:
@@ -62,7 +62,7 @@ def measure(world: World) -> dict[str, float]:
         sum(
             1
             for i, event in enumerate(world.events)
-            if i not in chain_indices and not isinstance(event, Filler)
+            if i not in chain_indices and not isinstance(event, (Filler, NoOp))
         )
     )
 
@@ -77,6 +77,10 @@ def measure(world: World) -> dict[str, float]:
         "distractors": distractors,
         "context_length": context_length,
         "witness_gap": witness_gap,
+        "noop_distractors": float(sum(1 for e in world.events if isinstance(e, NoOp))),
+        "relational_time": (
+            sum(1 for e in world.events if e.time in world.relative_times) / n if n else 0.0
+        ),
     }
 
 
@@ -118,4 +122,6 @@ def _participants(event) -> set[str]:
         return {event.speaker, event.listener}
     if isinstance(event, Filler):
         return {event.actor}
+    if isinstance(event, NoOp):
+        return {event.actor} | ({event.other} if event.other else set())
     return set()

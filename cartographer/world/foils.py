@@ -201,6 +201,10 @@ def foil_answers(world: World, name_map: NameMap) -> dict[str, str | None]:
             ),
             "most_frequent_location": _loc_name(_most_frequent_location(world), name_map),
         }
+        # Full-witness (trivialized) worlds only -- see `_stale_belief`.
+        stale = _stale_belief(world)
+        if stale is not None:
+            foils["stale_belief"] = _loc_name(stale, name_map)
         return foils
 
     if query.kind == "state":
@@ -328,3 +332,23 @@ def foil_divergence(world: World, name_map: NameMap) -> FoilProfile:
         salience_weighted_score=score,
         trap_kinds=tuple(sorted(diverging)),
     )
+
+
+def _stale_belief(world: World) -> str | None:
+    """`stale_belief` foil: the TRAPPED answer of a trivialized false-belief
+    story (Malek et al. 2025, arXiv 2507.07313; SimpleToM, arXiv
+    2410.13648) -- the location the query agent believed before the final
+    move, answered even though the story now shows the agent watching that
+    final move. The mirror image of `final_true_state`: on a classic world
+    `final_true_state` is the trap and the stale location is right; on a
+    full-witness world (`world.trivial.make_full_witness`) the stale
+    location is the trap and `final_true_state` is right.
+
+    No-op (None, so the key is absent from `foil_answers` and the classic
+    belief key set is unchanged) unless `world` is a full-witness world.
+    """
+    from .trivial import is_full_witness_world, stale_location
+
+    if not is_full_witness_world(world):
+        return None
+    return stale_location(world)

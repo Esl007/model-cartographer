@@ -17,6 +17,8 @@ from cartographer.world import (
     add_coref_pressure,
     add_distractors,
     add_filler,
+    add_noop_distractors,
+    add_relational_time,
     answer,
     extend_chain,
     generate,
@@ -194,6 +196,8 @@ def test_answer_preservation() -> None:
                 "add_filler": lambda w, s: add_filler(w, 3, s),
                 "scramble_narration": lambda w, s: scramble_narration(w, 0.5, s),
                 "add_coref_pressure": lambda w, s: add_coref_pressure(w, 2, s),
+                "add_noop_distractors": lambda w, s: add_noop_distractors(w, 3, s),
+                "add_relational_time": lambda w, s: add_relational_time(w, 0.5, s),
             }[op_name]
             mutated = op(world, seed + 100)
             assert answer(mutated) == original_answer, f"{op_name} changed answer at seed={seed}"

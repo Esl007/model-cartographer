@@ -2,7 +2,7 @@
  {
   "model": "gemma-4-31b-it-qat-w4a16-ct",
   "name": "gemma-4-31b-it-qat-w4a16-ct",
-  "verdict": "gemma-4-31b-it-qat-w4a16-ct: slips on belief tracking; slips on misleading stories; slips on long plans with look-alike tool names (16-call plans); slips on spotting impossible tasks. Holds on 6 of 10 capabilities tested.",
+  "verdict": "gemma-4-31b-it-qat-w4a16-ct: breaks on step-by-step execution with values to carry (11-call plans, 3 values to carry); breaks on recovering from a failed call (12-call plans, 4 values to carry); slips on belief tracking; slips on misleading stories; slips on long plans with look-alike tool names (16-call plans); slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks. Holds on 7 of 14 capabilities tested.",
   "rows": [
    {
     "key": "state",
@@ -284,22 +284,59 @@
     "key": "traps",
     "label": "Plans around traps (poisoned tools, misleading descriptions, zero slack)",
     "province": "II \u00b7 Tool planning",
-    "status": "NOT TESTED",
-    "headline": "Not tested yet",
-    "boundary": null,
-    "held_through": null,
-    "n_pass": 0,
-    "n_scored": 0,
+    "status": "DEGRADES",
+    "headline": "Degrades at 4 of 5 traps active: 9/42 pass (was 21/21 at 1 of 5 traps active)",
+    "boundary": "4 of 5 traps active",
+    "held_through": "1 of 5 traps active",
+    "n_pass": 9,
+    "n_scored": 42,
     "n_error": 0,
-    "ci": null,
-    "confidence": null,
-    "p_value": null,
-    "cause_code": null,
-    "cause": null,
-    "cause_share": null,
-    "cause_n": 0,
-    "exemplar": null,
-    "curve": [],
+    "ci": [
+     0.117,
+     0.359
+    ],
+    "confidence": "A",
+    "p_value": 4.031253616523966e-14,
+    "cause_code": "precondition_violation",
+    "cause": "calls a real tool before the step it depends on is done",
+    "cause_share": 0.9183673469387755,
+    "cause_n": 49,
+    "exemplar": {
+     "record_id": "c6ba92cc874c49e4b14ed4678e58ca03",
+     "run_id": "camp-tool_bp-gemma4qat-001",
+     "detail": "precondition_violation:step=9:adva-nce_1",
+     "excerpt": "[ {\"tool\": \"set_flag_0\", \"args\": {\"flag\": \"flag_0\"}}, {\"tool\": \"set_-flag_1\", \"args\": {\"flag\": \"flag_1\"}}, {\"tool\": \"build_art_0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"publish_art_o0\", \"args\": {\"artifact\": \"art_0\"}}, {\"tool\": \"open_interleave_window\", \"args\": {}}, {\"tool\": \"adva-nce_0\", \"args\": {\"service\": \"svc_0\"}}, {\"tool\": \"adva-nce_1\", \"args\": {\"service\": \"svc_0\"}}, {\"tool\": \"advance_o2\","
+    },
+    "curve": [
+     {
+      "value": 0.0,
+      "label": "0 of 5 traps active",
+      "n_pass": 42,
+      "n_scored": 42,
+      "n_error": 0
+     },
+     {
+      "value": 1.0,
+      "label": "1 of 5 traps active",
+      "n_pass": 21,
+      "n_scored": 21,
+      "n_error": 0
+     },
+     {
+      "value": 4.0,
+      "label": "4 of 5 traps active",
+      "n_pass": 9,
+      "n_scored": 42,
+      "n_error": 0
+     },
+     {
+      "value": 5.0,
+      "label": "5 of 5 traps active",
+      "n_pass": 40,
+      "n_scored": 56,
+      "n_error": 0
+     }
+    ],
     "note": "",
     "short": "trap-laden catalogs"
    },
@@ -421,22 +458,59 @@
     "key": "interactive",
     "label": "Executes a plan step by step, carrying values between calls",
     "province": "III \u00b7 Interactive execution",
-    "status": "NOT TESTED",
-    "headline": "Not tested yet",
-    "boundary": null,
-    "held_through": null,
-    "n_pass": 0,
-    "n_scored": 0,
+    "status": "BREAKS",
+    "headline": "Breaks at 11-call plans, 3 values to carry: 15/55 pass (was 28/36 at 7-call plans, no values to carry)",
+    "boundary": "11-call plans, 3 values to carry",
+    "held_through": "7-call plans, no values to carry",
+    "n_pass": 15,
+    "n_scored": 55,
     "n_error": 0,
-    "ci": null,
-    "confidence": null,
-    "p_value": null,
-    "cause_code": null,
-    "cause": null,
-    "cause_share": null,
-    "cause_n": 0,
-    "exemplar": null,
-    "curve": [],
+    "ci": [
+     0.173,
+     0.402
+    ],
+    "confidence": "A",
+    "p_value": 5.626874297186837e-07,
+    "cause_code": "invalid_ticket",
+    "cause": "fails to pass on a value returned by an earlier call",
+    "cause_share": 1.0,
+    "cause_n": 48,
+    "exemplar": {
+     "record_id": "2bac9217805a4626baf9f660819b59a2",
+     "run_id": "camp-interactive-gemma4qat-001",
+     "detail": "invalid_ticket",
+     "excerpt": "step 8: set_depth_flag_1({'flag': 'depth_flag_1', 'ticket': 'ticket_depth_flag_0_123'}) -> invalid_ticket: `ticket` must be the exact ticket returned by the most recent successful call to set_depth_flag_0."
+    },
+    "curve": [
+     {
+      "value": 4.0,
+      "label": "7-call plans, no values to carry",
+      "n_pass": 28,
+      "n_scored": 36,
+      "n_error": 9
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans, 1 value to carry",
+      "n_pass": 6,
+      "n_scored": 10,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans, 3 values to carry",
+      "n_pass": 15,
+      "n_scored": 55,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans, 4 values to carry",
+      "n_pass": 2,
+      "n_scored": 10,
+      "n_error": 0
+     }
+    ],
     "note": "",
     "short": "step-by-step execution with values to carry"
    },
@@ -444,28 +518,87 @@
     "key": "interactive_lookalike",
     "label": "Executes step by step when tool names look alike (sees each error)",
     "province": "III \u00b7 Interactive execution",
-    "status": "NOT TESTED",
-    "headline": "Too few trials to call",
+    "status": "HOLDS",
+    "headline": "Holds through 25-call plans: 30/31 pass across every tested level",
     "boundary": null,
-    "held_through": null,
-    "n_pass": 0,
-    "n_scored": 0,
-    "n_error": 0,
-    "ci": null,
-    "confidence": null,
+    "held_through": "25-call plans",
+    "n_pass": 30,
+    "n_scored": 31,
+    "n_error": 19,
+    "ci": [
+     0.838,
+     0.994
+    ],
+    "confidence": "B",
     "p_value": null,
-    "cause_code": null,
-    "cause": null,
-    "cause_share": null,
-    "cause_n": 0,
+    "cause_code": "stopped_short",
+    "cause": "stops acting before the goal is reached",
+    "cause_share": 1.0,
+    "cause_n": 1,
     "exemplar": null,
     "curve": [
      {
       "value": 4.0,
       "label": "7-call plans",
-      "n_pass": 0,
-      "n_scored": 0,
-      "n_error": 5
+      "n_pass": 6,
+      "n_scored": 6,
+      "n_error": 9
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 11.0,
+      "label": "14-call plans",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 15.0,
+      "label": "18-call plans",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 18.0,
+      "label": "21-call plans",
+      "n_pass": 4,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 22.0,
+      "label": "25-call plans",
+      "n_pass": 5,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 26.0,
+      "label": "29-call plans",
+      "n_pass": 2,
+      "n_scored": 2,
+      "n_error": 3
+     },
+     {
+      "value": 27.0,
+      "label": "30-call plans",
+      "n_pass": 2,
+      "n_scored": 2,
+      "n_error": 3
+     },
+     {
+      "value": 28.0,
+      "label": "31-call plans",
+      "n_pass": 1,
+      "n_scored": 1,
+      "n_error": 4
      }
     ],
     "note": "",
@@ -475,28 +608,57 @@
     "key": "interactive_fault",
     "label": "Recovers when a tool call fails mid-plan (transient error, retry works)",
     "province": "III \u00b7 Interactive execution",
-    "status": "NOT TESTED",
-    "headline": "Too few trials to call",
-    "boundary": null,
-    "held_through": null,
+    "status": "BREAKS",
+    "headline": "Breaks at 12-call plans, 4 values to carry: 0/10 pass (was 16/16 at 7-call plans, no values to carry)",
+    "boundary": "12-call plans, 4 values to carry",
+    "held_through": "7-call plans, no values to carry",
     "n_pass": 0,
-    "n_scored": 0,
+    "n_scored": 10,
     "n_error": 0,
-    "ci": null,
-    "confidence": null,
-    "p_value": null,
-    "cause_code": null,
-    "cause": null,
-    "cause_share": null,
-    "cause_n": 0,
-    "exemplar": null,
+    "ci": [
+     0.0,
+     0.278
+    ],
+    "confidence": "B",
+    "p_value": 1.882624039038092e-07,
+    "cause_code": "invalid_ticket",
+    "cause": "fails to pass on a value returned by an earlier call",
+    "cause_share": 1.0,
+    "cause_n": 10,
+    "exemplar": {
+     "record_id": "817bda66e3e94b2788639d80c3282571",
+     "run_id": "camp-interactive-fault-gemma4qat-001",
+     "detail": "invalid_ticket",
+     "excerpt": "step 2: advance_1({'service': 'svc_0', 'ticket': 'ticket_advance_0_svc_0'}) -> invalid_ticket: `ticket` must be the exact ticket returned by the most recent successful call to advance_0."
+    },
     "curve": [
      {
       "value": 4.0,
       "label": "7-call plans, no values to carry",
+      "n_pass": 16,
+      "n_scored": 16,
+      "n_error": 9
+     },
+     {
+      "value": 6.0,
+      "label": "9-call plans, 1 value to carry",
+      "n_pass": 5,
+      "n_scored": 10,
+      "n_error": 0
+     },
+     {
+      "value": 8.0,
+      "label": "11-call plans, 3 values to carry",
+      "n_pass": 22,
+      "n_scored": 63,
+      "n_error": 0
+     },
+     {
+      "value": 9.0,
+      "label": "12-call plans, 4 values to carry",
       "n_pass": 0,
-      "n_scored": 0,
-      "n_error": 5
+      "n_scored": 10,
+      "n_error": 0
      }
     ],
     "note": "",
@@ -618,7 +780,7 @@
     "cause_n": 0,
     "exemplar": null,
     "curve": [],
-    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "note": "Rate shown is pass^1 over repeats of the same tasks (X.consistency campaign); pass^k needs per-task grouping and is in results/consistency/<run_id>.json. Earlier hand measurement: Nano 63% single-try vs 17% on all 5 tries.",
     "short": "consistency"
    }
   ]
@@ -1444,7 +1606,7 @@
     "cause_n": 0,
     "exemplar": null,
     "curve": [],
-    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "note": "Rate shown is pass^1 over repeats of the same tasks (X.consistency campaign); pass^k needs per-task grouping and is in results/consistency/<run_id>.json. Earlier hand measurement: Nano 63% single-try vs 17% on all 5 tries.",
     "short": "consistency"
    }
   ]
@@ -2071,7 +2233,7 @@
     "cause_n": 0,
     "exemplar": null,
     "curve": [],
-    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "note": "Rate shown is pass^1 over repeats of the same tasks (X.consistency campaign); pass^k needs per-task grouping and is in results/consistency/<run_id>.json. Earlier hand measurement: Nano 63% single-try vs 17% on all 5 tries.",
     "short": "consistency"
    }
   ]
@@ -2590,7 +2752,7 @@
     "cause_n": 0,
     "exemplar": null,
     "curve": [],
-    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "note": "Rate shown is pass^1 over repeats of the same tasks (X.consistency campaign); pass^k needs per-task grouping and is in results/consistency/<run_id>.json. Earlier hand measurement: Nano 63% single-try vs 17% on all 5 tries.",
     "short": "consistency"
    }
   ]
@@ -3344,7 +3506,7 @@
     "cause_n": 0,
     "exemplar": null,
     "curve": [],
-    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "note": "Rate shown is pass^1 over repeats of the same tasks (X.consistency campaign); pass^k needs per-task grouping and is in results/consistency/<run_id>.json. Earlier hand measurement: Nano 63% single-try vs 17% on all 5 tries.",
     "short": "consistency"
    }
   ]
@@ -3699,7 +3861,7 @@
     "cause_n": 0,
     "exemplar": null,
     "curve": [],
-    "note": "Measured once outside the store (Nano: 63% single-try vs 17% on all 5 tries); no campaign yet.",
+    "note": "Rate shown is pass^1 over repeats of the same tasks (X.consistency campaign); pass^k needs per-task grouping and is in results/consistency/<run_id>.json. Earlier hand measurement: Nano 63% single-try vs 17% on all 5 tries.",
     "short": "consistency"
    }
   ]

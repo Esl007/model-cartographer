@@ -15,6 +15,8 @@ from ..exec.evaluator import (
     _task_seed,
 )
 from ..exec.pricing import cost_usd
+from ..schedule.certificate import certify
+from ..schedule.gate import ResampleGatedEvaluator  # noqa: F401  (re-export)
 from ..schedule.escalate import BreakingPoint, EscalationRay, RayDim, find_breaking_point
 from ..store.schema import ExperimentRecord, RenderMode, Verdict
 from ..store.store import ResultsStore
@@ -205,6 +207,7 @@ def run_interactive_breaking_point_campaign(
     max_tokens: int = 16000,
     cancel_event: threading.Event | None = None,
     protocol: str = "native",
+    early_stop: bool = False,
 ) -> BreakingPoint:
     """Escalation over interactive episodes (default ray: plan depth 4 -> 16
     with value passing 0 -> 1). Episodes cost several calls each, so the
@@ -212,7 +215,7 @@ def run_interactive_breaking_point_campaign(
     ev = InteractiveEvaluator(client, model, store, run_id, cost_cap, max_tokens=max_tokens,
                               cancel_event=cancel_event, protocol=protocol)
     bp = find_breaking_point(ev, ray if ray is not None else default_interactive_ray(),
-                             budget=budget, k_trials=k_trials, parallelism=parallelism)
+                             budget=budget, k_trials=k_trials, parallelism=parallelism, early_stop=early_stop)
     note = f"spent=${ev.spent_usd:.4f}" + (";cost_cap_hit" if ev.capped else "")
     bp.note = f"{bp.note}; {note}" if bp.note else note
     return bp
@@ -223,41 +226,8 @@ def run_interactive_breaking_point_campaign(
 # ---------------------------------------------------------------------------
 
 
-class ResampleGatedEvaluator:
-    """Wraps an `InteractiveEvaluator`: every FAIL is re-run `n` more times on
-    the byte-identical task (same config, same trial seed, temperature 0)
-    before escalation sees it. Reruns are stored under `<run_id>/verify`.
-
-    STABLE (at most half the reruns pass) -> the FAIL stands. NOISE (more
-    than half pass) -> the trial is scored as a pass for escalation, so a
-    sampling fluke can never become a frontier or enter decomposition. The
-    original FAIL record is kept (records are append-only); `noise` /
-    `stable` counts are on the wrapper, and every rerun is in the store.
-    Infrastructure outcomes (errors, cost cap) are not resampled."""
-
-    def __init__(self, inner: InteractiveEvaluator, n: int = 3, stable_threshold: float = 0.5) -> None:
-        self.inner, self.n, self.stable_threshold = inner, n, stable_threshold
-        self.stable = 0
-        self.noise = 0
-        self._lock = threading.Lock()
-
-    def __getattr__(self, name):  # spent_usd, capped, error_count, ... come from the inner evaluator
-        return getattr(self.inner, name)
-
-    def __call__(self, config: dict[str, float], trial_seed: int) -> bool:
-        errors_before = self.inner.error_count
-        if self.inner(config, trial_seed):
-            return True
-        if self.inner.error_count > errors_before or self.inner.capped:
-            return False  # ERROR (infra / cap), not a model failure: nothing to resample
-        passes = sum(bool(self.inner(config, trial_seed, run_suffix="/verify")) for _ in range(self.n))
-        noise = passes / self.n > self.stable_threshold
-        with self._lock:
-            if noise:
-                self.noise += 1
-            else:
-                self.stable += 1
-        return noise
+# `ResampleGatedEvaluator` moved to cartographer/schedule/gate.py (shared by every
+# province); re-exported here so existing imports keep working.
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +288,7 @@ def run_ticket_fidelity_campaign(
     resample_gate: bool = True,
     resample_n: int = 3,
     cancel_event: threading.Event | None = None,
+    early_stop: bool = False,
 ) -> BreakingPoint:
     """Escalation over a copy-fidelity ray with every FAIL resample-gated
     before it reaches bisect / decompose / confirm. Run id convention:
@@ -327,9 +298,12 @@ def run_ticket_fidelity_campaign(
     inner = InteractiveEvaluator(client, model, store, run_id, cost_cap, max_tokens=max_tokens,
                                  cancel_event=cancel_event, protocol=protocol)
     ev = ResampleGatedEvaluator(inner, n=resample_n) if resample_gate else inner
-    bp = find_breaking_point(ev, ray, budget=budget, k_trials=k_trials, parallelism=parallelism)
+    bp = find_breaking_point(ev, ray, budget=budget, k_trials=k_trials, parallelism=parallelism,
+                             early_stop=early_stop)
     note = f"spent=${inner.spent_usd:.4f}" + (";cost_cap_hit" if inner.capped else "")
     if resample_gate:
         note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
+        # the certificate's stability check needs the real gate counts
+        bp.certificate = certify(bp, gate_stable=ev.stable, gate_noise=ev.noise)
     bp.note = f"{bp.note}; {note}" if bp.note else note
     return bp

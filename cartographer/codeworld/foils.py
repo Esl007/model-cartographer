@@ -10,11 +10,18 @@ misconception it used -- the code analogue of the tool province's
 Six foils pair with the six trap toggles (`TRAP_FOILS`); two more
 (`all_branches`, `loop_once`) are control-flow-blind readers reported only
 as salience, never toggled.
+
+A program that declares a counterfactual DIALECT (`CodeDimParams.dialect`)
+is read relative to that dialect: truth is `program.semantics`, the plain
+Python reading is the `python_prior` foil (listed first, so it is the
+reported cause), and every other foil flips its one field on top of the
+dialect truth (`foils_for`). A foil whose field the dialect itself declares
+is dropped -- its reading would be the truth.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 
 from .interpret import FOIL_ERROR, TRUE, Semantics, answer_from_trace, run
 from .model import Program
@@ -43,12 +50,34 @@ TRAP_FOILS: dict[str, str] = {
 EXTRA_TRAP_FOILS: dict[str, str] = {"opaque_literal_on": "pattern_completion"}
 ALL_TRAP_FOILS: dict[str, str] = {**TRAP_FOILS, **EXTRA_TRAP_FOILS}
 FOIL_TRAPS = {v: k for k, v in ALL_TRAP_FOILS.items()}
+# The reader who ignores a declared dialect and reads the code as plain Python.
+PYTHON_PRIOR = "python_prior"
+
+
+def _delta(sem: Semantics) -> dict[str, str]:
+    return {f.name: getattr(sem, f.name) for f in fields(Semantics) if getattr(sem, f.name) != getattr(TRUE, f.name)}
+
+
+def foils_for(program: Program) -> dict[str, Semantics]:
+    """The foil readings of THIS program, relative to its declared truth.
+    Plain Python programs get exactly `FOILS`."""
+    truth = program.semantics
+    if truth == TRUE:
+        return FOILS
+    declared = _delta(truth)
+    out: dict[str, Semantics] = {PYTHON_PRIOR: TRUE}
+    for name, sem in FOILS.items():
+        d = _delta(sem)
+        if any(k in declared for k in d):
+            continue
+        out[name] = replace(truth, **d)
+    return out
 
 
 def foil_answers(program: Program) -> dict[str, object]:
     """Every foil's answer to the program's query (`FOIL_ERROR` if that
     reading crashes)."""
-    return {name: answer_from_trace(program, run(program, sem)) for name, sem in FOILS.items()}
+    return {name: answer_from_trace(program, run(program, sem)) for name, sem in foils_for(program).items()}
 
 
 @dataclass(frozen=True)
@@ -67,13 +96,13 @@ class CodeFoilProfile:
 
 
 def foil_divergence(program: Program) -> CodeFoilProfile:
-    true_trace = run(program, TRUE)
+    true_trace = run(program, program.semantics)
     truth = answer_from_trace(program, true_trace)
     n = max(len(program.body), 1)
     answers: dict[str, object] = {}
     diverging: list[str] = []
     score = 0.0
-    for name, sem in FOILS.items():
+    for name, sem in foils_for(program).items():
         tr = run(program, sem)
         a = answer_from_trace(program, tr)
         answers[name] = a

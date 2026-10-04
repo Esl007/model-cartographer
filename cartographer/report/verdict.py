@@ -32,6 +32,7 @@ from ..store.schema import ExperimentRecord, Verdict
 from ..store.store import ResultsStore
 from ..world.foils import foil_divergence
 from ..world.generate import generate
+from ..world.trivial import make_full_witness
 
 # Below this per-dim-region pass rate (but above an outright flip), a dim
 # region is called "diffuse weakness" rather than a sharp boundary.
@@ -76,11 +77,29 @@ def _is_reconstructable(record: ExperimentRecord) -> bool:
         return False
 
 
+def _is_full_witness_record(record: ExperimentRecord) -> bool:
+    """Whether the record's task was a full-witness (trivialized) belief
+    world, per the `full_witness` 0/1 key the evaluator stores in
+    `latent_params` (see `world/trivial.py`)."""
+    try:
+        return float(record.latent_params.get("full_witness", 0.0) or 0.0) >= 0.5
+    except (TypeError, ValueError):
+        return False
+
+
 def _regenerate(record: ExperimentRecord):
     query_kind = _query_kind_of(record)
     base = _default_base(query_kind)
-    params = _apply_config(base, record.latent_params)
+    # `full_witness` is a world transformation, not a DimParams field:
+    # strip it before `_apply_config`, then re-apply it to the generated
+    # world. `make_full_witness` raises on an inapplicable world, so a
+    # record can never be silently re-scored against the un-trivialized
+    # world (every caller of `_regenerate` already catches exceptions).
+    latent = {k: v for k, v in record.latent_params.items() if k != "full_witness"}
+    params = _apply_config(base, latent)
     world = generate(params, record.task_seed)
+    if _is_full_witness_record(record):
+        world = make_full_witness(world, record.task_seed)
     name_map = build_name_map(world, record.rendering_seed)
     rendered = render(world, name_map, record.rendering_seed)
     profile = foil_divergence(world, name_map)
@@ -98,6 +117,18 @@ def classify_belief_failure(record: ExperimentRecord) -> str | None:
     except Exception:
         return None
     response_norm = _normalize(record.response_text or "")
+    # Full-witness worlds: the agent SAW the final move, so answering the
+    # pre-move location is the template-matching failure (Malek et al.
+    # 2025; SimpleToM). Checked first so it isn't shadowed by a coincident
+    # shortcut (e.g. most_frequent_location naming the same room). The foil
+    # is only present when the regenerated world is full-witness-shaped.
+    stale_surface = profile.foils.get("stale_belief")
+    if (
+        stale_surface is not None
+        and "stale_belief" in profile.trap_kinds
+        and _normalize(stale_surface) in response_norm
+    ):
+        return "stale_belief"
     for trap_kind in profile.trap_kinds:
         foil_surface = profile.foils.get(trap_kind)
         if foil_surface is None:
@@ -315,6 +346,14 @@ def _notable_failures(
                             "the model reported the object's TRUE final "
                             "location, not what the queried entity actually "
                             "believed -- it collapsed belief into reality"
+                        )
+                    elif trap == "stale_belief":
+                        why_wrong = (
+                            "the story showed the queried entity WATCHING the "
+                            "final move, but the model answered where the "
+                            "object was before it -- it matched the classic "
+                            "false-belief template instead of reading the "
+                            "observation"
                         )
                     elif trap is not None:
                         why_wrong = f"the model's answer matches the '{trap}' shortcut, not the verified belief"

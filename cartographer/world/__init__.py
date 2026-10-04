@@ -1,6 +1,6 @@
 """Phase 1: latent world generator — witnessed event logs with simulated ground truth."""
 
-from .model import Entity, Event, Filler, Location, Move, Obj, Query, Tell, Transfer, World
+from .model import Entity, Event, Filler, Location, Move, NoOp, Obj, Query, Tell, Transfer, World
 from .simulate import Answer, SimResult, answer, simulate, validate
 from .generate import DimParams, generate
 from .measure import measure
@@ -10,6 +10,8 @@ from .mutate import (
     add_coref_pressure,
     add_distractors,
     add_filler,
+    add_noop_distractors,
+    add_relational_time,
     extend_chain,
     scramble_narration,
 )
@@ -22,6 +24,7 @@ __all__ = [
     "Filler",
     "Location",
     "Move",
+    "NoOp",
     "Obj",
     "Query",
     "Tell",
@@ -40,6 +43,8 @@ __all__ = [
     "add_coref_pressure",
     "add_distractors",
     "add_filler",
+    "add_noop_distractors",
+    "add_relational_time",
     "extend_chain",
     "scramble_narration",
     "FoilProfile",

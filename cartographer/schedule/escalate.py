@@ -21,6 +21,13 @@ Determinism: every trial seed is ``seed_base + <monotonic trial counter>``
 assigned in a fixed order; decompose gets a fixed offset block still below
 the 10_000 search-seed ceiling; confirmation gets its own >= 10_000 block.
 Two runs with identical inputs produce identical results.
+
+Opt-in extras (all off by default; the default path is unchanged):
+``early_stop=True`` stops each ramp/bisect probe once its classification is
+decided (see `find_breaking_point`); every result carries a
+`ReproducibilityCertificate` (`cartographer.schedule.certificate`); and
+`scout_rays` spends a few trials per candidate ray to rank where a full
+escalation budget should go.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ from cartographer.confirm import ConfirmationResult, confirm_hypothesis
 from cartographer.decompose import decompose
 from cartographer.decompose.hypothesis import FailureHypothesis
 
+from .certificate import ReproducibilityCertificate, certify
 from .estimate import boundary_ci, fit_logistic
 
 Evaluator = Callable[[dict[str, float], int], bool]
@@ -106,6 +114,13 @@ class BreakingPoint:
     inferential estimate like `t_star` -- treat it as "difficulty where
     this model started visibly slipping," and widen k_trials before
     leaning on it hard.
+
+    `probe_sizes` runs parallel to `pass_curve`: the number of trials each
+    probe actually ran. It is k_trials everywhere unless `early_stop` cut a
+    probe short once its classification was decided, in which case that
+    probe's rate is over the trials run. `certificate` is the
+    `ReproducibilityCertificate` that `find_breaking_point` attaches (gate
+    counts 0 -- re-`certify` with real gate counts if a resample gate ran).
     """
 
     found: bool
@@ -121,9 +136,11 @@ class BreakingPoint:
     config_at_degradation: dict[str, float] = field(default_factory=dict)
     baseline_rate: float | None = None
     note: str = ""
+    probe_sizes: list[int] = field(default_factory=list)
+    certificate: ReproducibilityCertificate | None = None
 
     def to_json_dict(self) -> dict:
-        return {
+        d = {
             "found": self.found,
             "t_star": self.t_star,
             "t_ci": list(self.t_ci) if self.t_ci is not None else None,
@@ -137,12 +154,52 @@ class BreakingPoint:
             "config_at_degradation": dict(self.config_at_degradation),
             "baseline_rate": self.baseline_rate,
             "note": self.note,
+            "probe_sizes": list(self.probe_sizes),
         }
+        if self.certificate is not None:
+            d["certificate"] = self.certificate.to_json_dict()
+        return d
+
+
+# A probe-classification cut: ("ge", c) for `rate >= c`, ("le", c) for
+# `rate <= c` -- exactly the comparisons find_breaking_point makes on a rate.
+Cut = tuple[str, float]
+
+
+def _bucket_decided(passes: int, n_run: int, k: int, cuts: list[Cut]) -> bool:
+    """True when the k-trial probe's class against every cut is already fixed
+    after `n_run` trials with `passes` passes, whatever the k - n_run unrun
+    trials would return.
+
+    The full-probe rate can still land anywhere in [passes/k,
+    (passes + k - n_run)/k]; each cut is a half-line, so the class is decided
+    iff both ends compare the same. The early-stopped rate passes/n_run lies
+    inside that interval too (passes/k <= passes/n <= (passes+k-n)/k, and
+    float division is monotone), so the rate reported over the trials run
+    lands in the same class the full probe would have.
+    """
+    if n_run <= 0:
+        return False
+    lo = passes / k
+    hi = (passes + k - n_run) / k
+    for op, c in cuts:
+        if op == "ge":
+            if (lo >= c) != (hi >= c):
+                return False
+        elif (lo <= c) != (hi <= c):
+            return False
+    return True
 
 
 class _RayProbe:
     """Bookkeeping for ramp/bisect probes: budget, monotonic seeds, and the
     accumulated (t, outcome) trial points the logistic fit runs over.
+
+    Seeds come from `seed_cursor`, which advances by the FULL k of every
+    probe; `spent` advances by the trials actually run. Without early stop
+    the two are always equal (so seeds are seed_base + spent, as before);
+    with it, trial j of probe i keeps the seed it would have had in a full
+    run -- an early-stopped probe's trials are a prefix of the full probe's.
     """
 
     def __init__(
@@ -158,9 +215,11 @@ class _RayProbe:
         self.budget = budget
         self.spent = 0
         self.seed_base = seed_base
+        self.seed_cursor = 0
         self.parallelism = max(1, parallelism)
         self.points: list[tuple[float, bool]] = []
         self.pass_curve: list[tuple[float, float]] = []
+        self.probe_sizes: list[int] = []
 
     def can(self, k: int) -> bool:
         return self.spent + k <= self.budget
@@ -174,38 +233,71 @@ class _RayProbe:
         stopped = getattr(self.evaluator, "capped", False) or getattr(self.evaluator, "cancelled", False)
         return bool(stopped) and getattr(self.evaluator, "error_count", 0) > errors_before
 
-    def discard_last(self, k: int) -> None:
-        del self.points[-k:]
+    def discard_last(self, k: int | None = None) -> None:
+        """Drop the last probe's points and curve entry. `k` defaults to the
+        number of trials that probe actually ran."""
+        if k is None:
+            k = self.probe_sizes[-1] if self.probe_sizes else 0
+        if k:
+            del self.points[-k:]
         if self.pass_curve:
             self.pass_curve.pop()
+        if self.probe_sizes:
+            self.probe_sizes.pop()
 
-    def probe(self, t: float, k: int) -> float:
+    def _run(self, config: dict[str, float], seeds: list[int]) -> list[bool]:
+        if self.parallelism == 1 or len(seeds) <= 1:
+            return [self.evaluator(config, seed) for seed in seeds]
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(self.parallelism, len(seeds))) as pool:
+            return list(pool.map(lambda s: self.evaluator(config, s), seeds))
+
+    def probe(self, t: float, k: int, cuts: list[Cut] | None = None) -> float:
         """Run k trials at config_at(t); records every (t, outcome) point and
         appends (t, pass_rate) to the pass curve. Caller must check `can(k)`.
 
         The k trials of one probe are independent (same config, distinct
         deterministic seeds), so with `parallelism > 1` they run concurrently
         on a thread pool. Seeds are assigned up front from the same
-        seed_base+spent counter the sequential path uses, so the trial set is
+        seed_base+counter the sequential path uses, so the trial set is
         identical at any parallelism; `points` keeps seed order so the
         logistic fit and pass rate are unaffected by completion order.
+
+        `cuts` (early stop): issue the pre-assigned seeds in waves of
+        `parallelism` and stop once `_bucket_decided` says no remaining
+        outcome can change the probe's class against the cuts. The rate is
+        then over the trials run (a whole wave counts once it has run, so
+        at parallelism p up to p-1 trials past the decision point are kept);
+        the class it falls in is the one the full probe would have had.
         """
         config = self.ray.config_at(t)
-        seeds = [self.seed_base + self.spent + i for i in range(k)]
-        self.spent += k
-        if self.parallelism == 1 or k <= 1:
-            outcomes = [self.evaluator(config, seed) for seed in seeds]
+        seeds = [self.seed_base + self.seed_cursor + i for i in range(k)]
+        self.seed_cursor += k
+        if cuts is None:
+            self.spent += k
+            outcomes = self._run(config, seeds)
         else:
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(max_workers=min(self.parallelism, k)) as pool:
-                outcomes = list(pool.map(lambda s: self.evaluator(config, s), seeds))
+            outcomes = []
+            passes = 0
+            i = 0
+            while i < k:
+                wave = seeds[i : i + self.parallelism]
+                self.spent += len(wave)
+                got = self._run(config, wave)
+                outcomes.extend(got)
+                passes += sum(1 for ok in got if ok)
+                i += len(wave)
+                if _bucket_decided(passes, i, k, cuts):
+                    break
         passes = 0
         for ok in outcomes:
             self.points.append((t, ok))
             passes += ok
-        rate = passes / k if k else 0.0
+        n = len(outcomes)
+        rate = passes / n if n else 0.0
         self.pass_curve.append((t, rate))
+        self.probe_sizes.append(n)
         return rate
 
 
@@ -220,6 +312,7 @@ def find_breaking_point(
     t_step: float = 0.15,
     parallelism: int = 1,
     degradation_drop: float = 0.25,
+    early_stop: bool = False,
 ) -> BreakingPoint:
     """Ramp t from 0 to 1 along `ray`, bisect the first pass->fail frontier,
     fit a logistic t*, then decompose + confirm at the frontier.
@@ -244,8 +337,42 @@ def find_breaking_point(
     are thread-safe and the trial set is seed-deterministic at any worker
     count); the ramp/bisect STAGES stay sequential by nature -- each depends
     on the previous probe's rate. Default 1 preserves the old behavior.
+
+    EARLY STOP (`early_stop=True`, opt-in). A ramp or bisect probe stops
+    issuing trials once its bucket is fixed: no outcome of the remaining
+    trials could change whether its rate reaches `pass_threshold` or falls
+    to `fail_threshold` -- nor, so the search path cannot move, the other
+    cut that stage reads (the degradation cut `baseline - degradation_drop`
+    on the ramp while no onset is recorded yet; the 0.5 cut on bisect).
+    E.g. a k=7 bisect probe, thresholds .7/.3: 5 straight passes decide
+    "pass" (5/7 >= .7, >= .5, and it can no longer fall to .3), so the last
+    2 trials are never run.
+    Seeds stay pre-assigned (an early-stopped probe's trials are a prefix of
+    the full probe's), trials are issued in waves of `parallelism`, the
+    probe's rate is over the trials run (`probe_sizes` records how many),
+    and the logistic fit sees only run trials. Because every decision the
+    search makes is a class comparison, the probed t sequence, bracket,
+    `found` and `config_at_break` are the same as a full run's whenever the
+    budget is not the binding constraint (when it is, the saved trials buy
+    extra probes). The t=0 baseline always runs in full: its rate is the
+    reference value degradation is measured against, not just a class.
+    Saving (measured, ramp+bisect trials, parallelism 1): 10-22% per run on
+    the deterministic fakes of tests/test_escalate.py and
+    tests/test_degradation_onset.py, ~17% in aggregate. A probe deep in the
+    fail regime stops at 7 of 10 (5 of 7); deep in the pass regime at 8 of
+    10 (6 of 7) while the degradation cut is live, 7 of 10 (5 of 7) after
+    it is recorded or on bisect; a mixed
+    probe near the frontier saves little. At parallelism p a decision
+    mid-wave keeps the whole wave, so the saving shrinks as p grows. See
+    tests/test_escalate_frontier.py.
+    `t_star`/`t_ci`/`ceiling_pass_rate` can shift slightly (fewer, and
+    differently weighted, points); they are estimates, not classes.
+
+    Every return path attaches `certificate` (`certify(bp)` with gate
+    counts 0 and no step count).
     """
     rp = _RayProbe(evaluator, ray, budget, seed_base, parallelism=parallelism)
+    base_cuts: list[Cut] = [("ge", pass_threshold), ("le", fail_threshold)]
 
     # Degradation tracking (see BreakingPoint's docstring): recorded on every
     # exit path, including the found=False ones -- a model that never
@@ -258,9 +385,14 @@ def find_breaking_point(
         kw.setdefault("degradation_onset", onset_t)
         kw.setdefault("config_at_degradation", dict(onset_cfg))
         kw.setdefault("baseline_rate", baseline_seen)
-        return BreakingPoint(
-            pass_curve=list(rp.pass_curve), budget_spent=rp.spent, **kw
+        bp = BreakingPoint(
+            pass_curve=list(rp.pass_curve),
+            budget_spent=rp.spent,
+            probe_sizes=list(rp.probe_sizes),
+            **kw,
         )
+        bp.certificate = certify(bp)
+        return bp
 
     # --- Stage 1: RAMP -----------------------------------------------------
     if not rp.can(k_trials):
@@ -294,9 +426,14 @@ def find_breaking_point(
                 note=f"budget exhausted during ramp before t={t:.2f}",
             )
         errors_before = getattr(evaluator, "error_count", 0)
-        rate = rp.probe(t, k_trials)
+        ramp_cuts: list[Cut] | None = None
+        if early_stop:
+            ramp_cuts = list(base_cuts)
+            if onset_t is None:
+                ramp_cuts.append(("le", base_rate - degradation_drop))
+        rate = rp.probe(t, k_trials, cuts=ramp_cuts)
         if rp.probe_was_cut_short(errors_before):
-            rp.discard_last(k_trials)
+            rp.discard_last()
             return result(
                 found=False,
                 note=(
@@ -326,9 +463,10 @@ def find_breaking_point(
     while (t_hi - t_lo) > _BISECT_WIDTH and rp.can(k_trials):
         mid = (t_lo + t_hi) / 2.0
         errors_before = getattr(evaluator, "error_count", 0)
-        rate = rp.probe(mid, k_trials)
+        bisect_cuts = base_cuts + [("ge", 0.5)] if early_stop else None
+        rate = rp.probe(mid, k_trials, cuts=bisect_cuts)
         if rp.probe_was_cut_short(errors_before):
-            rp.discard_last(k_trials)
+            rp.discard_last()
             break
         if rate >= 0.5:
             t_lo = mid
@@ -388,7 +526,7 @@ def find_breaking_point(
         else:
             notes.append("confirmation skipped: insufficient remaining budget")
 
-    return BreakingPoint(
+    bp = BreakingPoint(
         found=True,
         t_star=t_star,
         t_ci=(ci_lo, ci_hi),
@@ -402,4 +540,79 @@ def find_breaking_point(
         config_at_degradation=dict(onset_cfg),
         baseline_rate=baseline_seen,
         note="; ".join(notes) if notes else f"frontier bracket ({t_lo:.4f}, {t_hi:.4f})",
+        probe_sizes=list(rp.probe_sizes),
     )
+    bp.certificate = certify(bp)
+    return bp
+
+
+# ---------------------------------------------------------------------------
+# Scout: cheap triage across candidate rays
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ScoutResult:
+    """One ray's scouting outcome. `pass_rates` maps each probed t to its
+    pass rate; `signal` is the failure signal 1 - mean(pass_rates) (0.0 when
+    nothing could be probed). `note` is non-empty only when a probe was cut
+    short by a cost cap / cancellation and discarded."""
+
+    name: str
+    pass_rates: dict[float, float] = field(default_factory=dict)
+    signal: float = 0.0
+    note: str = ""
+
+    def to_json_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "pass_rates": [[t, r] for t, r in self.pass_rates.items()],
+            "signal": self.signal,
+            "note": self.note,
+        }
+
+
+def scout_rays(
+    evaluator: Evaluator,
+    rays: dict[str, EscalationRay],
+    k: int = 3,
+    t_points: tuple[float, ...] = (0.5, 1.0),
+    seed_base: int = 0,
+    parallelism: int = 1,
+) -> list[ScoutResult]:
+    """Probe each named ray at `t_points` with `k` trials each and rank the
+    rays by failure signal -- lowest mean pass rate first, ties broken by the
+    earliest t with any failure, then by name. Costs len(t_points) * k
+    trials per ray (2k by default), so a campaign can decide where a full
+    `find_breaking_point` budget goes before spending it.
+
+    Seed discipline matches `find_breaking_point`: each ray gets its own
+    probe counter starting at `seed_base`, seeds assigned in t_points order
+    (seed_base + 0..k-1 for the first t, + k..2k-1 for the second, ...), so
+    a ray's result does not depend on which other rays are scouted with it
+    and is identical at any `parallelism`. A probe cut short by a cost cap
+    is discarded (never read as failures) and scouting of that ray stops.
+    """
+    results: list[ScoutResult] = []
+    for name in sorted(rays):
+        ray = rays[name]
+        rp = _RayProbe(evaluator, ray, len(t_points) * k, seed_base, parallelism=parallelism)
+        rates: dict[float, float] = {}
+        note = ""
+        for t in t_points:
+            errors_before = getattr(evaluator, "error_count", 0)
+            rate = rp.probe(float(t), k)
+            if rp.probe_was_cut_short(errors_before):
+                rp.discard_last()
+                note = f"cost cap or cancellation hit at t={t:g}; probe discarded"
+                break
+            rates[float(t)] = rate
+        signal = 1.0 - sum(rates.values()) / len(rates) if rates else 0.0
+        results.append(ScoutResult(name=name, pass_rates=rates, signal=signal, note=note))
+
+    def first_failure(r: ScoutResult) -> float:
+        fails = [t for t, rate in r.pass_rates.items() if rate < 1.0]
+        return min(fails) if fails else float("inf")
+
+    results.sort(key=lambda r: (-r.signal, first_failure(r), r.name))
+    return results

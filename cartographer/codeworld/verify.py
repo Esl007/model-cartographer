@@ -7,7 +7,8 @@ FAILURE SIGNATURE -- which shallow reading the model used:
     target's look-alike sibling (checked first; the binding analogue of the
     tool province's `unknown_tool`);
   * `foil:<name>[,<name>...]` -- the answer equals one or more foil readings
-    (`value_semantics`, `early_binding`, ...);
+    (`value_semantics`, `early_binding`, ...; `python_prior` first when the
+    program declares a dialect and the answer is plain Python's);
   * `wrong_value` -- neither;
   * `malformed_answer` / `empty_answer` -- no parseable literal.
 
@@ -22,8 +23,8 @@ import re
 from dataclasses import dataclass, field
 
 from ..store.schema import Verdict
-from .foils import FOILS
-from .interpret import FOIL_ERROR, TRUE, answer_from_trace, run
+from .foils import foils_for
+from .interpret import FOIL_ERROR, answer_from_trace, run
 from .model import Program
 from .render import RenderedProgram
 
@@ -90,7 +91,7 @@ class TraceVerification:
 
 
 def verify_answer(text: str | None, program: Program, rendered: RenderedProgram) -> TraceVerification:
-    tr = run(program, TRUE)
+    tr = run(program, program.semantics)
     truth = answer_from_trace(program, tr)
     if not text or not text.strip():
         return TraceVerification(Verdict.FAIL, "empty_answer", truth=truth)
@@ -100,7 +101,7 @@ def verify_answer(text: str | None, program: Program, rendered: RenderedProgram)
     if parsed == truth and type(parsed) is type(truth):
         return TraceVerification(Verdict.PASS, "correct", parsed=parsed, truth=truth, normalised_tuple=was_tuple)
     foil_matches = tuple(
-        name for name, sem in FOILS.items()
+        name for name, sem in foils_for(program).items()
         if (a := answer_from_trace(program, run(program, sem))) is not FOIL_ERROR and a == parsed
         and type(a) is type(parsed)
     )
