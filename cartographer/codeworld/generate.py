@@ -1041,3 +1041,75 @@ def generate(params: CodeDimParams, seed: int, query_kind: str = "final_value") 
 
 
 __all__ = ["GenerationFailed", "generate", "validate", "without_distractors", "TRAP_KEYS"]
+
+
+# ---------------------------------------------------------------------------
+# Province V (docs/province-v-spec.md §4.1): function form. Appended; nothing
+# above depends on it.
+# ---------------------------------------------------------------------------
+
+_PARAM_KINDS = ("int", "list", "str")
+
+
+def to_function_form(program: Program, seed: int, n_params: int) -> Program:
+    """`program` as `def solve(<params>): ...; return <target>`.
+
+    1..3 of the program's leading literal initial assignments, of DISTINCT
+    kinds (int / list / str; which kinds and in what order is drawn from
+    `seed`), become the parameters; every other top-level statement moves
+    into the body in order (helper defs stay top-level, above `solve`, so
+    nesting stays <= 1); the body ends with `return <query target>`. Called
+    with the original initial values, `solve` returns the original answer
+    (helpers are pure, so hoisting them is answer-preserving). Raises
+    `GenerationFailed` if the program has no usable initial assignment or a
+    helper reads a name other than its own."""
+    if program.query.kind != "final_value" or program.query.target is None:
+        raise GenerationFailed("function form needs a final_value query")
+    if not 1 <= n_params <= 3:
+        raise GenerationFailed("n_params must be in 1..3")
+    kinds = {v.id: v.kind for v in program.variables}
+    roles = {v.id: v.role for v in program.variables}
+    inits = []
+    for s in program.body:  # the leading run of literal initial assignments
+        if isinstance(s, Assign) and isinstance(s.value, (Const, ListLit)) and s.target not in {
+                i.target for i in inits}:
+            inits.append(s)
+            continue
+        break
+    by_kind: dict[str, list] = {}
+    for s in inits:
+        if kinds.get(s.target) in _PARAM_KINDS and roles.get(s.target) in ("target", "live"):
+            by_kind.setdefault(kinds[s.target], []).append(s)
+    if not by_kind:
+        raise GenerationFailed("no initial assignment can become a parameter")
+    rng = _Rng("codeworld-fnform", seed)
+    rot = rng.randint(0, len(by_kind) - 1)
+    order = sorted(by_kind)[rot:] + sorted(by_kind)[:rot]
+    chosen = []
+    for k in order[:n_params]:
+        chosen.append(rng.choice(by_kind[k]))
+    chosen.sort(key=lambda s: s.sid)  # parameters in source order of their initial assignments
+    chosen_sids = {s.sid for s in chosen}
+    helpers, body = [], []
+    for s in program.body:
+        if s.sid in chosen_sids:
+            continue
+        if isinstance(s, FuncDef):
+            allowed = set(s.params) | {x.target for x in iter_stmts(s.body) if isinstance(x, (Assign, AugAssign))}
+            free = set()
+            for x in s.body:
+                free |= _names_in(x)
+            if free - allowed:
+                raise GenerationFailed("a helper reads an outer name")
+            helpers.append(s)
+        else:
+            body.append(s)
+    top = max(x.sid for x in iter_stmts(program.body))
+    body.append(Return(top + 1, Name(program.query.target)))
+    solve = FuncDef(top + 2, "solve", tuple(s.target for s in chosen), (), tuple(body))
+    return replace(program, body=tuple(helpers) + (solve,), entry="solve",
+                   param_kinds=tuple(kinds[s.target] for s in chosen), distractor_ids=frozenset(),
+                   comments=())
+
+
+__all__ += ["to_function_form"]

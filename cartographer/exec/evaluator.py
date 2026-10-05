@@ -2325,6 +2325,300 @@ def run_code_breaking_point_campaign(
 
 
 # ---------------------------------------------------------------------------
+# CODE REPAIR / WRITE (Province V, docs/province-v-spec.md): the model fixes a
+# generated function with one injected bug (V-a / V-b) or writes one from a
+# spec (V-c). Submissions are parsed into our AST (never executed as Python)
+# and run by our interpreter on hidden inputs. Emits kind=code_repair /
+# kind=code_write.
+# ---------------------------------------------------------------------------
+
+_FIX_INT_KEYS = {"n_statements", "n_bugs", "bug_distance", "hidden_inputs", "edge_cases", "spec_examples",
+                 "n_params"}
+_FIX_FLOAT_KEYS = {"bug_mix", "identifier_confusability"}
+_FIX_BOOL_KEYS = {"misleading_comment"}
+_FIX_KNOWN_KEYS = _FIX_INT_KEYS | _FIX_FLOAT_KEYS | _FIX_BOOL_KEYS
+_FIX_LIMITS = {"n_statements": (8, 25), "n_bugs": (1, 3), "bug_distance": (1, 8), "hidden_inputs": (0, 8),
+               "edge_cases": (0, 3), "spec_examples": (1, 3), "n_params": (1, 3), "bug_mix": (0.0, 1.0),
+               "identifier_confusability": (0.0, 1.0)}
+
+
+def _apply_fix_config(base, config: dict[str, float]):
+    overrides: dict = {}
+    for key, v in config.items():
+        if key in _FIX_BOOL_KEYS:
+            overrides[key] = bool(v >= 0.5)
+        elif key in _FIX_LIMITS:
+            lo, hi = _FIX_LIMITS[key]
+            v = min(max(float(v), lo), hi)
+            overrides[key] = int(round(v)) if key in _FIX_INT_KEYS else float(v)
+    return replace(base, **overrides)
+
+
+def _fix_latent(params) -> dict[str, float]:
+    # bug_distance None (any site) is recorded as 0
+    return {k: float(getattr(params, k) or 0) for k in sorted(_FIX_KNOWN_KEYS)}
+
+
+class _CodeFixBase:
+    kind = "code_fix"
+
+    def __init__(self, client: Client, model: str, store: ResultsStore, run_id: str, cost_cap_usd: float,
+                 base=None, max_tokens: int | None = None, max_tokens_retry: int | None = None,
+                 cancel_event: threading.Event | None = None, adversarial: bool = False) -> None:
+        from ..codefix.tasks import CodeFixParams
+
+        self.client, self.model, self.store, self.run_id = client, model, store, run_id
+        self.cost_cap_usd = cost_cap_usd
+        self.base = base if base is not None else CodeFixParams(n_statements=18)
+        self.adversarial = adversarial  # accepted for runner symmetry; tasks are not searched
+        default_max_tokens, default_max_tokens_retry = default_token_budget(model)
+        self.max_tokens = max_tokens if max_tokens is not None else default_max_tokens
+        self.max_tokens_retry = max_tokens_retry if max_tokens_retry is not None else default_max_tokens_retry
+        if self.max_tokens_retry <= self.max_tokens:
+            self.max_tokens_retry = self.max_tokens * 2
+        self.cancel_event = cancel_event
+        self.spent_usd = 0.0
+        self.call_count = 0
+        self.error_count = 0
+        self.capped = False
+        self.cancelled = False
+        self._lock = threading.Lock()
+
+    def _gate(self, params, seed: int, trial_seed: int) -> bool:
+        with self._lock:
+            reason = None
+            if self.spent_usd >= self.cost_cap_usd:
+                self.capped, reason = True, "cost_capped"
+            elif self.cancel_event is not None and self.cancel_event.is_set():
+                self.cancelled, reason = True, "cancelled"
+            if reason:
+                self._record_error(params, seed, trial_seed, reason)
+                return False
+        return True
+
+    def _chat(self, prompt: str):
+        result = self.client.chat(model=self.model, prompt=prompt, max_tokens=self.max_tokens,
+                                  max_tokens_retry=self.max_tokens_retry)
+        cost = cost_usd(self.model, result.tokens_in, result.tokens_out)
+        with self._lock:
+            self.call_count += 1
+            self.spent_usd += cost
+        if result.error is not None:
+            retry = self.client.chat(model=self.model, prompt=prompt, max_tokens=self.max_tokens,
+                                     max_tokens_retry=self.max_tokens_retry)
+            rc = cost_usd(self.model, retry.tokens_in, retry.tokens_out)
+            cost += rc
+            with self._lock:
+                self.call_count += 1
+                self.spent_usd += rc
+            result = retry
+        return result, cost
+
+    def _store(self, params, seed, trial_seed, prompt, result, cost, verdict, detail, realized, run_suffix):
+        record = ExperimentRecord(
+            run_id=self.run_id + run_suffix, model_name=self.model, latent_params=_fix_latent(params),
+            realized_dims=realized, render_mode=RenderMode.TEMPLATE, task_seed=seed, trial_seed=trial_seed,
+            rendering_seed=seed, prompt_text=prompt, response_text=result.text, verdict=verdict,
+            verifier_detail=detail, tokens_in=result.tokens_in, tokens_out=result.tokens_out, cost_usd=cost,
+            latency_ms=result.latency_ms, reasoning_text=result.reasoning, finish_reason=result.finish_reason,
+        )
+        with self._lock:
+            if verdict == Verdict.ERROR:
+                self.error_count += 1
+            self.store.append(record)
+            if self.spent_usd >= self.cost_cap_usd:
+                self.capped = True
+
+    @staticmethod
+    def _protocol(result):
+        """(Verdict.ERROR, detail) for an API error / truncated answer, else None."""
+        if result.error is not None:
+            return Verdict.ERROR, f";detail=api_error;error={result.error}"
+        if result.finish_reason == "length":
+            return Verdict.ERROR, ";detail=cap_hit;cap_hit=1" + (";retry_exhausted=1" if result.retried else "")
+        return None
+
+    def _record_error(self, params, seed: int, trial_seed: int, reason: str) -> None:
+        self.error_count += 1
+        self.store.append(ExperimentRecord(
+            run_id=self.run_id, model_name=self.model, latent_params=_fix_latent(params), realized_dims={},
+            render_mode=RenderMode.TEMPLATE, task_seed=seed, trial_seed=trial_seed, rendering_seed=seed,
+            prompt_text=None, response_text=None, verdict=Verdict.ERROR,
+            verifier_detail=f"kind={self.kind};campaign=1;{reason}=1", tokens_in=0, tokens_out=0,
+            cost_usd=0.0, latency_ms=0.0, reasoning_text=None, finish_reason=None,
+        ))
+
+
+def _trace_prompt(task) -> str:
+    args = ", ".join(repr(a) for a in task.visible_input)
+    return (f"Here is a short Python program.\n\n```python\n{task.buggy_source}```\n\n"
+            f"What does `solve({args})` return? Work through it carefully, then give the final answer on its "
+            "own last line as `ANSWER: <python literal>`.")
+
+
+class CodeRepairEvaluator(_CodeFixBase):
+    """V-a / V-b: repair a function with injected bug(s). `pair_trace`: first
+    ask the same model to TRACE the buggy function on the visible input
+    (kind=code_trace, run id `<run_id>/trace`); `traced_ok` joins the repair
+    record (the read-vs-write pairing)."""
+
+    kind = "code_repair"
+
+    def __init__(self, *args, pair_trace: bool = True, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.pair_trace = pair_trace
+
+    def __call__(self, config: dict[str, float], trial_seed: int, run_suffix: str = "") -> bool:
+        from ..codefix.tasks import make_repair_task, norm
+        from ..codefix.verify import render_repair_prompt, verify_submission
+        from ..codeworld.verify import parse_answer
+
+        params = _apply_fix_config(self.base, {k: v for k, v in config.items() if k in _FIX_KNOWN_KEYS})
+        seed = _task_seed(config, trial_seed)
+        if not self._gate(params, seed, trial_seed):
+            return False
+        try:
+            task = make_repair_task(params, seed)
+        except CodeGenerationFailed:
+            with self._lock:
+                self._record_error(params, seed, trial_seed, "generation_failed")
+            return False
+        realized = {"n_bugs": float(len(task.bug_sites)), "bug_distance": float(task.bug_distances[0]),
+                    "hidden_inputs": float(len(task.hidden_inputs))}
+        traced = None
+        if self.pair_trace:
+            tprompt = _trace_prompt(task)
+            tres, tcost = self._chat(tprompt)
+            prot = self._protocol(tres)
+            tdetail = "kind=code_trace;campaign=1;query=final_value;paired=code_repair"
+            if prot is not None:
+                tverdict, extra = prot
+            else:
+                try:
+                    parsed_ok, val, _ = parse_answer(tres.text)
+                    ok = bool(parsed_ok) and norm(val) == norm(task.visible_wrong)
+                except Exception:
+                    ok = False
+                traced = ok
+                tverdict, extra = (Verdict.PASS if ok else Verdict.FAIL), f";detail={'pass' if ok else 'wrong_value'}"
+            self._store(params, seed, trial_seed, tprompt, tres, tcost, tverdict, tdetail + extra,
+                        dict(realized), "/trace" + run_suffix)
+            if traced is not None:
+                realized["traced_ok"] = float(traced)
+        prompt = render_repair_prompt(task)
+        result, cost = self._chat(prompt)
+        detail = f"kind=code_repair;campaign=1;bug_kinds={'+'.join(task.bug_kinds)}"
+        prot = self._protocol(result)
+        if prot is not None:
+            verdict, extra = prot
+            detail += extra
+        else:
+            fv = verify_submission(result.text, task)
+            verdict = fv.verdict
+            detail += f";detail={fv.detail}"
+            realized["diff_lines"] = float(fv.extra.get("diff_lines", 0))
+        if traced is not None:
+            detail += f";traced_ok={int(traced)}"
+        detail += (f";bug_distance={task.bug_distances[0]};hidden={len(task.hidden_inputs)}"
+                   f";edge_cases={params.edge_cases}")
+        self._store(params, seed, trial_seed, prompt, result, cost, verdict, detail, realized, run_suffix)
+        return verdict == Verdict.PASS
+
+
+class CodeWriteEvaluator(_CodeFixBase):
+    """V-c: write `solve` from a spec sentence plus examples."""
+
+    kind = "code_write"
+
+    def __call__(self, config: dict[str, float], trial_seed: int, run_suffix: str = "") -> bool:
+        from ..codefix.tasks import make_write_task
+        from ..codefix.verify import render_write_prompt, verify_write
+
+        params = _apply_fix_config(self.base, {k: v for k, v in config.items() if k in _FIX_KNOWN_KEYS})
+        seed = _task_seed(config, trial_seed)
+        if not self._gate(params, seed, trial_seed):
+            return False
+        try:
+            task = make_write_task(params, seed)
+        except CodeGenerationFailed:
+            with self._lock:
+                self._record_error(params, seed, trial_seed, "generation_failed")
+            return False
+        prompt = render_write_prompt(task)
+        result, cost = self._chat(prompt)
+        detail = "kind=code_write;campaign=1"
+        prot = self._protocol(result)
+        if prot is not None:
+            verdict, extra = prot
+            detail += extra
+        else:
+            fv = verify_write(result.text, task)
+            verdict = fv.verdict
+            detail += f";detail={fv.detail}"
+        detail += f";examples={len(task.examples)};edge_cases={params.edge_cases};hidden={len(task.hidden_inputs)}"
+        realized = {"spec_examples": float(len(task.examples)), "edge_cases": float(params.edge_cases)}
+        self._store(params, seed, trial_seed, prompt, result, cost, verdict, detail, realized, run_suffix)
+        return verdict == Verdict.PASS
+
+
+def default_repair_ray() -> EscalationRay:
+    """V-a -> V-b: 0 -> 8 hidden inputs together with bug-symptom distance
+    1 -> 8, program size pinned at 18."""
+    return EscalationRay(dims=(RayDim("n_statements", 18, 18, True), RayDim("hidden_inputs", 0, 8, True),
+                               RayDim("bug_distance", 1, 8, True)))
+
+
+def default_repair_kind_ray() -> EscalationRay:
+    """1 -> 3 stacked bugs, shifting from syntactic to semantic kinds."""
+    return EscalationRay(dims=(RayDim("n_statements", 18, 18, True), RayDim("n_bugs", 1, 3, True),
+                               RayDim("bug_mix", 0.0, 1.0, False), RayDim("hidden_inputs", 4, 4, True)))
+
+
+def default_write_ray() -> EscalationRay:
+    """V-c: 0 -> 3 edge cases in the hidden checks while the examples shrink 3 -> 1."""
+    return EscalationRay(dims=(RayDim("n_statements", 12, 12, True), RayDim("edge_cases", 0, 3, True),
+                               RayDim("spec_examples", 3, 1, True)))
+
+
+def _run_fix_campaign(evaluator, ray, budget, k_trials, parallelism, early_stop, resample_gate, resample_n):
+    ev = ResampleGatedEvaluator(evaluator, n=resample_n) if resample_gate else evaluator
+    bp = find_breaking_point(ev, ray, budget=budget, k_trials=k_trials, parallelism=parallelism,
+                             early_stop=early_stop)
+    note = f"spent=${evaluator.spent_usd:.4f}" + (";cost_cap_hit" if evaluator.capped else "")
+    if resample_gate:
+        note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
+        bp.certificate = certify(bp, gate_stable=ev.stable, gate_noise=ev.noise)
+    bp.note = f"{bp.note}; {note}" if bp.note else note
+    return bp
+
+
+def run_code_repair_campaign(client: Client, store: ResultsStore, run_id: str, model: str,
+                             ray: EscalationRay | None = None, budget: int = 200, cost_cap: float = 0.5,
+                             k_trials: int = 7, parallelism: int = 4, max_tokens: int | None = None,
+                             cancel_event: threading.Event | None = None, verify: str = "auto",
+                             early_stop: bool = False, resample_gate: bool = False, resample_n: int = 3,
+                             adversarial: bool = False, pair_trace: bool = True) -> BreakingPoint:
+    """Escalation over repair tasks; default ray `default_repair_ray`."""
+    evaluator = CodeRepairEvaluator(client, model, store, run_id, cost_cap, max_tokens=max_tokens,
+                                    cancel_event=cancel_event, adversarial=adversarial, pair_trace=pair_trace)
+    return _run_fix_campaign(evaluator, ray if ray is not None else default_repair_ray(), budget, k_trials,
+                             parallelism, early_stop, resample_gate, resample_n)
+
+
+def run_code_write_campaign(client: Client, store: ResultsStore, run_id: str, model: str,
+                            ray: EscalationRay | None = None, budget: int = 200, cost_cap: float = 0.5,
+                            k_trials: int = 7, parallelism: int = 4, max_tokens: int | None = None,
+                            cancel_event: threading.Event | None = None, verify: str = "auto",
+                            early_stop: bool = False, resample_gate: bool = False, resample_n: int = 3,
+                            adversarial: bool = False) -> BreakingPoint:
+    """Escalation over write-from-spec tasks; default ray `default_write_ray`."""
+    evaluator = CodeWriteEvaluator(client, model, store, run_id, cost_cap, max_tokens=max_tokens,
+                                   cancel_event=cancel_event, adversarial=adversarial)
+    return _run_fix_campaign(evaluator, ray if ray is not None else default_write_ray(), budget, k_trials,
+                             parallelism, early_stop, resample_gate, resample_n)
+
+
+# ---------------------------------------------------------------------------
 # full_map: the one-button profile -- chains every preset as stages under one
 # parent run, one shared cost budget.
 # ---------------------------------------------------------------------------

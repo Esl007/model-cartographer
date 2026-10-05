@@ -459,6 +459,18 @@ class Interpreter:
             return r.value
         return None
 
+    def call_function(self, name: str, args) -> object:
+        """Call the top-level def `name` with positional `args` (Province V
+        harness entry point). Raises InterpError if `name` is not a function,
+        on a wrong arity, on a runtime error, or past the step cap."""
+        fn = self.globals.get(name, _MISSING)
+        if not isinstance(fn, Closure):
+            raise InterpError(f"{name} is not a function")
+        try:
+            return self._call(fn, list(args))
+        except _Return:  # pragma: no cover - _call catches its own returns
+            raise InterpError("return outside function")
+
     # -- snapshots ------------------------------------------------------------
 
     def data_globals(self) -> dict:

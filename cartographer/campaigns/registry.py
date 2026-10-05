@@ -38,6 +38,7 @@ PROVINCES: dict[str, str] = {
     "II": "Tool planning (one-shot JSON plans)",
     "III": "Interactive execution (multi-turn tool calls)",
     "IV": "Code tracing",
+    "V": "Code repair and writing",
     "X": "Cross-cutting",
 }
 
@@ -99,6 +100,8 @@ _TEXT_TOOLS = ("Native tool calling by default; `--text-tools` switches to proto
 _ONE_SHOT = "One-shot prompt, JSON plan out; the verifier simulates the plan step by step."
 _NARRATIVE = "One-shot story + question; answers checked against the generator's ground truth."
 _CODE = "One-shot program + question; ground truth from the project's own interpreter."
+_CODEFIX = ("One-shot repair / write; the answer is parsed into the project's own AST (never run as Python) and "
+            "checked by its own interpreter on hidden inputs.")
 _TICKET = ("Interactive, text_fallback protocol by default; resample-gated (failures re-run before "
            "they count). Attribution ablations: scripts/run_ticket_fidelity.py --attribute.")
 
@@ -284,6 +287,31 @@ _SPECS: tuple[CampaignSpec, ...] = (
         "program length + 0 -> 4 declared deviations from Python (inclusive range, truncating %, copy on assign, fresh defaults)",
         "axis", E.run_code_breaking_point_campaign, "camp-code-dialect-{label}-{n:03d}",
         ray_factory=E.default_code_dialect_ray, protocol_note=_CODE,
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "V.repair", "V", "Code repair (one bug, shown example)",
+        "Given a short function with one injected bug, the wrong output it gives and the right one, can the model "
+        "fix it -- including when the fix is also checked on inputs it was not shown and the bug sits further from "
+        "the returned value?",
+        "0 -> 8 hidden checks x bug 1 -> 8 statements away from the return, size pinned at 18",
+        "axis", E.run_code_repair_campaign, "camp-code-repair-{label}-{n:03d}",
+        ray_factory=E.default_repair_ray, protocol_note=_CODEFIX,
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "V.repair_regressions", "V", "Code repair without regressions (stacked bugs)",
+        "When a function has one to three bugs, shifting from simple slips (wrong operator, off by one) to "
+        "behaviour bugs (shared lists, dropped updates), does the model fix the causes without breaking anything?",
+        "1 -> 3 bugs, syntactic -> semantic mix, 4 hidden checks, size pinned at 18",
+        "axis", E.run_code_repair_campaign, "camp-code-repair-kinds-{label}-{n:03d}",
+        ray_factory=E.default_repair_kind_ray, protocol_note=_CODEFIX,
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "V.write", "V", "Write a function from a description and examples",
+        "Given a plain-English description and a few examples, can the model write a function that also gets "
+        "unseen inputs and edge cases (empty list, zero, negative) right?",
+        "0 -> 3 edge cases in the hidden checks while the examples shrink 3 -> 1",
+        "axis", E.run_code_write_campaign, "camp-code-write-{label}-{n:03d}",
+        ray_factory=E.default_write_ray, protocol_note=_CODEFIX,
         default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
     CampaignSpec(
         "IV.chain_depth", "IV", "Dependency depth in code (same size)",

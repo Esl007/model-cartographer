@@ -60,6 +60,14 @@ launch.
 | `IV.stack` | When one list is shared under two names, extended, copied and passed to a function before the answer reads it (plus a branch inside a loop and a while loop), does the model track what really happens to it? | 0 -> 4 list behaviours stacked on one list (shared name + `+=`, `x = x + [..]`, slice copy, a function that changes its argument) + a branch in a loop + a while loop; size pinned at ~22 | axis | -- | -- |
 | `IV.gotcha` | When the program divides negative numbers and slices lists with computed end points, does the model follow Python's actual rules for rounding and for where a slice stops? | 0 -> 3 chained `//` `%` `*` on negative numbers + 0 -> 3 slices with computed or negative ends; size pinned at ~22 statements | axis | -- | -- |
 
+## Province V -- Code repair and writing
+
+| id | question | what is turned up | evidence | legacy alias | frontier rows fed |
+|---|---|---|---|---|---|
+| `V.repair` | Given a short function with one injected bug, the wrong output it gives and the right one, can the model fix it -- including when the fix is also checked on inputs it was not shown and the bug sits further from the returned value? | 0 -> 8 hidden checks x bug 1 -> 8 statements away from the return, size pinned at 18 | axis | -- | -- |
+| `V.repair_regressions` | When a function has one to three bugs, shifting from simple slips (wrong operator, off by one) to behaviour bugs (shared lists, dropped updates), does the model fix the causes without breaking anything? | 1 -> 3 bugs, syntactic -> semantic mix, 4 hidden checks, size pinned at 18 | axis | -- | -- |
+| `V.write` | Given a plain-English description and a few examples, can the model write a function that also gets unseen inputs and edge cases (empty list, zero, negative) right? | 0 -> 3 edge cases in the hidden checks while the examples shrink 3 -> 1 | axis | -- | -- |
+
 ## Province X -- Cross-cutting
 
 | id | question | what is turned up | evidence | legacy alias | frontier rows fed |

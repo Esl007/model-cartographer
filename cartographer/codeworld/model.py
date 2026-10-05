@@ -352,6 +352,10 @@ class Program:
     path_sids: tuple = ()  # sids of the chain_depth updates on the target's dependency path, in order
     # (sid, var id, asserted value, foil name, neutral) per commented line; neutral comments assert nothing
     comments: tuple = ()
+    # Province V (function form, docs/province-v-spec.md §4.1): the top-level def the harness calls
+    # (None = a plain top-level program) and the kinds (int/list/str) of its positional parameters.
+    entry: str | None = None
+    param_kinds: tuple = ()  # tuple[str, ...]
 
     @property
     def semantics(self):

@@ -92,7 +92,8 @@ INVALIDATED_RUNS: dict[str, str] = {
     ),
 }
 
-CAPABILITY_KINDS = ("state", "order", "belief", "adversarial_belief", "tool_plan", "interactive", "code_trace")
+CAPABILITY_KINDS = ("state", "order", "belief", "adversarial_belief", "tool_plan", "interactive", "code_trace", "code_repair",
+                    "code_write")
 # The measured difficulty dimensions `cartographer.world.measure.measure`
 # emits. A dim column reports the pass rate in that dim's HIGH region (top
 # tercile of values observed across the whole store, so the column means the
