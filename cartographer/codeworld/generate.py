@@ -43,7 +43,7 @@ import copy
 import hashlib
 from dataclasses import replace
 
-from .foils import ALL_TRAP_FOILS, PYTHON_PRIOR, foils_for
+from .foils import ALL_TRAP_FOILS, PYTHON_PRIOR, ROUND2_FOILS, dial_foils, foils_for
 from .interpret import DIALECT_SEMANTICS, TRUE, Closure, InterpError, Interpreter, answer, answer_from_trace, run, \
     semantics_for
 from .model import (
@@ -75,6 +75,7 @@ from .model import (
     SetItem,
     Slice,
     VarInfo,
+    While,
     iter_stmts,
 )
 
@@ -153,6 +154,8 @@ class _Builder:
         self.helpers: list[tuple[str, int, int]] = []  # (fid, n_required, n_total)
         self.unfolded: set[str] = set()
         self.target: str = ""
+        self.chain_var: str | None = None  # chain_depth: the int carrying the dependency chain
+        self.path_sids: list[int] = []  # chain_depth: sids of the chain updates, in order
 
     # -- ids ---------------------------------------------------------------
 
@@ -586,6 +589,190 @@ class _Builder:
         ]
         return stmts, len(words) - 1
 
+    # -- round-2 mechanisms (docs/spec-code-hunt.md WP-G) ------------------------
+
+    def _live_ints(self) -> list[str]:
+        return [g for g in self.live("int") if g != self.target and isinstance(self.val(g), int)
+                and not isinstance(self.val(g), bool)]
+
+    def chain_step(self) -> tuple:
+        """One dependent update of the chain variable `c` (created, from a
+        live value, by the first step). Every update reads `c`, so after d
+        steps the answer depends on a chain of d updates; the chain is folded
+        into the target once, after the last step. `%`/`//` only ever see a
+        non-negative `c` (so `truncating_modulo` stays off)."""
+        init = []
+        c = self.chain_var
+        if c is None or c not in self.interp.globals:
+            c = self.add_var("int", "trap")
+            self.chain_var = c
+            gs = self._live_ints()
+            if gs and self.rng.chance(0.6):
+                g = self.rng.choice(gs)
+                init = [Assign(self.sid(), c, BinOp("+", Name(g), self.int_lit()))]
+                cur = self.val(g) + init[0].value.right.value
+            else:
+                init = [Assign(self.sid(), c, self.int_lit(2, 9))]
+                cur = init[0].value.value
+        else:
+            cur = self.val(c)
+        gs = [g for g in self._live_ints() if self.val(g) != 0]
+        options = ["addk", "addk"]
+        if gs:
+            options += ["addv", "mix"]
+        if abs(cur) < 3000:
+            options.append("lin")
+        if cur >= 2:
+            options.append("half")
+        k = self.rng.choice(options)
+        if k == "addk":
+            upd = AugAssign(self.sid(), c, self.rng.choice("+-"), self.int_lit(1, 9))
+        elif k == "addv":
+            upd = AugAssign(self.sid(), c, "+", Name(self.rng.choice(gs)))
+        elif k == "mix":
+            upd = Assign(self.sid(), c, BinOp("+", Name(c), BinOp("*", Name(self.rng.choice(gs)), Const(2))))
+        elif k == "lin":
+            upd = Assign(self.sid(), c, BinOp("-", BinOp("*", Name(c), Const(2)), self.int_lit(1, 9)))
+        else:
+            upd = Assign(self.sid(), c, BinOp("//", Name(c), Const(2)))
+        return init + [upd], len(init)
+
+    def trap_stack(self) -> tuple:
+        """`stack_depth` = k list-semantics steps stacked on ONE list `a`
+        whose final state is folded into the target: (1) `b = a; b += [x]`
+        (in-place: a sees x), (2) `b = b + [y]` (rebinds b: a does not see
+        y), (3) `c = a[:]; c.append(z)` (a copy: a does not see z), (4)
+        `def f(p): p.append(w)` called on a (the callee mutates a). Each step
+        has its own foil (foils.STACK_FOILS) and changes `len(a)`."""
+        k = self.p.stack_depth
+        a = self.add_var("list", "trap")
+        stmts = [Assign(self.sid(), a, ListLit(tuple(self.int_lit(0, 9) for _ in range(self.rng.randint(2, 3)))))]
+        b = self.add_var("list", "trap")
+        stmts += [Assign(self.sid(), b, Name(a)), AugAssign(self.sid(), b, "+", ListLit((self.int_lit(10, 19),)))]
+        if k >= 2:
+            stmts.append(Assign(self.sid(), b, BinOp("+", Name(b), ListLit((self.int_lit(20, 29),)))))
+        if k >= 3:
+            c = self.add_var("list", "trap")
+            stmts += [Assign(self.sid(), c, Slice(Name(a), None, None)),
+                      ExprStmt(self.sid(), MethodCall(c, "append", (self.int_lit(30, 39),)))]
+        if k >= 4:
+            f = self.add_var("func", "trap")
+            p = self.new_id("p")
+            stmts += [FuncDef(self.sid(), f, (p,), (), (
+                ExprStmt(self.sid(), MethodCall(p, "append", (self.int_lit(40, 49),))),
+                Return(self.sid(), Len(Name(p))),
+            )), ExprStmt(self.sid(), Call(f, (Name(a),)))]
+        stmts.append(self.fold_expr(BinOp("+", Len(Name(a)), Index(Name(a), Const(-1)))))
+        return stmts, 1
+
+    def trap_loop_branch(self) -> tuple:
+        """A data-dependent branch inside a loop over a list: some elements
+        take the if, some the else (threshold from a live value when one
+        splits the list, else a constant), so freezing the test after the
+        first pass (`predicate_frozen`) or running the body once
+        (`loop_once`) gives a different total."""
+        L = self.add_var("list", "trap")
+        vals = []
+        while len(vals) < self.rng.randint(4, 5):
+            v = self.rng.randint(0, 9)
+            if v not in vals:
+                vals.append(v)
+        lo, hi = min(vals), max(vals)
+        splits = [g for g in self._live_ints() if lo <= self.val(g) < hi]
+        thr = Name(self.rng.choice(splits)) if splits and self.rng.chance(0.6) else Const(self.rng.randint(lo, hi - 1))
+        acc = self.add_var("int", "trap")
+        x = self.new_id("x")
+        loop = For(self.sid(), x, Name(L), (If(self.sid(), Compare(">", Name(x), thr),
+                                               (AugAssign(self.sid(), acc, "+", Name(x)),),
+                                               (AugAssign(self.sid(), acc, "-", self.int_lit(1, 3)),)),))
+        stmts = [Assign(self.sid(), L, ListLit(tuple(Const(v) for v in vals))), Assign(self.sid(), acc, Const(0)),
+                 loop, self.fold_expr(Name(acc))]
+        return stmts, 2
+
+    def trap_while(self) -> tuple:
+        """`while t < limit: t += step; n += 1` with `t` starting from a live
+        value: the exit depends on computed state. 3..8 iterations under
+        truth (<= 40 is enforced by running it). A frozen test never turns
+        false (the reading hits the step cap: FOIL_ERROR); `loop_once`
+        counts one pass."""
+        t, n = self.add_var("int", "trap"), self.add_var("int", "trap")
+        gs = [g for g in self._live_ints() if abs(self.val(g)) <= 500]
+        if gs and self.rng.chance(0.7):
+            g = self.rng.choice(gs)
+            start, init = self.val(g), Assign(self.sid(), t, Name(g))
+        else:
+            start = self.rng.randint(0, 9)
+            init = Assign(self.sid(), t, Const(start))
+        step = self.rng.randint(2, 5)
+        m = self.rng.randint(3, 8)
+        limit = start + step * (m - 1) + self.rng.randint(1, step)
+        loop = While(self.sid(), Compare("<", Name(t), Const(limit)),
+                     (AugAssign(self.sid(), t, "+", Const(step)), AugAssign(self.sid(), n, "+", Const(1))))
+        fold = self.fold_expr(Name(n) if self.rng.chance(0.5) else BinOp("+", Name(n), Name(t)))
+        return [init, Assign(self.sid(), n, Const(0)), loop, fold], 2
+
+    def trap_sign_chain(self) -> tuple:
+        """`sign_chain` = k operations from `//`, `*`, `%` chained on a value
+        that is negative at each of them (a live value minus an offset), each
+        divisor chosen so it does not divide the value -- so floor and
+        truncating division disagree at every `//`/`%` step."""
+        k = self.p.sign_chain
+        d = self.add_var("int", "trap")
+        gs = [g for g in self._live_ints() if abs(self.val(g)) <= 500]
+        if gs and self.rng.chance(0.6):
+            g = self.rng.choice(gs)
+            off = self.val(g) + self.rng.randint(5, 30)
+            first = Assign(self.sid(), d, BinOp("-", Name(g), Const(off)))
+            cur = self.val(g) - off
+        else:
+            a = self.rng.randint(1, 9)
+            off = a + self.rng.randint(5, 30)
+            first = Assign(self.sid(), d, BinOp("-", Const(a), Const(off)))
+            cur = a - off
+        ops = {1: [self.rng.choice(("//", "%"))], 2: ["//", "%"], 3: ["//", "*", "%"]}[k]
+        stmts = [first]
+        for op in ops:
+            if op == "*":
+                m = self.rng.randint(2, 3)
+                stmts.append(Assign(self.sid(), d, BinOp("-", BinOp("*", Name(d), Const(m)), Const(1))))
+                cur = cur * m - 1
+                continue
+            m = self.rng.randint(3, 7)
+            while cur % m == 0:
+                m += 1
+            stmts.append(Assign(self.sid(), d, BinOp(op, Name(d), Const(m))))
+            cur = cur // m if op == "//" else cur % m
+        stmts.append(self.fold_expr(Name(d)))
+        return stmts, 1
+
+    def trap_index_math(self) -> tuple:
+        """`index_math` = k slices of one list with computed or negative end
+        bounds at off-by-one boundaries (`xs[1:len(xs) - 1]`, `xs[:-2]`,
+        `xs[i:i + 2]` with `i = len(xs) // 2`), each folded into the target
+        as `len(w) + w[-1]`; reading the end bound as inclusive changes both."""
+        k = self.p.index_math
+        L = self.add_var("list", "trap")
+        vals = []
+        while len(vals) < self.rng.randint(5, 6):
+            v = self.rng.randint(0, 9)
+            if v not in vals:
+                vals.append(v)
+        stmts = [Assign(self.sid(), L, ListLit(tuple(Const(v) for v in vals)))]
+        forms = ["inner", "negend", "window"][:k]
+        for form in forms:
+            w = self.add_var("list", "trap")
+            if form == "inner":
+                sl = Slice(Name(L), Const(1), BinOp("-", Len(Name(L)), Const(1)))
+            elif form == "negend":
+                sl = Slice(Name(L), None, Const(-2))
+            else:
+                i = self.add_var("int", "trap")
+                stmts.append(Assign(self.sid(), i, BinOp("//", Len(Name(L)), Const(2))))
+                sl = Slice(Name(L), Name(i), BinOp("+", Name(i), Const(2)))
+            stmts.append(Assign(self.sid(), w, sl))
+            stmts.append(self.fold_expr(BinOp("+", Len(Name(w)), Index(Name(w), Const(-1)))))
+        return stmts, 1
+
     # -- driver ----------------------------------------------------------------
 
     def build(self) -> Program:
@@ -617,6 +804,16 @@ class _Builder:
 
         traps = list(p.traps_on()) + (["opaque_literal_on"] if p.opaque_literal_on else [])
         traps += [f"dialect:{r}" for r in p.dialect]  # one load-bearing site per declared rule
+        traps += [k for k in ("stack_depth", "loop_branch", "while_on", "sign_chain", "index_math") if getattr(p, k)]
+        if p.chain_depth:  # chain steps interleaved evenly with every other block
+            blocks, traps = traps, []
+            n_all = len(blocks) + p.chain_depth
+            for i in range(n_all):
+                if blocks and (i * len(blocks)) // n_all != ((i + 1) * len(blocks)) // n_all:
+                    traps.append(blocks.pop(0))
+                else:
+                    traps.append("chain_depth")
+            traps += blocks
         budget = max(p.n_statements, self.n_nodes + 1)
         # trap blocks land at evenly spread fractions of the live budget
         start = self.n_nodes
@@ -629,6 +826,12 @@ class _Builder:
             "negative_modulo_on": self.trap_negative_modulo,
             "mutable_default_on": self.trap_mutable_default,
             "opaque_literal_on": self.trap_opaque_literal,
+            "chain_depth": self.chain_step,
+            "stack_depth": self.trap_stack,
+            "loop_branch": self.trap_loop_branch,
+            "while_on": self.trap_while,
+            "sign_chain": self.trap_sign_chain,
+            "index_math": self.trap_index_math,
         }
         builders.update({f"dialect:{r}": builders[DIALECT_TRAPS[r]] for r in p.dialect})
         stalls = 0
@@ -639,6 +842,8 @@ class _Builder:
                 for _ in range(8):
                     stmts, site = builders[trap]()
                     if self.try_emit(stmts, trap=trap, trap_index=site):
+                        if trap == "chain_depth":
+                            self.path_sids.append(stmts[site].sid)
                         break
                 else:
                     raise GenerationFailed(f"could not place {trap}")
@@ -650,6 +855,9 @@ class _Builder:
             stalls = 0 if ok else stalls + 1
             if stalls > 40:
                 raise GenerationFailed("generator stalled")
+        if self.chain_var is not None:  # the chain reaches the answer once, after its last step
+            if not any(self.try_emit([self.fold(self.chain_var)]) for _ in range(4)):
+                raise GenerationFailed("could not fold the chain")
         # every live variable feeds the answer at least once
         for v in sorted(self.unfolded):
             for _ in range(4):
@@ -664,7 +872,7 @@ class _Builder:
                         break
         if self.query_kind == "stdout":
             self.try_emit([Print(self.sid(), Name(self.target))])
-        return Program(
+        prog = Program(
             body=tuple(self.body),
             query=Query(self.query_kind, self.target if self.query_kind == "final_value" else None),
             params=p,
@@ -673,7 +881,12 @@ class _Builder:
             distractor_ids=frozenset(self.distractor_ids),
             trap_sites=tuple(self.trap_sites),
             locals_pool=tuple(self.locals_used),
+            path_sids=tuple(self.path_sids),
         )
+        k = p.misleading_comments or p.neutral_comments
+        if k:
+            prog = replace(prog, comments=_plan_comments(prog, k, neutral=bool(p.neutral_comments)))
+        return prog
 
     @staticmethod
     def _init_of(inits, vid):
@@ -705,6 +918,55 @@ def _names_in(node) -> set[str]:
     return out
 
 
+def _snapshots(program: Program, sem) -> list:
+    """Data globals after each top-level statement under `sem` (stops at a crash)."""
+    it = Interpreter(sem)
+    out = []
+    try:
+        for s in program.body:
+            it.exec_top(s)
+            out.append(copy.deepcopy(it.data_globals()))
+    except InterpError:
+        pass
+    return out
+
+
+def _plan_comments(program: Program, k: int, neutral: bool) -> tuple:
+    """Comments for k top-level, non-distractor lines that write a variable
+    which some foil reading holds at a DIFFERENT value right after that
+    line: the comment asserts the foil's value there (a plausible wrong
+    value). Lines that update the query target come first (latest first),
+    then other writes (latest first). Neutral control: the same lines
+    (neutral=True; the renderer writes a neutral comment of equal length)."""
+    t = program.query.target
+    if t is None:
+        raise GenerationFailed("comments need a final_value query")
+    truth = _snapshots(program, program.semantics)
+    foil_snaps = {name: _snapshots(program, sem) for name, sem in foils_for(program).items()}
+    sites = []
+    for j in range(len(program.body) - 1, -1, -1):
+        s = program.body[j]
+        if s.sid in program.distractor_ids:
+            continue
+        if isinstance(s, (Assign, AugAssign)):
+            w = s.target
+        elif isinstance(s, ExprStmt) and isinstance(s.value, MethodCall):
+            w = s.value.obj
+        else:
+            continue
+        sites.append((w != t, j, s.sid, w))
+    sites.sort(key=lambda x: (x[0], -x[1]))
+    out = []
+    for _, j, sid, w in sites:
+        for name, snaps in foil_snaps.items():
+            if j < len(snaps) and w in snaps[j] and snaps[j][w] != truth[j].get(w):
+                out.append((j, (sid, w, snaps[j][w], name, neutral)))
+                break
+        if len(out) == k:
+            return tuple(c for _, c in sorted(out))
+    raise GenerationFailed("no line with a plausible wrong value for a comment")
+
+
 def without_distractors(program: Program) -> Program:
     return replace(program, body=tuple(s for s in program.body if s.sid not in program.distractor_ids),
                    distractor_ids=frozenset())
@@ -730,14 +992,22 @@ def validate(program: Program) -> str | None:
             undone = replace(truth_sem, **{field_name: getattr(TRUE, field_name)})
             if answer(program, undone) == truth:
                 return f"dialect rule {rule} is not answer-relevant"
+    required, permitted = dial_foils(program.params)
     for trap, foil in ALL_TRAP_FOILS.items():
         if foil not in readings:  # the dialect declares this semantic; checked per rule above
             continue
         on = bool(getattr(program.params, trap))
         if on and foils[foil] == truth:
             return f"trap {trap} is not answer-relevant"
-        if not on and foils[foil] != truth:
+        if not on and foils[foil] != truth and foil not in permitted:
             return f"disabled trap {trap} still changes the answer"
+    if program.params.round2_on():
+        for name in sorted(required):
+            if name in foils and foils[name] == truth:
+                return f"mechanism foil {name} does not diverge"
+        for name in ROUND2_FOILS:
+            if name in foils and name not in permitted and foils[name] != truth:
+                return f"round-2 foil {name} diverges with its mechanism off"
     twin = program.twin_of_target()
     if twin is not None and program.query.kind == "final_value":
         if tr.globals.get(twin) == truth:

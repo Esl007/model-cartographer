@@ -56,6 +56,9 @@ launch.
 | `IV.length` | With no traps and clear names, how long and deeply nested a program can the model trace? | program length 6 -> 60 statements, nesting 0 -> 3 | axis | `code_length` | -- |
 | `IV.copy` | Does the model copy an odd string literal exactly, or 'fix' it to match the naming pattern around it? | program length + an opaque literal that breaks the naming scheme | axis | -- | -- |
 | `IV.dialect` | When the program declares rules that differ from standard Python, does the model follow them, or its Python habit? | program length + 0 -> 4 declared deviations from Python (inclusive range, truncating %, copy on assign, fresh defaults) | axis | -- | -- |
+| `IV.chain_depth` | When the answer depends on a long chain of updates, each one feeding the next (with the program kept the same size), does the model keep every step, or lose one along the way? | 5 -> 20 dependent updates on the path to the answer, program size pinned at ~22 statements | axis | -- | -- |
+| `IV.stack` | When one list is shared under two names, extended, copied and passed to a function before the answer reads it (plus a branch inside a loop and a while loop), does the model track what really happens to it? | 0 -> 4 list behaviours stacked on one list (shared name + `+=`, `x = x + [..]`, slice copy, a function that changes its argument) + a branch in a loop + a while loop; size pinned at ~22 | axis | -- | -- |
+| `IV.gotcha` | When the program divides negative numbers and slices lists with computed end points, does the model follow Python's actual rules for rounding and for where a slice stops? | 0 -> 3 chained `//` `%` `*` on negative numbers + 0 -> 3 slices with computed or negative ends; size pinned at ~22 statements | axis | -- | -- |
 
 ## Province X -- Cross-cutting
 

@@ -112,6 +112,9 @@ def verify_answer(text: str | None, program: Program, rendered: RenderedProgram)
         parts.append(f"confused_identifier:{rendered.name_map[twin]}")
     if foil_matches:
         parts.append("foil:" + ",".join(foil_matches))
+    if any(not neutral and v == parsed and type(v) is type(parsed)
+           for _sid, _vid, v, _foil, neutral in program.comments):
+        parts.append("comment_value")  # the answer is a value a misleading comment asserted
     detail = "+".join(parts) if parts else "wrong_value"
     return TraceVerification(Verdict.FAIL, detail, parsed=parsed, truth=truth, foil_matches=foil_matches,
                              normalised_tuple=was_tuple)

@@ -53,6 +53,46 @@ FOIL_TRAPS = {v: k for k, v in ALL_TRAP_FOILS.items()}
 # The reader who ignores a declared dialect and reads the code as plain Python.
 PYTHON_PRIOR = "python_prior"
 
+# Round-2 foils (docs/spec-code-hunt.md WP-G). They join a program's readings
+# only when one of its round-2 dials is on (`CodeDimParams.round2_on`), so
+# every program generated with those dials off reads exactly as before.
+ROUND2_FOILS: dict[str, Semantics] = {
+    "augassign_rebinds": Semantics(augassign_list="rebind"),
+    "concat_mutates": Semantics(list_concat="mutate"),
+    "slice_aliases": Semantics(slice_copy="alias"),
+    "param_copies": Semantics(param_passing="copy"),
+    "predicate_frozen": Semantics(loop_predicate="frozen"),
+    "stale_read": Semantics(path_updates="skip_one"),
+    "slice_end_inclusive": Semantics(slice_end="inclusive"),
+}
+# stack_depth = k: the foil of each of the first k stacked steps (model.STACK_STEPS).
+STACK_FOILS = ("augassign_rebinds", "concat_mutates", "slice_aliases", "param_copies")
+
+
+def dial_foils(params) -> tuple[set[str], set[str]]:
+    """(required, permitted) foil names for these params' round-2 dials.
+    `required` foils must diverge from the truth (each enabled mechanism is
+    load-bearing); `permitted` foils may diverge although no toggle of their
+    own is on (a stacked alias also fools `value_semantics`). Every other
+    round-2 foil, and every trap foil whose trap is off, must agree with the
+    truth (`generate.validate`)."""
+    required: set[str] = set()
+    permitted: set[str] = set()
+    if params.chain_depth:
+        required.add("stale_read")
+    if params.stack_depth:
+        required.update(STACK_FOILS[:params.stack_depth])
+        permitted.add("value_semantics")
+    if params.loop_branch or params.while_on:
+        required.update(("predicate_frozen", "loop_once"))
+    if params.sign_chain:
+        required.add("truncating_modulo")
+    if params.index_math:
+        required.add("slice_end_inclusive")
+    if params.aliasing_on:
+        permitted.add("augassign_rebinds")  # the aliasing trap may mutate through `alias += [..]`
+    return required, permitted | required
+
 
 def _delta(sem: Semantics) -> dict[str, str]:
     return {f.name: getattr(sem, f.name) for f in fields(Semantics) if getattr(sem, f.name) != getattr(TRUE, f.name)}
@@ -62,11 +102,12 @@ def foils_for(program: Program) -> dict[str, Semantics]:
     """The foil readings of THIS program, relative to its declared truth.
     Plain Python programs get exactly `FOILS`."""
     truth = program.semantics
+    pool = {**FOILS, **ROUND2_FOILS} if program.params.round2_on() else FOILS
     if truth == TRUE:
-        return FOILS
+        return pool
     declared = _delta(truth)
     out: dict[str, Semantics] = {PYTHON_PRIOR: TRUE}
-    for name, sem in FOILS.items():
+    for name, sem in pool.items():
         d = _delta(sem)
         if any(k in declared for k in d):
             continue

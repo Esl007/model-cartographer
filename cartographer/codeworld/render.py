@@ -43,6 +43,7 @@ from .model import (
     Return,
     SetItem,
     Slice,
+    While,
     iter_stmts,
 )
 
@@ -306,6 +307,8 @@ def _stmt_lines(s, n: dict, indent: int, notes: dict) -> list[str]:
         else:
             it = render_expr(s.iter, n)
         return [f"{pad}for {n[s.var]} in {it}:{tail}"] + _block(s.body, n, indent + 1, notes)
+    if isinstance(s, While):
+        return [f"{pad}while {render_expr(s.test, n)}:{tail}"] + _block(s.body, n, indent + 1, notes)
     if isinstance(s, FuncDef):
         n_req = len(s.params) - len(s.defaults)
         parts = [n[p] for p in s.params[:n_req]]
@@ -323,6 +326,8 @@ def _block(body, n: dict, indent: int, notes: dict) -> list[str]:
 
 def _notes(program: Program, n: dict, annotate) -> dict:
     notes: dict[int, str] = {}
+    for sid, vid, value, _foil, neutral in program.comments:
+        notes[sid] = comment_text(n[vid], value, neutral)
     by_sid = {s.sid: s for s in iter_stmts(program.body)}
     for trap, sid in program.trap_sites:
         s = by_sid.get(sid)
@@ -334,6 +339,17 @@ def _notes(program: Program, n: dict, annotate) -> dict:
             if free:
                 notes[sid] = f"{n[s.name]} looks up {n[free[0]]} when it is called, not when it is defined"
     return notes
+
+
+def comment_text(name: str, value, neutral: bool) -> str:
+    """`name is now <value>` (misleading_comments), or a neutral comment of
+    exactly the same length (the neutral_comments control)."""
+    text = f"{name} is now {value!r}"
+    if not neutral:
+        return text
+    plain = f"{name} changes"  # always shorter than `name is now v`
+    pad = len(text) - len(plain)
+    return plain + ("." if pad == 1 else " " + "." * (pad - 1))
 
 
 def render(program: Program, rendering_seed: int = 0, naming: str = "auto",

@@ -41,6 +41,7 @@ from .model import (
     SetItem,
     Slice,
     Trace,
+    While,
     iter_stmts,
 )
 
@@ -76,6 +77,16 @@ class Semantics:
     conditionals: str = "evaluate"  # "evaluate" (Python) | "all_branches"
     loops: str = "iterate"  # "iterate" (Python) | "once"
     literals: str = "copy"  # "copy" (Python) | "pattern" (complete the naming scheme instead)
+    # Round-2 beliefs (docs/spec-code-hunt.md WP-G):
+    augassign_list: str = "mutate"  # `xs += [..]`: "mutate" (Python) | "rebind" (a new list, like xs = xs + [..])
+    list_concat: str = "new"  # `xs = xs + [..]`: "new" (Python) | "mutate" (extends xs in place)
+    slice_copy: str = "copy"  # `xs[:]`: "copy" (Python) | "alias" (the same list)
+    param_passing: str = "share"  # list arguments: "share" (Python) | "copy" (callee gets a copy)
+    loop_predicate: str = "live"  # "live" (Python) | "frozen": a while test, or an if test inside a
+    #                                loop, is evaluated once per loop entry and reused
+    slice_end: str = "exclusive"  # `xs[a:b]`: "exclusive" (Python) | "inclusive" (b is included)
+    path_updates: str = "all"  # "all" (Python) | "skip_one": the last update on the target's
+    #                            dependency path (Program.path_sids) is not applied (a stale read)
 
 
 TRUE = Semantics()
@@ -170,6 +181,7 @@ class Interpreter:
         self.stdout: list[str] = []
         self.steps = 0
         self._gframe = _Frame(self.globals)
+        self._frozen: list[dict] = []  # loop_predicate="frozen": one test cache per active loop
 
     # -- statements ---------------------------------------------------------
 
@@ -191,6 +203,18 @@ class Interpreter:
     def _exec(self, s, frame: _Frame) -> None:
         self._tick()
         if isinstance(s, Assign):
+            if (
+                self.sem.list_concat == "mutate" and isinstance(s.value, BinOp) and s.value.op == "+"
+                and isinstance(s.value.left, Name) and s.value.left.id == s.target
+                and isinstance(self._read(s.target, frame), list)
+            ):
+                cur = self._read(s.target, frame)
+                ext = self._eval(s.value.right, frame)
+                if not isinstance(ext, list):
+                    raise InterpError("list + non-list")
+                cur.extend(ext)
+                self._store(frame, s.target, cur)
+                return
             v = self._eval(s.value, frame)
             if (
                 self.sem.list_assignment == "copy"
@@ -205,8 +229,11 @@ class Interpreter:
             if s.op == "+" and isinstance(cur, list):
                 if not isinstance(v, list):
                     raise InterpError("list += non-list")
-                cur.extend(v)  # in place, exactly like Python
-                self._store(frame, s.target, cur)
+                if self.sem.augassign_list == "rebind":
+                    self._store(frame, s.target, cur + v)
+                else:
+                    cur.extend(v)  # in place, exactly like Python
+                    self._store(frame, s.target, cur)
             else:
                 self._store(frame, s.target, self._binop(s.op, cur, v))
         elif isinstance(s, SetItem):
@@ -221,7 +248,7 @@ class Interpreter:
             if self.sem.conditionals == "all_branches":
                 self._exec_block(s.body, frame)
                 self._exec_block(s.orelse, frame)
-            elif self._truthy(self._eval(s.test, frame)):
+            elif self._truthy(self._test(s, frame)):
                 self._exec_block(s.body, frame)
             else:
                 self._exec_block(s.orelse, frame)
@@ -234,11 +261,31 @@ class Interpreter:
                 seq = self._eval(s.iter, frame)
                 if not isinstance(seq, (list, str)):
                     raise InterpError("for over non-sequence")
-            for i, item in enumerate(seq):
-                if self.sem.loops == "once" and i >= 1:
-                    break
-                self._store(frame, s.var, item)
-                self._exec_block(s.body, frame)
+            self._frozen.append({})
+            try:
+                for i, item in enumerate(seq):
+                    if self.sem.loops == "once" and i >= 1:
+                        break
+                    self._store(frame, s.var, item)
+                    self._exec_block(s.body, frame)
+            finally:
+                self._frozen.pop()
+        elif isinstance(s, While):
+            frozen = self.sem.loop_predicate == "frozen"  # test read once: a true test never turns false
+            cond = self._truthy(self._eval(s.test, frame))
+            i = 0
+            self._frozen.append({})
+            try:
+                while cond:
+                    if self.sem.loops == "once" and i >= 1:
+                        break
+                    self._tick()
+                    self._exec_block(s.body, frame)
+                    i += 1
+                    if not frozen:
+                        cond = self._truthy(self._eval(s.test, frame))
+            finally:
+                self._frozen.pop()
         elif isinstance(s, FuncDef):
             localnames = frozenset(s.params) | frozenset(_assigned_names(s.body))
             defaults = tuple(self._eval(d, self._gframe) for d in s.defaults)
@@ -258,6 +305,16 @@ class Interpreter:
             raise InterpError(f"unknown statement {type(s).__name__}")
 
     # -- expressions ----------------------------------------------------------
+
+    def _test(self, s, frame: _Frame):
+        """An if's test; under loop_predicate="frozen", inside a loop it is
+        evaluated on the first pass only and reused on every later pass."""
+        if self.sem.loop_predicate != "frozen" or not self._frozen:
+            return self._eval(s.test, frame)
+        cache = self._frozen[-1]
+        if s.sid not in cache:
+            cache[s.sid] = self._eval(s.test, frame)
+        return cache[s.sid]
 
     def _read(self, name: str, frame: _Frame):
         if not frame.is_global:
@@ -333,6 +390,10 @@ class Interpreter:
             obj = self._eval(e.target, frame)
             lo = None if e.lo is None else self._eval(e.lo, frame)
             hi = None if e.hi is None else self._eval(e.hi, frame)
+            if self.sem.slice_copy == "alias" and lo is None and hi is None and isinstance(obj, list):
+                return obj
+            if self.sem.slice_end == "inclusive" and isinstance(hi, int):
+                hi = None if hi == -1 else hi + 1
             return obj[lo:hi]
         if isinstance(e, Len):
             v = self._eval(e.arg, frame)
@@ -379,7 +440,8 @@ class Interpreter:
         bound: dict = {}
         for i, p in enumerate(fd.params):
             if i < len(argvals):
-                bound[p] = argvals[i]
+                a = argvals[i]
+                bound[p] = copy.deepcopy(a) if self.sem.param_passing == "copy" and isinstance(a, list) else a
             else:
                 di = i - (n_params - n_def)
                 if self.sem.default_args == "fresh":
@@ -425,8 +487,15 @@ def run(program: Program, semantics: Semantics | None = None, step_cap: int = ST
     track: list = []
     aliases: set = set()
     error = None
+    skip = None
+    if it.sem.path_updates == "skip_one" and program.path_sids:
+        skip = program.path_sids[-1]
     try:
         for s in program.body:
+            if s.sid == skip:
+                if target is not None:
+                    track.append(copy.deepcopy(it.globals.get(target, None)))
+                continue
             it.exec_top(s)
             if target is not None:
                 track.append(copy.deepcopy(it.globals.get(target, None)))

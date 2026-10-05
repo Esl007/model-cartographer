@@ -201,7 +201,17 @@ class Print:
     value: object
 
 
-Stmt = Union[Assign, SetItem, AugAssign, If, For, FuncDef, Return, ExprStmt, Print]
+@dataclass(frozen=True)
+class While:
+    """`while test: body`. The generator only emits loops whose exit depends
+    on computed state and that terminate in <= 40 iterations under truth."""
+
+    sid: int
+    test: object
+    body: tuple
+
+
+Stmt = Union[Assign, SetItem, AugAssign, If, For, While, FuncDef, Return, ExprStmt, Print]
 
 # ---------------------------------------------------------------------------
 # Program
@@ -235,6 +245,14 @@ DIALECT_TRAPS = {
 }
 
 
+# Round-2 dials (int or bool), in a fixed order.
+ROUND2_DIALS = ("chain_depth", "stack_depth", "loop_branch", "while_on", "sign_chain", "index_math",
+                "misleading_comments", "neutral_comments")
+# stack_depth = k stacks the first k of these steps on one list (alias +
+# augmented assignment, concatenation rebind, slice copy, mutating callee).
+STACK_STEPS = ("augassign", "concat", "slice", "param")
+
+
 @dataclass(frozen=True)
 class CodeDimParams:
     n_statements: int = 6
@@ -250,6 +268,16 @@ class CodeDimParams:
     mutable_default_on: bool = False
     opaque_literal_on: bool = False
     dialect: tuple = ()  # declared deviations from Python, a subset of DIALECT_RULES
+    # Round-2 mechanisms (docs/spec-code-hunt.md WP-G). All at 0/False => the
+    # generator draws exactly the programs it drew before they existed.
+    chain_depth: int = 0  # dependent updates on the path to the queried value (foil stale_read)
+    stack_depth: int = 0  # list semantics stacked on ONE list that reaches the answer (STACK_STEPS)
+    loop_branch: bool = False  # data-dependent branch inside a loop over a list (foil predicate_frozen)
+    while_on: bool = False  # a `while` whose exit depends on computed state (foil predicate_frozen)
+    sign_chain: int = 0  # chained // % * on a value that is negative there (foil truncating_modulo)
+    index_math: int = 0  # slices with computed / negative end bounds (foil slice_end_inclusive)
+    misleading_comments: int = 0  # comments on target-update lines asserting a foil's value (signature comment_value)
+    neutral_comments: int = 0  # control: the same lines get a neutral comment of equal length
 
     def __post_init__(self) -> None:
         dialect = tuple(self.dialect)
@@ -270,6 +298,24 @@ class CodeDimParams:
             raise ValueError("distractor_fraction must be in 0..0.6")
         if not 0.0 <= self.identifier_confusability <= 1.0:
             raise ValueError("identifier_confusability must be in 0..1")
+        if not 0 <= self.chain_depth <= 24:
+            raise ValueError("chain_depth must be in 0..24")
+        if not 0 <= self.stack_depth <= len(STACK_STEPS):
+            raise ValueError(f"stack_depth must be in 0..{len(STACK_STEPS)}")
+        if not all(0 <= getattr(self, k) <= 3 for k in ("sign_chain", "index_math", "misleading_comments",
+                                                           "neutral_comments")):
+            raise ValueError("sign_chain, index_math, misleading_comments, neutral_comments must be in 0..3")
+        if self.misleading_comments and self.neutral_comments:
+            raise ValueError("misleading_comments and its neutral_comments control are exclusive")
+        if self.sign_chain and "truncating_modulo" in self.dialect:
+            raise ValueError("sign_chain needs Python floor division; it conflicts with the truncating_modulo dialect")
+        if self.stack_depth and "copy_on_assign" in self.dialect:
+            raise ValueError("stack_depth needs Python aliasing; it conflicts with the copy_on_assign dialect")
+
+    def round2_on(self) -> bool:
+        """True iff any round-2 mechanism dial is non-zero (then the round-2
+        foils join the program's readings; see foils.foils_for)."""
+        return any(getattr(self, k) for k in ROUND2_DIALS)
 
     def traps_on(self) -> tuple[str, ...]:
         return tuple(k for k in TRAP_KEYS if getattr(self, k))
@@ -303,6 +349,9 @@ class Program:
     distractor_ids: frozenset = frozenset()  # sids of top-level distractor statements
     trap_sites: tuple = ()  # tuple[(trap_key, sid), ...] -- the line that carries the trap
     locals_pool: tuple = ()  # function-local / loop names (ids) used, for rendering
+    path_sids: tuple = ()  # sids of the chain_depth updates on the target's dependency path, in order
+    # (sid, var id, asserted value, foil name, neutral) per commented line; neutral comments assert nothing
+    comments: tuple = ()
 
     @property
     def semantics(self):
@@ -336,7 +385,7 @@ def iter_stmts(body):
         if isinstance(s, If):
             yield from iter_stmts(s.body)
             yield from iter_stmts(s.orelse)
-        elif isinstance(s, (For, FuncDef)):
+        elif isinstance(s, (For, While, FuncDef)):
             yield from iter_stmts(s.body)
 
 
@@ -345,7 +394,7 @@ def nesting_depth(body, depth: int = 0) -> int:
     for s in body:
         if isinstance(s, If):
             best = max(best, nesting_depth(s.body, depth + 1), nesting_depth(s.orelse, depth + 1))
-        elif isinstance(s, For):
+        elif isinstance(s, (For, While)):
             best = max(best, nesting_depth(s.body, depth + 1))
     return best
 

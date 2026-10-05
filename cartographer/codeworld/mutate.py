@@ -32,6 +32,11 @@ from .model import Program, iter_stmts
 from .render import RenderedProgram, render
 
 ANSWER_PRESERVING = {"rename_descriptive", "remove_distractors", "annotate_aliasing", "annotate_closures"}
+# Meaning-preserving REWRITES (spec-code-hunt WP-H; implemented in
+# `cartographer.hunt.rewrites`): the program itself changes form, its answer
+# does not. Reached through `apply_rewrite` / `apply_ablation` by name.
+REWRITE_NAMES = ("swap_operands", "negate_if", "unroll_first_iteration", "insert_dead_read", "rename_variable")
+ANSWER_PRESERVING |= set(REWRITE_NAMES)
 ANSWER_CHANGING = {
     "inject_aliasing",
     "inject_late_binding",
@@ -153,8 +158,24 @@ def apply_ablation(program: Program, name: str, rendering_seed: int = 0) -> tupl
         if not program.params.late_binding_on:
             raise MutationUnavailable("no late-binding trap")
         out_prog, rendered = program, render(program, rendering_seed, annotate=("closures",))
+    elif name in REWRITE_NAMES:
+        return apply_rewrite(program, name, rendering_seed)
     else:
         raise KeyError(name)
     if answer(out_prog) != answer(program):  # the whole point of an ablation
         raise MutationUnavailable(f"{name} changed the answer")
     return copy.copy(out_prog), rendered
+
+
+def apply_rewrite(program: Program, name: str, seed: int = 0) -> tuple[Program, RenderedProgram]:
+    """(rewritten program, its rendering) for a meaning-preserving rewrite in
+    `REWRITE_NAMES`. Raises `MutationUnavailable` (a `RewriteUnavailable`)
+    when the rewrite has no site or cannot hold its invariant."""
+    from ..hunt.rewrites import apply_rewrite_program
+
+    if name not in REWRITE_NAMES:
+        raise KeyError(name)
+    out_prog, rendering_seed = apply_rewrite_program(program, name, seed)
+    if answer(out_prog) != answer(program):
+        raise MutationUnavailable(f"{name} changed the answer")
+    return out_prog, render(out_prog, rendering_seed)

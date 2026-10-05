@@ -1996,13 +1996,20 @@ def run_tool_breaking_point_campaign(
 # `kind=code_trace` so /findings, /atlas and frontier_summary pick it up.
 # ---------------------------------------------------------------------------
 
-_CODE_INT_KEYS = {"n_statements", "max_nesting", "n_variables", "dialect_rules"}  # dialect_rules -> dialect
+_CODE_INT_KEYS = {"n_statements", "max_nesting", "n_variables", "dialect_rules",  # dialect_rules -> dialect
+                  "chain_depth", "stack_depth", "sign_chain", "index_math", "misleading_comments",
+                  "neutral_comments"}
 _CODE_FLOAT_KEYS = {"distractor_fraction", "identifier_confusability"}
-_CODE_BOOL_KEYS = set(CODE_TRAP_KEYS) | {"opaque_literal_on"}
+_CODE_BOOL_KEYS = set(CODE_TRAP_KEYS) | {"opaque_literal_on", "loop_branch", "while_on"}
+# Round-2 mechanism dials (docs/spec-code-hunt.md WP-G), reported in `traps=`.
+_CODE_ROUND2_KEYS = ("chain_depth", "stack_depth", "loop_branch", "while_on", "sign_chain", "index_math",
+                     "misleading_comments", "neutral_comments")
 _CODE_KNOWN_KEYS = _CODE_INT_KEYS | _CODE_FLOAT_KEYS | _CODE_BOOL_KEYS
 _CODE_LIMITS = {
     "n_statements": (2, 80), "max_nesting": (0, 3), "n_variables": (2, 12),
     "distractor_fraction": (0.0, 0.6), "identifier_confusability": (0.0, 1.0), "dialect_rules": (0, 4),
+    "chain_depth": (0, 24), "stack_depth": (0, 4), "sign_chain": (0, 3), "index_math": (0, 3),
+    "misleading_comments": (0, 3), "neutral_comments": (0, 3),
 }
 
 
@@ -2031,13 +2038,28 @@ def _apply_code_config(base: CodeDimParams, config: dict[str, float]) -> CodeDim
     return replace(base, **overrides)
 
 
-def build_code_task(config: dict[str, float], trial_seed: int, base: CodeDimParams | None = None):
+def build_code_task(config: dict[str, float], trial_seed: int, base: CodeDimParams | None = None,
+                    adversarial: bool = False, adversarial_candidates: int = 20):
     """(params, program, rendered, task_seed) for one trial. Deterministic in
-    (config, trial_seed); raises `GenerationFailed` (recorded as ERROR)."""
+    (config, trial_seed); raises `GenerationFailed` (recorded as ERROR).
+
+    `adversarial`: generate `adversarial_candidates` programs from seeds
+    derived from the task seed and keep the one with the highest
+    `foil_divergence(...).divergence_score` (ties -> lowest candidate
+    index); the returned task seed is the task seed, the program's own seed
+    is the winning candidate's."""
     params = _apply_code_config(base if base is not None else _default_code_base(),
                                 {k: v for k, v in config.items() if k in _CODE_KNOWN_KEYS})
     seed = _task_seed(config, trial_seed)
-    program = code_generate(params, seed)
+    if not adversarial:
+        program = code_generate(params, seed)
+        return params, program, code_render(program, seed), seed
+    from ..codeworld.search import search_adversarial_seeds
+
+    best = search_adversarial_seeds(params, seed, n_candidates=max(1, adversarial_candidates), top_k=1)
+    if not best:
+        raise CodeGenerationFailed(f"no adversarial candidate for seed {seed}")
+    program = code_generate(params, best[0][0])
     return params, program, code_render(program, seed), seed
 
 
@@ -2051,6 +2073,7 @@ def _code_latent(params: CodeDimParams) -> dict[str, float]:
         **{k: float(getattr(params, k)) for k in CODE_TRAP_KEYS},
         "opaque_literal_on": float(params.opaque_literal_on),
         "dialect_rules": float(len(params.dialect)),
+        **{k: float(getattr(params, k)) for k in _CODE_ROUND2_KEYS},
     }
 
 
@@ -2071,12 +2094,16 @@ class CodeTraceEvaluator:
         max_tokens: int | None = None,
         max_tokens_retry: int | None = None,
         cancel_event: threading.Event | None = None,
+        adversarial: bool = False,
+        adversarial_candidates: int = 20,
     ) -> None:
         self.client = client
         self.model = model
         self.store = store
         self.run_id = run_id
         self.cost_cap_usd = cost_cap_usd
+        self.adversarial = adversarial
+        self.adversarial_candidates = adversarial_candidates
         self.base = base if base is not None else _default_code_base()
         default_max_tokens, default_max_tokens_retry = default_token_budget(model)
         self.max_tokens = max_tokens if max_tokens is not None else default_max_tokens
@@ -2106,7 +2133,8 @@ class CodeTraceEvaluator:
                 self._record_error(params, seed, trial_seed, reason)
                 return False
         try:
-            _, program, rendered, _ = build_code_task(config, trial_seed, self.base)
+            _, program, rendered, _ = build_code_task(config, trial_seed, self.base, self.adversarial,
+                                                      self.adversarial_candidates)
         except CodeGenerationFailed:
             with self._lock:
                 self._record_error(params, seed, trial_seed, "generation_failed")
@@ -2115,9 +2143,13 @@ class CodeTraceEvaluator:
         realized = code_measure(program)
         traps = ";".join(f"{k}={int(getattr(params, k))}" for k in (*CODE_TRAP_KEYS, "opaque_literal_on"))
         traps += f";dialect_rules={len(params.dialect)}"
+        if params.round2_on():  # dials at 0 keep the detail string exactly as before
+            traps += "".join(f";{k}={int(getattr(params, k))}" for k in _CODE_ROUND2_KEYS)
         detail = (
             f"kind=code_trace;campaign=1;query={program.query.kind}"
         )
+        if self.adversarial:
+            detail += f";adversarial=1;adversarial_candidates={self.adversarial_candidates}"
         result = self.client.chat(
             model=self.model, prompt=rendered.prompt,
             max_tokens=self.max_tokens, max_tokens_retry=self.max_tokens_retry,
@@ -2216,6 +2248,39 @@ def default_code_dialect_ray() -> EscalationRay:
     return EscalationRay(dims=(RayDim("n_statements", 6, 24, True), RayDim("dialect_rules", 0, 4, True)))
 
 
+# Round-2 rays (docs/spec-code-hunt.md WP-G). Each pins n_statements so
+# program size is not the lever (a RayDim with lo == hi is a constant).
+
+
+def default_code_depth_ray() -> EscalationRay:
+    """Dependency depth at fixed size: 5 -> 20 dependent updates on the path
+    to the queried value, n_statements pinned at 22 (chain updates replace
+    live updates, so realized size stays ~25). A break whose failures match
+    `stale_read` means the reader lost one update along the chain. Control:
+    the t = 0 end (depth 5, same size)."""
+    return EscalationRay(dims=(RayDim("n_statements", 22, 22, True), RayDim("chain_depth", 5, 20, True)))
+
+
+def default_code_stack_ray() -> EscalationRay:
+    """Stacked list semantics at fixed size: 0 -> 4 semantics on ONE list
+    that reaches the answer (alias + `+=`, `x = x + [..]`, slice copy, a
+    callee that mutates its parameter), with a data-dependent branch in a
+    loop and a computed-exit `while` switching on at t >= 0.5."""
+    return EscalationRay(dims=(RayDim("n_statements", 22, 22, True), RayDim("stack_depth", 0, 4, True),
+                               RayDim("loop_branch", 0, 1, True), RayDim("while_on", 0, 1, True)))
+
+
+def default_code_gotcha_ray() -> EscalationRay:
+    """Arithmetic and indexing gotchas at fixed size: 0 -> 3 chained `//`
+    `%` `*` on a value that is negative there (foil `truncating_modulo`) and
+    0 -> 3 slices with computed / negative end bounds (foil
+    `slice_end_inclusive`) and 0 -> 3 comments on target-update lines that
+    assert a foil's value (signature `comment_value`). Control for the
+    comments: `neutral_comments` (same lines, same length, no value)."""
+    return EscalationRay(dims=(RayDim("n_statements", 22, 22, True), RayDim("sign_chain", 0, 3, True),
+                               RayDim("index_math", 0, 3, True), RayDim("misleading_comments", 0, 3, True)))
+
+
 def default_code_length_ray() -> EscalationRay:
     """Control: magnitude only -- longer, more deeply nested programs, no
     traps, descriptive names."""
@@ -2238,12 +2303,16 @@ def run_code_breaking_point_campaign(
     early_stop: bool = False,
     resample_gate: bool = False,
     resample_n: int = 3,
+    adversarial: bool = False,
 ) -> BreakingPoint:
     """Escalation over generated programs; default ray is the look-alike
     names ray (H1). `verify` is accepted for /launch's generic kwarg
-    forwarding and unused (FAILs are deterministic interpreter outcomes)."""
+    forwarding and unused (FAILs are deterministic interpreter outcomes).
+    `adversarial=True`: each trial's program is the most foil-divergent of
+    20 candidates (`build_code_task`)."""
     evaluator = CodeTraceEvaluator(client=client, model=model, store=store, run_id=run_id,
-                                   cost_cap_usd=cost_cap, max_tokens=max_tokens, cancel_event=cancel_event)
+                                   cost_cap_usd=cost_cap, max_tokens=max_tokens, cancel_event=cancel_event,
+                                   adversarial=adversarial)
     ev = ResampleGatedEvaluator(evaluator, n=resample_n) if resample_gate else evaluator
     bp = find_breaking_point(ev, ray if ray is not None else default_code_lookalike_ray(),
                              budget=budget, k_trials=k_trials, parallelism=parallelism, early_stop=early_stop)

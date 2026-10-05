@@ -285,6 +285,33 @@ _SPECS: tuple[CampaignSpec, ...] = (
         "axis", E.run_code_breaking_point_campaign, "camp-code-dialect-{label}-{n:03d}",
         ray_factory=E.default_code_dialect_ray, protocol_note=_CODE,
         default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "IV.chain_depth", "IV", "Dependency depth in code (same size)",
+        "When the answer depends on a long chain of updates, each one feeding the next (with the program "
+        "kept the same size), does the model keep every step, or lose one along the way?",
+        "5 -> 20 dependent updates on the path to the answer, program size pinned at ~22 statements",
+        "axis", E.run_code_breaking_point_campaign, "camp-code-depth-{label}-{n:03d}",
+        ray_factory=E.default_code_depth_ray, protocol_note=_CODE,
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "IV.stack", "IV", "Stacked list behaviour in code (same size)",
+        "When one list is shared under two names, extended, copied and passed to a function before the "
+        "answer reads it (plus a branch inside a loop and a while loop), does the model track what really "
+        "happens to it?",
+        "0 -> 4 list behaviours stacked on one list (shared name + `+=`, `x = x + [..]`, slice copy, "
+        "a function that changes its argument) + a branch in a loop + a while loop; size pinned at ~22",
+        "axis", E.run_code_breaking_point_campaign, "camp-code-stack-{label}-{n:03d}",
+        ray_factory=E.default_code_stack_ray, protocol_note=_CODE,
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    CampaignSpec(
+        "IV.gotcha", "IV", "Arithmetic and indexing gotchas in code (same size)",
+        "When the program divides negative numbers and slices lists with computed end points, does the "
+        "model follow Python's actual rules for rounding and for where a slice stops?",
+        "0 -> 3 chained `//` `%` `*` on negative numbers + 0 -> 3 slices with computed or negative ends; "
+        "size pinned at ~22 statements",
+        "axis", E.run_code_breaking_point_campaign, "camp-code-gotcha-{label}-{n:03d}",
+        ray_factory=E.default_code_gotcha_ray, protocol_note=_CODE,
+        default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
     # ---- Cross-cutting -----------------------------------------------------
     CampaignSpec(
         "X.full_map", "X", "Full narrative battery",
