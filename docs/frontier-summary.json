@@ -2,24 +2,24 @@
  {
   "model": "gemma-4-31b-it-qat-w4a16-ct",
   "name": "gemma-4-31b-it-qat-w4a16-ct",
-  "verdict": "gemma-4-31b-it-qat-w4a16-ct: breaks on step-by-step execution with values to carry (11-call plans, 3 values to carry); breaks on recovering from a failed call (12-call plans, 4 values to carry); slips on belief tracking; slips on misleading stories; slips on long plans with look-alike tool names (16-call plans); slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks. Holds on 7 of 14 capabilities tested.",
+  "verdict": "gemma-4-31b-it-qat-w4a16-ct: breaks on step-by-step execution with values to carry (11-call plans, 3 values to carry); breaks on recovering from a failed call (12-call plans, 4 values to carry); slips on belief tracking; slips on misleading stories; slips on long plans with look-alike tool names (16-call plans); slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks; slips on consistency. Holds on 8 of 16 capabilities tested.",
   "rows": [
    {
     "key": "state",
     "label": "Tracks where things actually are",
     "province": "I \u00b7 Narrative",
     "status": "HOLDS",
-    "headline": "100% correct (31/31)",
+    "headline": "100% correct (125/125)",
     "boundary": null,
     "held_through": "tested up to chain length 30, distractor events 2",
-    "n_pass": 31,
-    "n_scored": 31,
+    "n_pass": 125,
+    "n_scored": 125,
     "n_error": 0,
     "ci": [
-     0.89,
+     0.97,
      1.0
     ],
-    "confidence": "B",
+    "confidence": "A",
     "p_value": null,
     "cause_code": null,
     "cause": null,
@@ -35,22 +35,22 @@
     "label": "Recovers the true order of events",
     "province": "I \u00b7 Narrative",
     "status": "HOLDS",
-    "headline": "99% correct (79/80)",
+    "headline": "95% correct (199/209)",
     "boundary": null,
     "held_through": "tested up to chain length 20, scramble 1.0, distractor events 30",
-    "n_pass": 79,
-    "n_scored": 80,
+    "n_pass": 199,
+    "n_scored": 209,
     "n_error": 0,
     "ci": [
-     0.933,
-     0.998
+     0.914,
+     0.974
     ],
-    "confidence": "B",
+    "confidence": "A",
     "p_value": null,
     "cause_code": "other_wrong_answer",
     "cause": "gives a wrong answer that matches no known shortcut",
     "cause_share": 1.0,
-    "cause_n": 1,
+    "cause_n": 10,
     "exemplar": {
      "record_id": "42b3e6bf704145ffb217b1125508d6ee",
      "run_id": "camp-full_map-gemma4qat-001/order",
@@ -66,22 +66,22 @@
     "label": "Tracks what a person believes from what they saw",
     "province": "I \u00b7 Narrative",
     "status": "DEGRADES",
-    "headline": "52% correct (110/211)",
+    "headline": "58% correct (301/518)",
     "boundary": null,
-    "held_through": "tested up to chain length 10, scramble 1.0, pronoun pressure 5, distractor events 20, witness cutoff 0.9",
-    "n_pass": 110,
-    "n_scored": 211,
+    "held_through": "tested up to chain length 12, scramble 1.0, pronoun pressure 5, distractor events 20, witness cutoff 0.9",
+    "n_pass": 301,
+    "n_scored": 518,
     "n_error": 0,
     "ci": [
-     0.454,
-     0.588
+     0.538,
+     0.623
     ],
     "confidence": "A",
     "p_value": null,
     "cause_code": "final_true_state",
     "cause": "answers where the object really is, not where the person believes it is",
-    "cause_share": 0.7821782178217822,
-    "cause_n": 101,
+    "cause_share": 0.7050691244239631,
+    "cause_n": 217,
     "exemplar": {
      "record_id": "8c71f902415e42a48793cf5d22010f8d",
      "run_id": "camp-full_map-gemma4qat-001/belief",
@@ -97,22 +97,22 @@
     "label": "Belief tracking in deliberately misleading stories",
     "province": "I \u00b7 Narrative",
     "status": "DEGRADES",
-    "headline": "64% correct (99/155)",
+    "headline": "62% correct (160/260)",
     "boundary": null,
     "held_through": "tested up to chain length 10, scramble 1.0, pronoun pressure 5, distractor events 20, witness cutoff 0.9",
-    "n_pass": 99,
-    "n_scored": 155,
+    "n_pass": 160,
+    "n_scored": 260,
     "n_error": 0,
     "ci": [
-     0.561,
-     0.71
+     0.555,
+     0.672
     ],
     "confidence": "A",
     "p_value": null,
     "cause_code": "final_true_state",
     "cause": "answers where the object really is, not where the person believes it is",
     "cause_share": 1.0,
-    "cause_n": 56,
+    "cause_n": 100,
     "exemplar": {
      "record_id": "1831987230ac4a2e8a83d62bc75b97f1",
      "run_id": "camp-full_map-gemma4qat-001/adversarial_belief",
@@ -128,17 +128,17 @@
     "label": "Plans long tool sequences (clear tool names)",
     "province": "II \u00b7 Tool planning",
     "status": "HOLDS",
-    "headline": "Holds through 12-call plans: 28/28 pass across every tested level",
+    "headline": "Holds through 12-call plans: 53/53 pass across every tested level",
     "boundary": null,
     "held_through": "12-call plans",
-    "n_pass": 28,
-    "n_scored": 28,
+    "n_pass": 53,
+    "n_scored": 53,
     "n_error": 0,
     "ci": [
-     0.879,
+     0.932,
      1.0
     ],
-    "confidence": "B",
+    "confidence": "A",
     "p_value": null,
     "cause_code": null,
     "cause": null,
@@ -149,29 +149,29 @@
      {
       "value": 4.0,
       "label": "7-call plans",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 14,
+      "n_scored": 14,
       "n_error": 0
      },
      {
       "value": 6.0,
       "label": "9-call plans",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 13,
+      "n_scored": 13,
       "n_error": 0
      },
      {
       "value": 8.0,
       "label": "11-call plans",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 13,
+      "n_scored": 13,
       "n_error": 0
      },
      {
       "value": 9.0,
       "label": "12-call plans",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 13,
+      "n_scored": 13,
       "n_error": 0
      }
     ],
@@ -183,22 +183,22 @@
     "label": "Plans long tool sequences when tool names look alike",
     "province": "II \u00b7 Tool planning",
     "status": "DEGRADES",
-    "headline": "Degrades at 16-call plans: 4/7 pass (was 13/14 at 14-call plans)",
+    "headline": "Degrades at 16-call plans: 7/13 pass (was 25/27 at 14-call plans)",
     "boundary": "16-call plans",
     "held_through": "14-call plans",
-    "n_pass": 4,
-    "n_scored": 7,
+    "n_pass": 7,
+    "n_scored": 13,
     "n_error": 0,
     "ci": [
-     0.25,
-     0.842
+     0.291,
+     0.768
     ],
     "confidence": "A",
-    "p_value": 0.0002848371204558918,
+    "p_value": 1.3896142255504911e-07,
     "cause_code": "unknown_tool",
     "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
     "cause_share": 1.0,
-    "cause_n": 28,
+    "cause_n": 56,
     "exemplar": {
      "record_id": "58567a803de944b5ad9c27197bee2ea2",
      "run_id": "camp-tool-depth-gemma4qat-003",
@@ -209,71 +209,71 @@
      {
       "value": 4.0,
       "label": "7-call plans",
-      "n_pass": 13,
-      "n_scored": 14,
+      "n_pass": 26,
+      "n_scored": 28,
       "n_error": 0
      },
      {
       "value": 8.0,
       "label": "11-call plans",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 13,
+      "n_scored": 13,
       "n_error": 0
      },
      {
       "value": 11.0,
       "label": "14-call plans",
-      "n_pass": 13,
-      "n_scored": 14,
+      "n_pass": 25,
+      "n_scored": 27,
       "n_error": 0
      },
      {
       "value": 13.0,
       "label": "16-call plans",
-      "n_pass": 4,
-      "n_scored": 7,
+      "n_pass": 7,
+      "n_scored": 13,
       "n_error": 0
      },
      {
       "value": 15.0,
       "label": "18-call plans",
-      "n_pass": 8,
-      "n_scored": 14,
+      "n_pass": 16,
+      "n_scored": 26,
       "n_error": 0
      },
      {
       "value": 16.0,
       "label": "19-call plans",
-      "n_pass": 4,
-      "n_scored": 7,
+      "n_pass": 7,
+      "n_scored": 13,
       "n_error": 0
      },
      {
       "value": 18.0,
       "label": "21-call plans",
-      "n_pass": 6,
-      "n_scored": 7,
+      "n_pass": 11,
+      "n_scored": 13,
       "n_error": 0
      },
      {
       "value": 20.0,
       "label": "23-call plans",
-      "n_pass": 5,
-      "n_scored": 7,
+      "n_pass": 10,
+      "n_scored": 14,
       "n_error": 0
      },
      {
       "value": 21.0,
       "label": "24-call plans",
-      "n_pass": 5,
-      "n_scored": 6,
-      "n_error": 1
+      "n_pass": 9,
+      "n_scored": 12,
+      "n_error": 2
      },
      {
       "value": 22.0,
       "label": "25-call plans",
-      "n_pass": 16,
-      "n_scored": 28,
+      "n_pass": 31,
+      "n_scored": 56,
       "n_error": 0
      }
     ],
@@ -285,22 +285,22 @@
     "label": "Plans around traps (poisoned tools, misleading descriptions, zero slack)",
     "province": "II \u00b7 Tool planning",
     "status": "DEGRADES",
-    "headline": "Degrades at 4 of 5 traps active: 9/42 pass (was 21/21 at 1 of 5 traps active)",
+    "headline": "Degrades at 4 of 5 traps active: 14/56 pass (was 21/21 at 1 of 5 traps active)",
     "boundary": "4 of 5 traps active",
     "held_through": "1 of 5 traps active",
-    "n_pass": 9,
-    "n_scored": 42,
+    "n_pass": 14,
+    "n_scored": 56,
     "n_error": 0,
     "ci": [
-     0.117,
-     0.359
+     0.155,
+     0.377
     ],
     "confidence": "A",
-    "p_value": 4.031253616523966e-14,
+    "p_value": 2.4373652949296348e-20,
     "cause_code": "precondition_violation",
     "cause": "calls a real tool before the step it depends on is done",
-    "cause_share": 0.9183673469387755,
-    "cause_n": 49,
+    "cause_share": 0.9315068493150684,
+    "cause_n": 73,
     "exemplar": {
      "record_id": "c6ba92cc874c49e4b14ed4678e58ca03",
      "run_id": "camp-tool_bp-gemma4qat-001",
@@ -311,8 +311,8 @@
      {
       "value": 0.0,
       "label": "0 of 5 traps active",
-      "n_pass": 42,
-      "n_scored": 42,
+      "n_pass": 74,
+      "n_scored": 74,
       "n_error": 0
      },
      {
@@ -325,15 +325,15 @@
      {
       "value": 4.0,
       "label": "4 of 5 traps active",
-      "n_pass": 9,
-      "n_scored": 42,
+      "n_pass": 14,
+      "n_scored": 56,
       "n_error": 0
      },
      {
       "value": 5.0,
       "label": "5 of 5 traps active",
-      "n_pass": 40,
-      "n_scored": 56,
+      "n_pass": 63,
+      "n_scored": 94,
       "n_error": 0
      }
     ],
@@ -345,14 +345,14 @@
     "label": "Picks the right tool from a large catalog",
     "province": "II \u00b7 Tool planning",
     "status": "HOLDS",
-    "headline": "Holds through 66-tool catalogs: 56/56 pass across every tested level",
+    "headline": "Holds through 66-tool catalogs: 93/93 pass across every tested level",
     "boundary": null,
     "held_through": "66-tool catalogs",
-    "n_pass": 56,
-    "n_scored": 56,
+    "n_pass": 93,
+    "n_scored": 93,
     "n_error": 0,
     "ci": [
-     0.936,
+     0.96,
      1.0
     ],
     "confidence": "A",
@@ -366,43 +366,43 @@
      {
       "value": 2.0,
       "label": "8-tool catalogs",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 14,
+      "n_scored": 14,
       "n_error": 0
      },
      {
       "value": 11.0,
       "label": "17-tool catalogs",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 13,
+      "n_scored": 13,
       "n_error": 0
      },
      {
       "value": 19.0,
       "label": "25-tool catalogs",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 13,
+      "n_scored": 13,
       "n_error": 0
      },
      {
       "value": 28.0,
       "label": "34-tool catalogs",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 13,
+      "n_scored": 13,
       "n_error": 0
      },
      {
       "value": 37.0,
       "label": "43-tool catalogs",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 13,
+      "n_scored": 13,
       "n_error": 0
      },
      {
       "value": 46.0,
       "label": "52-tool catalogs",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 13,
+      "n_scored": 13,
       "n_error": 0
      },
      {
@@ -428,17 +428,17 @@
     "label": "Notices when a task is impossible",
     "province": "II \u00b7 Tool planning",
     "status": "DEGRADES",
-    "headline": "Declines 12 of 16 impossible tasks; writes a plan for the other 4",
+    "headline": "Declines 18 of 22 impossible tasks; writes a plan for the other 4",
     "boundary": null,
     "held_through": null,
-    "n_pass": 12,
-    "n_scored": 16,
+    "n_pass": 18,
+    "n_scored": 22,
     "n_error": 0,
     "ci": [
-     0.505,
-     0.898
+     0.615,
+     0.927
     ],
-    "confidence": "C",
+    "confidence": "B",
     "p_value": null,
     "cause_code": "fabricated_plan_on_unsolvable",
     "cause": "writes a plan for an impossible goal instead of declining",
@@ -459,7 +459,7 @@
     "label": "Executes a plan step by step, carrying values between calls",
     "province": "III \u00b7 Interactive execution",
     "status": "BREAKS",
-    "headline": "Breaks at 11-call plans, 3 values to carry: 15/55 pass (was 28/36 at 7-call plans, no values to carry)",
+    "headline": "Breaks at 11-call plans, 3 values to carry: 15/55 pass (was 30/38 at 7-call plans, no values to carry)",
     "boundary": "11-call plans, 3 values to carry",
     "held_through": "7-call plans, no values to carry",
     "n_pass": 15,
@@ -470,7 +470,7 @@
      0.402
     ],
     "confidence": "A",
-    "p_value": 5.626874297186837e-07,
+    "p_value": 1.859242959078011e-07,
     "cause_code": "invalid_ticket",
     "cause": "fails to pass on a value returned by an earlier call",
     "cause_share": 1.0,
@@ -485,9 +485,9 @@
      {
       "value": 4.0,
       "label": "7-call plans, no values to carry",
-      "n_pass": 28,
-      "n_scored": 36,
-      "n_error": 9
+      "n_pass": 30,
+      "n_scored": 38,
+      "n_error": 10
      },
      {
       "value": 6.0,
@@ -519,15 +519,15 @@
     "label": "Executes step by step when tool names look alike (sees each error)",
     "province": "III \u00b7 Interactive execution",
     "status": "HOLDS",
-    "headline": "Holds through 25-call plans: 30/31 pass across every tested level",
+    "headline": "Holds through 25-call plans: 43/44 pass across every tested level",
     "boundary": null,
     "held_through": "25-call plans",
-    "n_pass": 30,
-    "n_scored": 31,
-    "n_error": 19,
+    "n_pass": 43,
+    "n_scored": 44,
+    "n_error": 21,
     "ci": [
-     0.838,
-     0.994
+     0.882,
+     0.996
     ],
     "confidence": "B",
     "p_value": null,
@@ -540,37 +540,37 @@
      {
       "value": 4.0,
       "label": "7-call plans",
-      "n_pass": 6,
-      "n_scored": 6,
+      "n_pass": 9,
+      "n_scored": 9,
       "n_error": 9
      },
      {
       "value": 8.0,
       "label": "11-call plans",
-      "n_pass": 5,
-      "n_scored": 5,
-      "n_error": 0
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 1
      },
      {
       "value": 11.0,
       "label": "14-call plans",
-      "n_pass": 5,
-      "n_scored": 5,
+      "n_pass": 8,
+      "n_scored": 8,
       "n_error": 0
      },
      {
       "value": 15.0,
       "label": "18-call plans",
-      "n_pass": 5,
-      "n_scored": 5,
+      "n_pass": 8,
+      "n_scored": 8,
       "n_error": 0
      },
      {
       "value": 18.0,
       "label": "21-call plans",
-      "n_pass": 4,
-      "n_scored": 5,
-      "n_error": 0
+      "n_pass": 6,
+      "n_scored": 7,
+      "n_error": 1
      },
      {
       "value": 22.0,
@@ -609,9 +609,9 @@
     "label": "Recovers when a tool call fails mid-plan (transient error, retry works)",
     "province": "III \u00b7 Interactive execution",
     "status": "BREAKS",
-    "headline": "Breaks at 12-call plans, 4 values to carry: 0/10 pass (was 16/16 at 7-call plans, no values to carry)",
+    "headline": "Breaks at 12-call plans, 4 values to carry: 0/10 pass (was 7/7 at 8-call plans, no values to carry)",
     "boundary": "12-call plans, 4 values to carry",
-    "held_through": "7-call plans, no values to carry",
+    "held_through": "8-call plans, no values to carry",
     "n_pass": 0,
     "n_scored": 10,
     "n_error": 0,
@@ -620,7 +620,7 @@
      0.278
     ],
     "confidence": "B",
-    "p_value": 1.882624039038092e-07,
+    "p_value": 1.9312226900259209e-10,
     "cause_code": "invalid_ticket",
     "cause": "fails to pass on a value returned by an earlier call",
     "cause_share": 1.0,
@@ -635,22 +635,29 @@
      {
       "value": 4.0,
       "label": "7-call plans, no values to carry",
-      "n_pass": 16,
-      "n_scored": 16,
+      "n_pass": 30,
+      "n_scored": 30,
       "n_error": 9
+     },
+     {
+      "value": 5.0,
+      "label": "8-call plans, no values to carry",
+      "n_pass": 7,
+      "n_scored": 7,
+      "n_error": 2
      },
      {
       "value": 6.0,
       "label": "9-call plans, 1 value to carry",
       "n_pass": 5,
       "n_scored": 10,
-      "n_error": 0
+      "n_error": 3
      },
      {
       "value": 8.0,
       "label": "11-call plans, 3 values to carry",
-      "n_pass": 22,
-      "n_scored": 63,
+      "n_pass": 24,
+      "n_scored": 70,
       "n_error": 0
      },
      {
@@ -669,17 +676,17 @@
     "label": "Traces a program when variable names look alike",
     "province": "IV \u00b7 Code tracing",
     "status": "HOLDS",
-    "headline": "Holds through 42-statement programs: 28/28 pass across every tested level",
+    "headline": "Holds through 42-statement programs: 40/40 pass across every tested level",
     "boundary": null,
     "held_through": "42-statement programs",
-    "n_pass": 28,
-    "n_scored": 28,
+    "n_pass": 40,
+    "n_scored": 40,
     "n_error": 0,
     "ci": [
-     0.879,
+     0.912,
      1.0
     ],
-    "confidence": "B",
+    "confidence": "A",
     "p_value": null,
     "cause_code": null,
     "cause": null,
@@ -690,29 +697,29 @@
      {
       "value": 26.0,
       "label": "28-statement programs",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 10,
+      "n_scored": 10,
       "n_error": 0
      },
      {
       "value": 32.0,
       "label": "34-statement programs",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 10,
+      "n_scored": 10,
       "n_error": 0
      },
      {
       "value": 37.0,
       "label": "39-statement programs",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 10,
+      "n_scored": 10,
       "n_error": 0
      },
      {
       "value": 40.0,
       "label": "42-statement programs",
-      "n_pass": 7,
-      "n_scored": 7,
+      "n_pass": 10,
+      "n_scored": 10,
       "n_error": 0
      }
     ],
@@ -724,14 +731,14 @@
     "label": "Traces a program through semantic traps (aliasing, closures, off-by-one, modulo, defaults)",
     "province": "IV \u00b7 Code tracing",
     "status": "HOLDS",
-    "headline": "Holds through 6 of 6 traps active: 56/56 pass across every tested level",
+    "headline": "Holds through 6 of 6 traps active: 80/80 pass across every tested level",
     "boundary": null,
     "held_through": "6 of 6 traps active",
-    "n_pass": 56,
-    "n_scored": 56,
+    "n_pass": 80,
+    "n_scored": 80,
     "n_error": 0,
     "ci": [
-     0.936,
+     0.954,
      1.0
     ],
     "confidence": "A",
@@ -745,15 +752,15 @@
      {
       "value": 0.0,
       "label": "0 of 6 traps active",
-      "n_pass": 28,
-      "n_scored": 28,
+      "n_pass": 40,
+      "n_scored": 40,
       "n_error": 0
      },
      {
       "value": 6.0,
       "label": "6 of 6 traps active",
-      "n_pass": 28,
-      "n_scored": 28,
+      "n_pass": 40,
+      "n_scored": 40,
       "n_error": 0
      }
     ],
@@ -761,24 +768,58 @@
     "short": "semantic traps in code"
    },
    {
-    "key": "consistency",
-    "label": "Gets the same task right every time (pass^k)",
-    "province": "Reliability",
-    "status": "NOT TESTED",
-    "headline": "Not tested yet",
+    "key": "code_hunt",
+    "label": "Stays correct on small rewrites and adversarial programs",
+    "province": "IV \u00b7 Code tracing",
+    "status": "HOLDS",
+    "headline": "100% correct (183/183)",
     "boundary": null,
     "held_through": null,
-    "n_pass": 0,
-    "n_scored": 0,
+    "n_pass": 183,
+    "n_scored": 183,
     "n_error": 0,
-    "ci": null,
-    "confidence": null,
+    "ci": [
+     0.979,
+     1.0
+    ],
+    "confidence": "A",
     "p_value": null,
     "cause_code": null,
     "cause": null,
     "cause_share": null,
     "cause_n": 0,
     "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "rewritten and adversarial programs"
+   },
+   {
+    "key": "consistency",
+    "label": "Gets the same task right every time (pass^k)",
+    "province": "Reliability",
+    "status": "DEGRADES",
+    "headline": "58% correct (34/59)",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 34,
+    "n_scored": 59,
+    "n_error": 1,
+    "ci": [
+     0.449,
+     0.694
+    ],
+    "confidence": "B",
+    "p_value": null,
+    "cause_code": "unknown_tool",
+    "cause": "calls a tool that does not exist -- usually a misspelled look-alike of a real tool name",
+    "cause_share": 1.0,
+    "cause_n": 25,
+    "exemplar": {
+     "record_id": "552de0d55c244e7fb31f2d4f6530e3e2",
+     "run_id": "camp-consistency-gemma4qat-001",
+     "detail": "unknown_tool:step=2:set_dep_th_flag_1",
+     "excerpt": "[ {\"tool\": \"set_-flag_0\", \"args\": {\"flag\": \"flag_0\"}}, {\"tool\": \"set_dep-th_flag_0\", \"args\": {\"flag\": \"depth_flag_0\"}}, {\"tool\": \"set_dep_th_flag_1\", \"args\": {\"flag\": \"depth_flag_1\"}}, {\"tool\": \"set_dep_th_flag_2\", \"args\": {\"flag\": \"depth_flag_2\"}}, {\"tool\": \"set_dep_th_flag_3\", \"args\": {\"flag\": \"depth_flag_3\"}}, {\"tool\": \"set_depth_flag_o4\", \"args\": {\"flag\": \"depth_flag_4\"}}, {\"tool\": \"set_dep-th"
+    },
     "curve": [],
     "note": "Rate shown is pass^1 over repeats of the same tasks (X.consistency campaign); pass^k needs per-task grouping and is in results/consistency/<run_id>.json. Earlier hand measurement: Nano 63% single-try vs 17% on all 5 tries.",
     "short": "consistency"
@@ -1587,6 +1628,29 @@
     "short": "semantic traps in code"
    },
    {
+    "key": "code_hunt",
+    "label": "Stays correct on small rewrites and adversarial programs",
+    "province": "IV \u00b7 Code tracing",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "rewritten and adversarial programs"
+   },
+   {
     "key": "consistency",
     "label": "Gets the same task right every time (pass^k)",
     "province": "Reliability",
@@ -2214,6 +2278,29 @@
     "short": "semantic traps in code"
    },
    {
+    "key": "code_hunt",
+    "label": "Stays correct on small rewrites and adversarial programs",
+    "province": "IV \u00b7 Code tracing",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "rewritten and adversarial programs"
+   },
+   {
     "key": "consistency",
     "label": "Gets the same task right every time (pass^k)",
     "province": "Reliability",
@@ -2731,6 +2818,29 @@
     "curve": [],
     "note": "",
     "short": "semantic traps in code"
+   },
+   {
+    "key": "code_hunt",
+    "label": "Stays correct on small rewrites and adversarial programs",
+    "province": "IV \u00b7 Code tracing",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "rewritten and adversarial programs"
    },
    {
     "key": "consistency",
@@ -3487,6 +3597,29 @@
     "short": "semantic traps in code"
    },
    {
+    "key": "code_hunt",
+    "label": "Stays correct on small rewrites and adversarial programs",
+    "province": "IV \u00b7 Code tracing",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "rewritten and adversarial programs"
+   },
+   {
     "key": "consistency",
     "label": "Gets the same task right every time (pass^k)",
     "province": "Reliability",
@@ -3514,21 +3647,21 @@
  {
   "model": "openai/gpt-oss-120b",
   "name": "gpt-oss-120b",
-  "verdict": "gpt-oss-120b: holds on the 1 capability tested.",
+  "verdict": "gpt-oss-120b: holds on all 4 capabilities tested.",
   "rows": [
    {
     "key": "state",
     "label": "Tracks where things actually are",
     "province": "I \u00b7 Narrative",
     "status": "HOLDS",
-    "headline": "100% correct (30/30)",
+    "headline": "100% correct (60/60)",
     "boundary": null,
     "held_through": "tested up to chain length 30, distractor events 2",
-    "n_pass": 30,
-    "n_scored": 30,
+    "n_pass": 60,
+    "n_scored": 60,
     "n_error": 0,
     "ci": [
-     0.886,
+     0.94,
      1.0
     ],
     "confidence": "B",
@@ -3546,21 +3679,29 @@
     "key": "order",
     "label": "Recovers the true order of events",
     "province": "I \u00b7 Narrative",
-    "status": "NOT TESTED",
-    "headline": "Not tested yet",
+    "status": "HOLDS",
+    "headline": "99% correct (79/80)",
     "boundary": null,
-    "held_through": null,
-    "n_pass": 0,
-    "n_scored": 0,
+    "held_through": "tested up to chain length 20, scramble 1.0, distractor events 30",
+    "n_pass": 79,
+    "n_scored": 80,
     "n_error": 0,
-    "ci": null,
-    "confidence": null,
+    "ci": [
+     0.933,
+     0.998
+    ],
+    "confidence": "B",
     "p_value": null,
-    "cause_code": null,
-    "cause": null,
-    "cause_share": null,
-    "cause_n": 0,
-    "exemplar": null,
+    "cause_code": "other_wrong_answer",
+    "cause": "gives a wrong answer that matches no known shortcut",
+    "cause_share": 1.0,
+    "cause_n": 1,
+    "exemplar": {
+     "record_id": "530f95d0138b43d8872c546350f32cef",
+     "run_id": "camp-full_map-gpt-oss-120b-001/order",
+     "detail": null,
+     "excerpt": "second"
+    },
     "curve": [],
     "note": "",
     "short": "event order"
@@ -3569,21 +3710,29 @@
     "key": "belief",
     "label": "Tracks what a person believes from what they saw",
     "province": "I \u00b7 Narrative",
-    "status": "NOT TESTED",
-    "headline": "Not tested yet",
+    "status": "HOLDS",
+    "headline": "97% correct (154/159)",
     "boundary": null,
-    "held_through": null,
-    "n_pass": 0,
-    "n_scored": 0,
-    "n_error": 0,
-    "ci": null,
-    "confidence": null,
+    "held_through": "tested up to chain length 10, scramble 1.0, pronoun pressure 5, distractor events 20, witness cutoff 0.9",
+    "n_pass": 154,
+    "n_scored": 159,
+    "n_error": 1,
+    "ci": [
+     0.929,
+     0.986
+    ],
+    "confidence": "A",
     "p_value": null,
-    "cause_code": null,
-    "cause": null,
-    "cause_share": null,
-    "cause_n": 0,
-    "exemplar": null,
+    "cause_code": "final_true_state",
+    "cause": "answers where the object really is, not where the person believes it is",
+    "cause_share": 0.6,
+    "cause_n": 5,
+    "exemplar": {
+     "record_id": "89641036c9a3481b97f5c86e309ced5e",
+     "run_id": "camp-full_map-gpt-oss-120b-001/belief",
+     "detail": null,
+     "excerpt": "print room"
+    },
     "curve": [],
     "note": "",
     "short": "belief tracking"
@@ -3592,21 +3741,29 @@
     "key": "adversarial_belief",
     "label": "Belief tracking in deliberately misleading stories",
     "province": "I \u00b7 Narrative",
-    "status": "NOT TESTED",
-    "headline": "Not tested yet",
+    "status": "HOLDS",
+    "headline": "98% correct (41/42)",
     "boundary": null,
-    "held_through": null,
-    "n_pass": 0,
-    "n_scored": 0,
+    "held_through": "tested up to chain length 10, scramble 0.8, distractor events 2",
+    "n_pass": 41,
+    "n_scored": 42,
     "n_error": 0,
-    "ci": null,
-    "confidence": null,
+    "ci": [
+     0.877,
+     0.996
+    ],
+    "confidence": "B",
     "p_value": null,
-    "cause_code": null,
-    "cause": null,
-    "cause_share": null,
-    "cause_n": 0,
-    "exemplar": null,
+    "cause_code": "final_true_state",
+    "cause": "answers where the object really is, not where the person believes it is",
+    "cause_share": 1.0,
+    "cause_n": 1,
+    "exemplar": {
+     "record_id": "6f63a9617cff4828a9d17192bb1f882f",
+     "run_id": "camp-full_map-gpt-oss-120b-001/adversarial_belief",
+     "detail": null,
+     "excerpt": "workshop"
+    },
     "curve": [],
     "note": "",
     "short": "misleading stories"
@@ -3840,6 +3997,29 @@
     "curve": [],
     "note": "",
     "short": "semantic traps in code"
+   },
+   {
+    "key": "code_hunt",
+    "label": "Stays correct on small rewrites and adversarial programs",
+    "province": "IV \u00b7 Code tracing",
+    "status": "NOT TESTED",
+    "headline": "Not tested yet",
+    "boundary": null,
+    "held_through": null,
+    "n_pass": 0,
+    "n_scored": 0,
+    "n_error": 0,
+    "ci": null,
+    "confidence": null,
+    "p_value": null,
+    "cause_code": null,
+    "cause": null,
+    "cause_share": null,
+    "cause_n": 0,
+    "exemplar": null,
+    "curve": [],
+    "note": "",
+    "short": "rewritten and adversarial programs"
    },
    {
     "key": "consistency",

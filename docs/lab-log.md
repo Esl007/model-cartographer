@@ -3500,6 +3500,39 @@ line is grade B/C until replicated):
 - As with Super, **feedback helps binding**: 0/7 single-shot at 17-call look-alike plans vs 60–80% interactive.
 - **Caveat:** Province III used the text protocol, so it is not directly comparable to Nemotron's native runs.
 
+## 2026-10-05 — Code tracing round 2 on Gemma 4 QAT (Modal): 384/384, reading is solved within the subset
+
+**Build** (`749c21a`, spec `docs/spec-code-hunt.md`, evidence `docs/research/code-reading-failure-modes.md`):
+seven new structural dials, each with its own wrong-belief foil and a load-bearing guarantee:
+`chain_depth` (dependent updates on the queried value 5→20, `stale_read`), `stack_depth` (alias,
+`+=` vs `= +`, slice copy, mutating parameter on ONE list; four foils), `loop_branch` + `while_on`
+(`predicate_frozen`), `sign_chain`, `index_math` (`slice_end_inclusive`), `misleading_comments`
+(`comment_value`, neutral-comment control); adversarial program selection; a failure hunt that
+rewrites passing programs (meaning-preserving) and shrinks stable failures to minimal programs.
+Default dials byte-identical to before; CPython agreement on 3,000 programs incl. `while`.
+
+**Run** (one L40S, 0.85 GPU-h incl. 6.5 min cold start; parallelism 4; 0 ERROR, 0 truncation):
+
+| run | selection | scored | pass |
+|---|---|---|---|
+| `camp-code-stack-gemma4qat-001/002` | random / adversarial | 33 + 33 | **66/66** |
+| `camp-code-depth-gemma4qat-001/002` | random / adversarial | 33 + 33 | **66/66** |
+| `camp-code-gotcha-gemma4qat-001/002` | random / adversarial | 33 + 33 | **66/66** |
+| `camp-code-hunt-gemma4qat-001` | 40 programs + 143 rewrites, 11 configs | 183 | **183/183**, 0 findings |
+
+Every ray: pass curve 1.0 at all eight levels, early stop after 33 of 140 trials. Smoke at t = 1
+on each ray also passed (max 1,217 output tokens, so no cap pressure).
+
+**Reading:** with the earlier 300+ trials, Gemma 4 31B QAT has now passed ~700 compact
+code-tracing trials spanning six independent traps, stacked list semantics, computed `while`
+loops, 20-deep update chains, declared counterfactual dialects, look-alike names, misleading
+comments and 143 meaning-preserving rewrites. Within our Python subset and ≤ 33 statements,
+**code reading is solved for this model.** This is a certified null in the sense that matters:
+the instrument demonstrably breaks the planted fakes and broke Gemma 3 on the same mechanisms
+(aliasing, negative modulo), so the absence of failure is the model, not the test.
+Consequence: the coding boundary for Gemma 4 must be looked for in code *writing*
+(Province V), not in more reading.
+
 ## Template for new entries
 
 ```
