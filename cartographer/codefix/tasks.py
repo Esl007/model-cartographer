@@ -342,6 +342,35 @@ def make_repair_task(params: CodeFixParams, seed: int) -> RepairTask:
 
 inject_bugs = make_repair_task  # the injection loop lives in make_repair_task (sites need inputs)
 
+PAIR_TRACE_TARGET = "v_pairtrace_result"
+
+
+def _lit(v):
+    from ..codeworld.model import Const
+
+    if isinstance(v, (list, tuple)):
+        return ListLit(tuple(_lit(x) for x in v))
+    return Const(v)
+
+
+def trace_program(task: RepairTask) -> Program:
+    """The paired /trace query as a round-2 `codeworld` program
+    (docs/spec-province-v-ambiguities.md A1.1): the BUGGY function plus one
+    top-level `result = solve(<visible input>)`, queried for `result`'s final
+    value. Rendered with `codeworld.render.render` -- the exact path
+    `CodeTraceEvaluator` uses -- so it carries no expected output, no bug /
+    repair framing and no misleading-comment note (those live only in
+    `render_repair_prompt` / `RepairTask.buggy_source`)."""
+    from dataclasses import replace
+
+    from ..codeworld.model import Assign, Call, Query
+
+    entry = task.buggy.entry or "solve"
+    sid = 1 + max((getattr(s, "sid", 0) or 0 for s in iter_stmts(task.buggy.body)), default=0)
+    call = Assign(sid, PAIR_TRACE_TARGET, Call(entry, tuple(_lit(a) for a in task.visible_input)))
+    return replace(task.buggy, body=tuple(task.buggy.body) + (call,), query=Query("final_value", PAIR_TRACE_TARGET),
+                   comments=())
+
 
 # -- V-c spec text ---------------------------------------------------------------------
 
@@ -421,5 +450,5 @@ def make_write_task(params: CodeFixParams, seed: int) -> WriteTask:
 
 
 __all__ = ["CodeFixParams", "EDGE_CASES", "RepairTask", "WriteTask", "code_params_for", "edge_inputs", "execute",
-           "inject_bugs", "input_pool", "make_repair_task", "make_write_task", "norm", "outputs", "reference_program",
+           "inject_bugs", "input_pool", "trace_program", "make_repair_task", "make_write_task", "norm", "outputs", "reference_program",
            "render_function", "render_spec", "summary_phrases"]

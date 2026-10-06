@@ -27,6 +27,12 @@ answer is not swallowed as `outside_subset`):
   * `break` / `continue` inside a `for` / `while` body (also nested inside an
     `if` there); anywhere else -> `unknown` (`break_outside_loop` /
     `continue_outside_loop`).
+  * the deterministic builtins `sum(xs)`, `min(..)`, `max(..)` (one
+    iterable or 2+ positional args) and `abs(x)` (`model.Builtin`, evaluated
+    with CPython's own semantics; empty `min` / `max` is a runtime
+    `value_error`). No keywords (`key=`, `default=`, sum's `start`); every
+    other builtin call (`sorted`, `range` outside a `for` header, ...) is
+    still `builtin_call`.
 
 Unbounded `while` (`while_true_unbounded`, a conservative syntactic check;
 the interpreter's step cap stays the safety net for everything it lets
@@ -54,6 +60,7 @@ import builtins
 from dataclasses import dataclass
 
 from cartographer.codeworld.model import (
+    BUILTIN_FUNCS,
     METHODS,
     Assign,
     AugAssign,
@@ -72,6 +79,7 @@ from cartographer.codeworld.model import (
     If,
     IfExp,
     Index,
+    Builtin,
     Len,
     ListLit,
     MethodCall,
@@ -99,7 +107,9 @@ CONSTRUCTS = (
 
 MAX_SOURCE_CHARS = 50_000
 _BUILTIN_NAMES = frozenset(dir(builtins))
-_OWN_BUILTINS = frozenset({"len", "print", "range"})  # the only builtins the subset has
+_OWN_BUILTINS = frozenset({"len", "print", "range"})  # builtins with their own syntax in the subset
+# deterministic builtins evaluated with CPython semantics (model.Builtin); every other builtin is rejected
+_ARITY = {"sum": (1, 1), "min": (1, None), "max": (1, None), "abs": (1, 1)}
 _BINOPS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.FloorDiv: "//", ast.Mod: "%"}
 _AUGOPS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*"}
 _CMPOPS = {ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">=",
@@ -505,6 +515,12 @@ class _Converter:
             if len(e.args) != 1:
                 raise _bad("unknown", e, "len_arity")
             return Len(self.expr(e.args[0], scope))
+        if name in BUILTIN_FUNCS and name not in self.bound and name not in self.def_names:
+            self._call_args(e)
+            lo, hi = _ARITY[name]
+            if len(e.args) < lo or (hi is not None and len(e.args) > hi):
+                raise _bad("unknown", e, f"{name}_arity")
+            return Builtin(name, tuple(self.expr(a, scope) for a in e.args))
         if name not in self.def_names:  # input, open, __import__, eval, exec, getattr, range(...), sum, ...
             raise _bad("builtin_call", e, name)
         self._call_args(e)

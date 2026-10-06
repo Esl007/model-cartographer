@@ -494,7 +494,7 @@ def _inputs(seed: int) -> list[tuple]:
 
 
 _PY_KINDS = {TypeError: "type_error", IndexError: "index_error", KeyError: "key_error",
-             ZeroDivisionError: "operand_error"}
+             ZeroDivisionError: "operand_error", ValueError: "value_error"}
 
 
 def _cpython_call(src: str, args: tuple):
@@ -648,3 +648,93 @@ def test_while_true_with_break_is_accepted_and_runs():
     with _pt.raises(SubsetViolation) as e:
         parse_program(src2, entry="solve")
     assert e.value.construct == "while_true_unbounded"
+
+
+# --- deterministic builtins sum / min / max / abs (spec-province-v-ambiguities §B) ----------
+
+
+def _builtin_expr(r, depth: int = 0) -> str:
+    """A random int/bool/list expression built from sum/min/max/abs over the
+    solve(xs, ys, a, b) parameters (ints, bools, lists of ints / bools)."""
+    lists = ["xs", "ys", "xs[1:]", "[a, b]", "[]", "[True, a]", "xs + ys"]
+    ints = ["a", "b", "True", "False", "-3", "0", "len(xs)", "a - b"]
+    if depth < 2 and r.random() < 0.4:
+        ints.append(_builtin_expr(r, depth + 1))
+    f = r.choice(("sum", "min", "max", "abs"))
+    if f == "sum":
+        return f"sum({r.choice(lists)})"
+    if f == "abs":
+        return f"abs({r.choice(ints)})"
+    if r.random() < 0.5:
+        return f"{f}({r.choice(lists)})"
+    return f"{f}(" + ", ".join(r.choice(ints) for _ in range(r.randint(2, 4))) + ")"
+
+
+def _builtin_program(seed: int) -> str:
+    r = _random.Random(10_000 + seed)
+    lines = ["def solve(xs, ys, a, b):", "    acc = 0", "    out = []"]
+    for _ in range(r.randint(1, 4)):
+        e = _builtin_expr(r)
+        form = r.randrange(4)
+        if form == 0:
+            lines.append(f"    acc += {e}")
+        elif form == 1:
+            lines.append(f"    out.append({e})")
+        elif form == 2:
+            lines += ["    for x in xs:", f"        if x > {e}:", "            acc += x"]
+        else:
+            lines.append(f"    ys = ys + [{e}]")
+    lines.append(r.choice(["    return acc", "    return out", "    return [acc, out]", f"    return {_builtin_expr(r)}"]))
+    return "\n".join(lines) + "\n"
+
+
+def _builtin_inputs(seed: int) -> list[tuple]:
+    r = _random.Random(seed * 104729 + 3)
+    out = []
+    for _ in range(4):
+        xs = [r.randint(-5, 9) for _ in range(r.randint(0, 5))]
+        ys = [r.choice([True, False, r.randint(-4, 4)]) for _ in range(r.randint(0, 4))]
+        out.append((xs, ys, r.choice([True, False, r.randint(-7, 7)]), r.randint(-7, 7)))
+    return out
+
+
+def test_builtins_sum_min_max_abs_agree_with_cpython_on_400_programs():
+    n_calls = n_err = 0
+    used: dict[str, int] = {}
+    for seed in range(400):
+        src = _builtin_program(seed)
+        parsed = parse_program(src, keep_names=True, entry="solve")
+        assert render_source(parsed) == src, src  # renders back byte for byte
+        for args in _builtin_inputs(seed):
+            _agree(src, src, args)  # value and type-strict equality (True != 1), or same error kind
+            n_calls += 1
+            n_err += _cpython_call(src, args)[1] is not None
+        for f in ("sum(", "min(", "max(", "abs("):
+            used[f] = used.get(f, 0) + (f in src)
+    assert n_calls == 1600 and n_err < 0.5 * n_calls, n_err
+    assert min(used.values()) >= 100, used
+
+
+@pytest.mark.parametrize("src,want", [
+    ("def solve(xs):\n    return sum([True, True, False])\n", 2),
+    ("def solve(xs):\n    return abs(True)\n", 1),
+    ("def solve(xs):\n    return max(True, 1)\n", True),
+    ("def solve(xs):\n    return min(0, False)\n", 0),
+    ("def solve(xs):\n    return min(3, 1, 2)\n", 1),
+    ("def solve(xs):\n    return max(xs)\n", 4),
+])
+def test_builtin_edge_semantics_are_cpython(src, want):
+    res = call_entry(parse_program(src, entry="solve"), ([4, -2],))
+    assert res.error is None and type(res.value) is type(want) and res.value == want
+
+
+def test_builtin_empty_min_max_is_a_runtime_error_and_other_builtins_stay_rejected():
+    for f in ("min", "max"):
+        res = call_entry(parse_program(f"def solve(xs):\n    return {f}(xs)\n", entry="solve"), ([],))
+        assert res.value is None and res.error.startswith("value_error")
+    for src, construct in [("x = sorted([1])", "builtin_call"), ("x = sum([1], 5)", "unknown"),
+                           ("x = max([1], default=0)", "keyword_argument"), ("x = abs()", "unknown"),
+                           ("x = round(1)", "builtin_call"), ("f = sum", "builtin_call")]:
+        with pytest.raises(SubsetViolation) as e:
+            parse_program(src)
+        assert e.value.construct == construct, src

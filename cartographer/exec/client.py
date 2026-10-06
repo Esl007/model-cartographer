@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -127,11 +128,58 @@ class RetryPolicy:
 
 
 _RETRYABLE_STATUSES = (429, 500, 502, 503, 504)
+_RETRYABLE_5XX = (500, 502, 503, 504)
 
 # Sentinel status used internally to signal a socket timeout through the
 # same (status, body, headers) contract as _post, without conflating it
 # with a real HTTP status code.
 _TIMEOUT_STATUS = -1
+# Sentinel for a connection-level failure (DNS, refused, reset before any
+# response arrived). Distinct from a timeout: no generation was in flight.
+_CONNECT_ERROR_STATUS = -2
+
+# Read timeout (seconds) for every hosted provider (Groq/Nebius/OpenRouter).
+# Pinned by tests -- do not raise globally.
+DEFAULT_READ_TIMEOUT_S = 60.0
+# Self-hosted vLLM on Modal (one L40S): long generations legitimately take
+# minutes (a 16k-token reply measured ~318 s), so the cap scales with
+# max_tokens at a conservative decode rate, with a hard floor.
+MODAL_TIMEOUT_BASE_S = 60.0
+MODAL_TIMEOUT_TOKENS_PER_S = 25.0
+MODAL_TIMEOUT_FLOOR_S = 360.0
+
+
+def read_timeout_for(provider: "Provider", max_tokens: float | None) -> float:
+    """HTTP read timeout for one chat request.
+
+    modal:  max(360, 60 + max_tokens / 25)
+    others: 60 (unchanged)
+    """
+    if provider.name == "modal":
+        derived = MODAL_TIMEOUT_BASE_S + float(max_tokens or 0) / MODAL_TIMEOUT_TOKENS_PER_S
+        return max(MODAL_TIMEOUT_FLOOR_S, derived)
+    return DEFAULT_READ_TIMEOUT_S
+
+
+def _retry_decision(status: int, attempt: int, policy: "RetryPolicy") -> bool:
+    """Whether to re-send the identical request after attempt `attempt`
+    (0-based) ended with `status`. Explicit failure classes:
+
+    - read timeout (_TIMEOUT_STATUS): NEVER retried. The server was likely
+      mid-generation; re-sending at the same cap just doubles the spend.
+    - before-response failures (connection error, 5xx): retried at most
+      ONCE -- no generation output was received, so one re-send is cheap.
+    - 429: rate-limit pacing, retried up to policy.max_retries (honoring
+      Retry-After), as before.
+    - anything else: final.
+    """
+    if status == _TIMEOUT_STATUS:
+        return False
+    if status == _CONNECT_ERROR_STATUS or status in _RETRYABLE_5XX:
+        return attempt < min(1, policy.max_retries)
+    if status == 429:
+        return attempt < policy.max_retries
+    return False
 
 
 def _post(
@@ -160,8 +208,12 @@ def _post(
         if isinstance(exc, urllib.error.URLError) and not isinstance(
             exc.reason, (socket.timeout, TimeoutError)
         ):
-            raise
+            # Connection-level failure before any response: classified
+            # separately so the retry policy can re-send it once.
+            return _CONNECT_ERROR_STATUS, repr(exc.reason).encode()[:200], {}
         return _TIMEOUT_STATUS, b"", {}
+    except ConnectionError as exc:
+        return _CONNECT_ERROR_STATUS, repr(exc).encode()[:200], {}
 
 
 def _get(
@@ -236,9 +288,26 @@ class Client:
         self._api_key = api_key
         self._retry_policy = retry_policy or RetryPolicy()
         self._sleep = sleep
+        # Per-thread attempt count of the last request (Client is shared
+        # across campaign worker threads).
+        self._tls = threading.local()
 
     def __repr__(self) -> str:
         return f"Client(provider={self._provider.name!r}, api_key=<redacted>)"
+
+    def _transport_error(self, kind: str, timeout: float, latency_ms: float, raw: bytes) -> str:
+        """Error string for a transport failure. Lands verbatim in the
+        ERROR note (`;detail=api_error;error=...`), so it carries the cap,
+        attempt count and elapsed seconds -- enough to tell a read timeout
+        from other api errors. Starts with `kind` ("timeout"/"connect_error").
+        No `;` or `=` so it can't break note parsing."""
+        msg = (
+            f"{kind} read_timeout:{timeout:.0f}s attempts:{getattr(self._tls, 'attempts', 1)}"
+            f" elapsed:{latency_ms / 1000.0:.1f}s"
+        )
+        if kind == "connect_error" and raw:
+            msg += " " + raw.decode("utf-8", "replace").replace(";", ",").replace("=", ":")[:120]
+        return msg
 
     @property
     def provider(self) -> Provider:
@@ -262,7 +331,8 @@ class Client:
         return url, headers, body
 
     def _post_with_retries(
-        self, url: str, headers: dict[str, str], body: bytes
+        self, url: str, headers: dict[str, str], body: bytes,
+        timeout: float = DEFAULT_READ_TIMEOUT_S,
     ) -> tuple[int, bytes, dict[str, str], str | None]:
         """Perform the POST, retrying on 429/5xx/timeout per `_retry_policy`.
 
@@ -276,17 +346,19 @@ class Client:
         last_raw = b""
         last_headers: dict[str, str] = {}
         timed_out = False
+        self._tls.attempts = 0
 
         while True:
-            status, raw, resp_headers = _post(url, headers, body)
+            status, raw, resp_headers = _post(url, headers, body, timeout=timeout)
+            self._tls.attempts = attempt + 1
             last_status, last_raw, last_headers = status, raw, resp_headers
             timed_out = status == _TIMEOUT_STATUS
 
-            retryable = timed_out or status in _RETRYABLE_STATUSES
+            retryable = timed_out or status == _CONNECT_ERROR_STATUS or status in _RETRYABLE_STATUSES
             if not retryable:
                 return status, raw, resp_headers, None
 
-            if attempt >= policy.max_retries:
+            if not _retry_decision(status, attempt, policy):
                 break
 
             retry_after = _parse_retry_after(resp_headers)
@@ -297,7 +369,12 @@ class Client:
             self._sleep(delay)
             attempt += 1
 
-        error_kind = "timeout" if timed_out else "http_retry_exhausted"
+        if timed_out:
+            error_kind = "timeout"
+        elif last_status == _CONNECT_ERROR_STATUS:
+            error_kind = "connect_error"
+        else:
+            error_kind = "http_retry_exhausted"
         return last_status, last_raw, last_headers, error_kind
 
     def chat(
@@ -358,8 +435,9 @@ class Client:
             payload["tool_choice"] = "auto"
         body = json.dumps(payload).encode("utf-8")
 
+        timeout = read_timeout_for(self._provider, max_tokens)
         start = time.monotonic()
-        status, raw, _headers, error_kind = self._post_with_retries(url, headers, body)
+        status, raw, _headers, error_kind = self._post_with_retries(url, headers, body, timeout)
         latency_ms = (time.monotonic() - start) * 1000.0
 
         def failed(error: str) -> ToolChatResult:
@@ -368,8 +446,8 @@ class Client:
                 latency_ms=latency_ms, error=error,
             )
 
-        if error_kind == "timeout":
-            return failed("timeout")
+        if error_kind in ("timeout", "connect_error"):
+            return failed(self._transport_error(error_kind, timeout, latency_ms, raw))
         if status < 200 or status >= 300:
             return failed(f"http {status}: {raw[:200]!r}")
         try:
@@ -408,17 +486,18 @@ class Client:
     ) -> ChatResult:
         url, headers, body = self._build_request(model, prompt, max_tokens, temperature)
 
+        timeout = read_timeout_for(self._provider, max_tokens)
         start = time.monotonic()
-        status, raw, resp_headers, error_kind = self._post_with_retries(url, headers, body)
+        status, raw, resp_headers, error_kind = self._post_with_retries(url, headers, body, timeout)
         latency_ms = (time.monotonic() - start) * 1000.0
 
-        if error_kind == "timeout":
+        if error_kind in ("timeout", "connect_error"):
             return ChatResult(
                 text="",
                 tokens_in=0,
                 tokens_out=0,
                 latency_ms=latency_ms,
-                error="timeout",
+                error=self._transport_error(error_kind, timeout, latency_ms, raw),
             )
 
         if status < 200 or status >= 300:

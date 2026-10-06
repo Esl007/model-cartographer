@@ -51,6 +51,8 @@ def _classify(e: BaseException) -> str:
         return "key_error"
     if isinstance(cause, TypeError):
         return "type_error"
+    if isinstance(cause, ValueError):
+        return "value_error"
     msg = str(e)
     if "wrong number of arguments" in msg:
         return "arity"

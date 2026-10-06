@@ -2,7 +2,7 @@
  {
   "model": "gemma-4-31b-it-qat-w4a16-ct",
   "name": "gemma-4-31b-it-qat-w4a16-ct",
-  "verdict": "gemma-4-31b-it-qat-w4a16-ct: breaks on step-by-step execution with values to carry (11-call plans, 3 values to carry); breaks on recovering from a failed call (12-call plans, 4 values to carry); slips on belief tracking; slips on misleading stories; slips on long plans with look-alike tool names (16-call plans); slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks; slips on consistency. Holds on 8 of 16 capabilities tested.",
+  "verdict": "gemma-4-31b-it-qat-w4a16-ct: breaks on step-by-step execution with values to carry (11-call plans, 3 values to carry); breaks on recovering from a failed call (12-call plans, 4 values to carry); breaks on repairing stacked bugs (1 bugs); slips on belief tracking; slips on misleading stories; slips on long plans with look-alike tool names (16-call plans); slips on trap-laden catalogs (4 of 5 traps active); slips on spotting impossible tasks; slips on repairing a bug (0 hidden checks); slips on consistency. Holds on 8 of 18 capabilities tested.",
   "rows": [
    {
     "key": "state",
@@ -797,22 +797,45 @@
     "key": "repair",
     "label": "Fixes a one-bug function when shown a failing example",
     "province": "V \u00b7 Code repair",
-    "status": "NOT TESTED",
-    "headline": "Not tested yet",
-    "boundary": null,
+    "status": "DEGRADES",
+    "headline": "Degrades at 0 hidden checks: 3/5 pass -- already weak at the easiest level tested",
+    "boundary": "0 hidden checks",
     "held_through": null,
-    "n_pass": 0,
-    "n_scored": 0,
+    "n_pass": 3,
+    "n_scored": 5,
     "n_error": 0,
-    "ci": null,
-    "confidence": null,
+    "ci": [
+     0.231,
+     0.882
+    ],
+    "confidence": "C",
     "p_value": null,
-    "cause_code": null,
-    "cause": null,
-    "cause_share": null,
-    "cause_n": 0,
-    "exemplar": null,
-    "curve": [],
+    "cause_code": "wrong_value",
+    "cause": "gives a wrong value that matches no known misreading",
+    "cause_share": 0.38461538461538464,
+    "cause_n": 13,
+    "exemplar": {
+     "record_id": "507c2dc56c724f018400cc6f7ec0053b",
+     "run_id": "camp-code-repair-gemma4qat-001",
+     "detail": "wrong_value",
+     "excerpt": "To fix the bug, we need to analyze the calculation of `cost` step-by-step for the input `solve(-2, [-1, 15])`. 1. `cost = -2`, `values = [-1, 15]` 2. `weight` logic: * Initial `weight = 6`. * Iteration 1 (`e = -1`): `weight < cost` (6 < -2) is False $\\rightarrow$ `weight = cost + 6 = -2 + 6 = 4`. * Iteration 2 (`e = 15`): `weight < cost` (4 < -2) is False $\\rightarrow$ `weight = cost + 6 = -2 + 6 "
+    },
+    "curve": [
+     {
+      "value": 0.0,
+      "label": "0 hidden checks",
+      "n_pass": 3,
+      "n_scored": 5,
+      "n_error": 0
+     },
+     {
+      "value": 4.0,
+      "label": "4 hidden checks",
+      "n_pass": 6,
+      "n_scored": 17,
+      "n_error": 3
+     }
+    ],
     "note": "",
     "short": "repairing a bug"
    },
@@ -820,22 +843,38 @@
     "key": "repair_regressions",
     "label": "Fixes stacked bugs without breaking anything else",
     "province": "V \u00b7 Code repair",
-    "status": "NOT TESTED",
-    "headline": "Not tested yet",
-    "boundary": null,
+    "status": "BREAKS",
+    "headline": "Breaks at 1 bugs: 0/6 pass -- already weak at the easiest level tested",
+    "boundary": "1 bugs",
     "held_through": null,
     "n_pass": 0,
-    "n_scored": 0,
-    "n_error": 0,
-    "ci": null,
-    "confidence": null,
+    "n_scored": 6,
+    "n_error": 4,
+    "ci": [
+     0.0,
+     0.39
+    ],
+    "confidence": "B",
     "p_value": null,
-    "cause_code": null,
-    "cause": null,
-    "cause_share": null,
-    "cause_n": 0,
-    "exemplar": null,
-    "curve": [],
+    "cause_code": "wrong_site",
+    "cause": "edits a different line than the one with the bug",
+    "cause_share": 0.6666666666666666,
+    "cause_n": 6,
+    "exemplar": {
+     "record_id": "8c35bddbbd6a48b791750efd4edc0dd0",
+     "run_id": "camp-code-repair-kinds-gemma4qat-001",
+     "detail": "wrong_site",
+     "excerpt": "To fix the bug, we need to examine how the `offset` variable is calculated, as it is the only value that differs between the actual output and the expected output for the input `solve(2, [5, 7])`. 1. **Current Calculation for `total = 2`**: * `total` is not 6, so it goes to the `else` block: `total = total if total > total else total + 2`. Since `2 > 2` is False, `total` becomes `2 + 2 = 4`. * `of"
+    },
+    "curve": [
+     {
+      "value": 1.0,
+      "label": "1 bugs",
+      "n_pass": 0,
+      "n_scored": 6,
+      "n_error": 4
+     }
+    ],
     "note": "",
     "short": "repairing stacked bugs"
    },

@@ -94,6 +94,19 @@ class Len:
 
 
 @dataclass(frozen=True)
+class Builtin:
+    """A call of a deterministic builtin from BUILTIN_FUNCS (`sum(xs)`,
+    `min(a, b)`, `max(xs)`, `abs(x)`), evaluated with CPython's own semantics.
+    Never generated; parsed model-written code only (Province V)."""
+
+    func: str  # one of BUILTIN_FUNCS
+    args: tuple
+
+
+BUILTIN_FUNCS = ("sum", "min", "max", "abs")
+
+
+@dataclass(frozen=True)
 class IfExp:
     test: object
     body: object
@@ -124,7 +137,7 @@ class MethodCall:
     args: tuple
 
 
-Expr = Union[Const, ListLit, DictLit, Name, BinOp, Compare, BoolOp, Not, Index, Slice, Len, IfExp, Call,
+Expr = Union[Const, ListLit, DictLit, Name, BinOp, Compare, BoolOp, Not, Index, Slice, Len, Builtin, IfExp, Call,
              MethodCall, OpaqueLit]
 
 METHODS = {"append", "pop", "extend", "get", "upper", "replace"}

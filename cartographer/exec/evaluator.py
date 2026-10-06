@@ -1131,7 +1131,7 @@ def run_breaking_point_campaign(
     if evaluator.capped:
         bp_note += ";cost_cap_hit"
     if resample_gate:
-        bp_note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
+        bp_note += ev.note_fields()
         bp.certificate = certify(bp, gate_stable=ev.stable, gate_noise=ev.noise)
     bp.note = f"{bp.note}; {bp_note}" if bp.note else bp_note
     return bp
@@ -1982,7 +1982,7 @@ def run_tool_breaking_point_campaign(
     if evaluator.capped:
         bp_note += ";cost_cap_hit"
     if resample_gate:
-        bp_note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
+        bp_note += ev.note_fields()
         bp.certificate = certify(bp, gate_stable=ev.stable, gate_noise=ev.noise)
     bp.note = f"{bp.note}; {bp_note}" if bp.note else bp_note
     return bp
@@ -2318,7 +2318,7 @@ def run_code_breaking_point_campaign(
                              budget=budget, k_trials=k_trials, parallelism=parallelism, early_stop=early_stop)
     note = f"spent=${evaluator.spent_usd:.4f}" + (";cost_cap_hit" if evaluator.capped else "")
     if resample_gate:
-        note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
+        note += ev.note_fields()
         bp.certificate = certify(bp, gate_stable=ev.stable, gate_noise=ev.noise)
     bp.note = f"{bp.note}; {note}" if bp.note else note
     return bp
@@ -2364,13 +2364,12 @@ class _CodeFixBase:
 
     def __init__(self, client: Client, model: str, store: ResultsStore, run_id: str, cost_cap_usd: float,
                  base=None, max_tokens: int | None = None, max_tokens_retry: int | None = None,
-                 cancel_event: threading.Event | None = None, adversarial: bool = False) -> None:
+                 cancel_event: threading.Event | None = None) -> None:
         from ..codefix.tasks import CodeFixParams
 
         self.client, self.model, self.store, self.run_id = client, model, store, run_id
         self.cost_cap_usd = cost_cap_usd
         self.base = base if base is not None else CodeFixParams(n_statements=18)
-        self.adversarial = adversarial  # accepted for runner symmetry; tasks are not searched
         default_max_tokens, default_max_tokens_retry = default_token_budget(model)
         self.max_tokens = max_tokens if max_tokens is not None else default_max_tokens
         self.max_tokens_retry = max_tokens_retry if max_tokens_retry is not None else default_max_tokens_retry
@@ -2449,13 +2448,6 @@ class _CodeFixBase:
         ))
 
 
-def _trace_prompt(task) -> str:
-    args = ", ".join(repr(a) for a in task.visible_input)
-    return (f"Here is a short Python program.\n\n```python\n{task.buggy_source}```\n\n"
-            f"What does `solve({args})` return? Work through it carefully, then give the final answer on its "
-            "own last line as `ANSWER: <python literal>`.")
-
-
 class CodeRepairEvaluator(_CodeFixBase):
     """V-a / V-b: repair a function with injected bug(s). `pair_trace`: first
     ask the same model to TRACE the buggy function on the visible input
@@ -2469,9 +2461,8 @@ class CodeRepairEvaluator(_CodeFixBase):
         self.pair_trace = pair_trace
 
     def __call__(self, config: dict[str, float], trial_seed: int, run_suffix: str = "") -> bool:
-        from ..codefix.tasks import make_repair_task, norm
-        from ..codefix.verify import render_repair_prompt, verify_submission
-        from ..codeworld.verify import parse_answer
+        from ..codefix.tasks import make_repair_task
+        from ..codefix.verify import render_repair_prompt, render_trace_prompt, verify_submission
 
         params = _apply_fix_config(self.base, {k: v for k, v in config.items() if k in _FIX_KNOWN_KEYS})
         seed = _task_seed(config, trial_seed)
@@ -2487,20 +2478,20 @@ class CodeRepairEvaluator(_CodeFixBase):
                     "hidden_inputs": float(len(task.hidden_inputs))}
         traced = None
         if self.pair_trace:
-            tprompt = _trace_prompt(task)
+            # A1.1: round-2-equivalent trace query -- buggy program + visible input only, rendered by
+            # codeworld.render.render (the CodeTraceEvaluator path), graded by codeworld.verify, sent as a
+            # fresh single-message chat (never the repair conversation).
+            tprog, trendered = render_trace_prompt(task)
+            tprompt = trendered.prompt
             tres, tcost = self._chat(tprompt)
             prot = self._protocol(tres)
-            tdetail = "kind=code_trace;campaign=1;query=final_value;paired=code_repair"
+            tdetail = "kind=code_trace;campaign=1;query=final_value;paired=code_repair;render=round2"
             if prot is not None:
                 tverdict, extra = prot
             else:
-                try:
-                    parsed_ok, val, _ = parse_answer(tres.text)
-                    ok = bool(parsed_ok) and norm(val) == norm(task.visible_wrong)
-                except Exception:
-                    ok = False
-                traced = ok
-                tverdict, extra = (Verdict.PASS if ok else Verdict.FAIL), f";detail={'pass' if ok else 'wrong_value'}"
+                tv = code_verify_answer(tres.text, tprog, trendered)
+                traced = tv.verdict == Verdict.PASS
+                tverdict, extra = tv.verdict, f";detail={'pass' if traced else tv.detail}"
             self._store(params, seed, trial_seed, tprompt, tres, tcost, tverdict, tdetail + extra,
                         dict(realized), "/trace" + run_suffix)
             if traced is not None:
@@ -2586,7 +2577,7 @@ def _run_fix_campaign(evaluator, ray, budget, k_trials, parallelism, early_stop,
                              early_stop=early_stop)
     note = f"spent=${evaluator.spent_usd:.4f}" + (";cost_cap_hit" if evaluator.capped else "")
     if resample_gate:
-        note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
+        note += ev.note_fields()
         bp.certificate = certify(bp, gate_stable=ev.stable, gate_noise=ev.noise)
     bp.note = f"{bp.note}; {note}" if bp.note else note
     return bp
@@ -2597,10 +2588,10 @@ def run_code_repair_campaign(client: Client, store: ResultsStore, run_id: str, m
                              k_trials: int = 7, parallelism: int = 4, max_tokens: int | None = None,
                              cancel_event: threading.Event | None = None, verify: str = "auto",
                              early_stop: bool = False, resample_gate: bool = False, resample_n: int = 3,
-                             adversarial: bool = False, pair_trace: bool = True) -> BreakingPoint:
+                             pair_trace: bool = True) -> BreakingPoint:
     """Escalation over repair tasks; default ray `default_repair_ray`."""
     evaluator = CodeRepairEvaluator(client, model, store, run_id, cost_cap, max_tokens=max_tokens,
-                                    cancel_event=cancel_event, adversarial=adversarial, pair_trace=pair_trace)
+                                    cancel_event=cancel_event, pair_trace=pair_trace)
     return _run_fix_campaign(evaluator, ray if ray is not None else default_repair_ray(), budget, k_trials,
                              parallelism, early_stop, resample_gate, resample_n)
 
@@ -2610,10 +2601,10 @@ def run_code_write_campaign(client: Client, store: ResultsStore, run_id: str, mo
                             k_trials: int = 7, parallelism: int = 4, max_tokens: int | None = None,
                             cancel_event: threading.Event | None = None, verify: str = "auto",
                             early_stop: bool = False, resample_gate: bool = False, resample_n: int = 3,
-                            adversarial: bool = False) -> BreakingPoint:
+                            ) -> BreakingPoint:
     """Escalation over write-from-spec tasks; default ray `default_write_ray`."""
     evaluator = CodeWriteEvaluator(client, model, store, run_id, cost_cap, max_tokens=max_tokens,
-                                   cancel_event=cancel_event, adversarial=adversarial)
+                                   cancel_event=cancel_event)
     return _run_fix_campaign(evaluator, ray if ray is not None else default_write_ray(), budget, k_trials,
                              parallelism, early_stop, resample_gate, resample_n)
 

@@ -197,6 +197,20 @@ def test_huge_while_is_bounded_by_the_step_cap(task):
         fv.detail == "runtime_error:step_cap"
 
 
+def _with_line(src: str, line: str) -> str:
+    head, rest = src.split("\n", 1)
+    assert head.startswith("def solve(")
+    return f"{head}\n    {line}\n{rest}"
+
+
+def test_fix_using_sum_is_scored_but_sorted_stays_outside_subset(task):
+    # a correct fix that also reaches for sum(...) (spec-province-v-ambiguities §B) is scored, not ERRORed
+    fv = verify_submission(_block(_with_line(task.reference_source, "zero_check = sum([1, 2]) - max(3, 0)")), task)
+    assert fv.verdict == Verdict.PASS, fv.detail
+    fv = verify_submission(_block(_with_line(task.reference_source, "zero_check = sorted([1, 2])")), task)
+    assert fv.verdict == Verdict.ERROR and fv.detail == "outside_subset:builtin_call"
+
+
 # --- the zoo through the real evaluator ------------------------------------------------
 
 
@@ -261,7 +275,7 @@ def seen(monkeypatch):
     def recording(params, seed):
         t = real(params, seed)
         seen[render_repair_prompt(t)] = ("repair", t)
-        seen[ev_mod._trace_prompt(t)] = ("trace", t)
+        seen[V.render_trace_prompt(t)[1].prompt] = ("trace", t)
         return t
 
     monkeypatch.setattr(T, "make_repair_task", recording)
@@ -439,3 +453,69 @@ def test_bug_distance_steers_the_site_and_is_reported():
 def test_any_distance_keeps_kind_variety():
     kinds = {make_repair_task(CodeFixParams(hidden_inputs=2, bug_mix=0.5), s).bug_kinds[0] for s in range(80)}
     assert len(kinds) >= 7
+
+
+# -- A1.1 (docs/spec-province-v-ambiguities.md): the paired /trace query is round-2-equivalent ------------
+
+def _repair_tasks():
+    out = []
+    for i in range(10):
+        for p in (CodeFixParams(n_statements=18), CodeFixParams(n_statements=18, hidden_inputs=4, n_bugs=2),
+                  CodeFixParams(n_statements=18, misleading_comment=True)):
+            try:
+                out.append(make_repair_task(p, 500 + i))
+            except GenerationFailed:
+                pass
+    return out
+
+
+def test_pair_trace_prompt_is_the_round2_render_with_no_repair_leak():
+    from cartographer.codeworld.render import render
+    from cartographer.codeworld.verify import verify_answer
+
+    tasks = _repair_tasks()
+    assert len(tasks) >= 20
+    for t in tasks:
+        prog, rendered = V.render_trace_prompt(t)
+        # identical to what CodeTraceEvaluator sends for the same program: codeworld.render.render(program, seed)
+        assert rendered.prompt == render(prog, t.seed).prompt
+        assert rendered.prompt.startswith("Here is a short Python program.")
+        low = rendered.prompt.lower()
+        for word in ("bug", "repair", "fix", "wrong", "should return", "correct\n", "this line is correct"):
+            assert word not in low, (word, rendered.prompt)
+        # no expected (fixed) output anywhere unless the buggy program literally contains it
+        exp = repr(t.visible_expected)
+        assert f"`{exp}`" not in rendered.prompt and f"return {exp}`" not in rendered.prompt
+        assert t.visible_expected == t.visible_wrong or "should return" not in low
+        # the truth the round-2 verifier computes is the buggy program's output on the visible input
+        assert verify_answer(f"ANSWER: {t.visible_wrong!r}", prog, rendered).verdict == Verdict.PASS
+        if norm(t.visible_expected) != norm(t.visible_wrong):
+            assert verify_answer(f"ANSWER: {t.visible_expected!r}", prog, rendered).verdict == Verdict.FAIL
+
+
+class _Recording:
+    def __init__(self):
+        self.prompts = []
+
+    def chat(self, model, prompt, max_tokens=0, temperature=0.0, retry_on_length=True, max_tokens_retry=0):
+        self.prompts.append(prompt)
+        return ChatResult(text="ANSWER: 0", tokens_in=1, tokens_out=1, latency_ms=1.0, finish_reason="stop")
+
+
+def test_pair_trace_is_an_isolated_single_prompt(store):
+    client = _Recording()
+    ev = CodeRepairEvaluator(client, "zoo-model", store, "iso", cost_cap_usd=1e9)
+    ev({"hidden_inputs": 0, "bug_distance": 2}, 3)
+    assert len(client.prompts) == 2
+    trace, repair = client.prompts
+    assert trace.startswith("Here is a short Python program.") and "bug" not in trace.lower()
+    assert repair not in trace and trace not in repair  # separate single-message chats
+    rec = store.by_run("iso/trace")[0]
+    assert rec.prompt_text == trace and "render=round2" in rec.verifier_detail
+
+
+def test_code_fix_runners_take_no_adversarial_flag():
+    import inspect
+
+    for fn in (ev_mod.run_code_repair_campaign, ev_mod.run_code_write_campaign):
+        assert "adversarial" not in inspect.signature(fn).parameters

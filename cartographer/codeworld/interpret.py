@@ -30,6 +30,7 @@ from .model import (
     If,
     IfExp,
     Index,
+    Builtin,
     Len,
     ListLit,
     MethodCall,
@@ -109,6 +110,9 @@ def semantics_for(dialect=()) -> Semantics:
     if not dialect:
         return TRUE
     return Semantics(**dict(DIALECT_SEMANTICS[r] for r in dialect))
+
+
+_BUILTINS = {"sum": sum, "min": min, "max": max, "abs": abs}
 
 
 class InterpError(Exception):
@@ -455,6 +459,17 @@ class Interpreter:
             if not isinstance(v, (list, str, dict)):
                 raise InterpError("len of non-sized")
             return len(v)
+        if isinstance(e, Builtin):
+            args = [self._eval(a, frame) for a in e.args]
+            fn = _BUILTINS.get(e.func)
+            if fn is None:
+                raise InterpError(f"unknown builtin {e.func}")
+            try:
+                out = fn(*args)  # CPython's own sum/min/max/abs on plain values: exact semantics
+            except (TypeError, ValueError) as err:
+                raise InterpError(f"{e.func}: {err}") from err
+            _check_size(out)
+            return out
         if isinstance(e, IfExp):
             return self._eval(e.body if self._truthy(self._eval(e.test, frame)) else e.orelse, frame)
         if isinstance(e, Call):

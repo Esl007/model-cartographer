@@ -169,6 +169,17 @@ def render_repair_prompt(task: RepairTask) -> str:
     )
 
 
+def render_trace_prompt(task: RepairTask):
+    """(program, RenderedProgram) of the paired /trace query: `trace_program`
+    rendered by `codeworld.render.render(program, task.seed)` exactly as the
+    round-2 `CodeTraceEvaluator` renders its programs."""
+    from ..codeworld.render import render
+    from .tasks import trace_program
+
+    program = trace_program(task)
+    return program, render(program, task.seed)
+
+
 def render_write_prompt(task: WriteTask) -> str:
     ex = "\n".join(f"- `{_call(a)}` returns `{out!r}`" for a, out in task.examples)
     return (
@@ -178,5 +189,5 @@ def render_write_prompt(task: WriteTask) -> str:
     )
 
 
-__all__ = ["FixVerification", "diff_sids", "last_code_block", "render_repair_prompt", "render_write_prompt",
+__all__ = ["FixVerification", "diff_sids", "last_code_block", "render_repair_prompt", "render_trace_prompt", "render_write_prompt",
            "verify_submission", "verify_write"]

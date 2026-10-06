@@ -302,7 +302,7 @@ def run_ticket_fidelity_campaign(
                              early_stop=early_stop)
     note = f"spent=${inner.spent_usd:.4f}" + (";cost_cap_hit" if inner.capped else "")
     if resample_gate:
-        note += f";gate_stable={ev.stable};gate_noise={ev.noise}"
+        note += ev.note_fields()
         # the certificate's stability check needs the real gate counts
         bp.certificate = certify(bp, gate_stable=ev.stable, gate_noise=ev.noise)
     bp.note = f"{bp.note}; {note}" if bp.note else note

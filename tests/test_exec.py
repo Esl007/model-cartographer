@@ -59,7 +59,7 @@ def _canned_ok_body(text="the front office", tokens_in=42, tokens_out=7):
 
 
 def test_client_chat_success(monkeypatch):
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         return 200, _canned_ok_body(), {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
@@ -75,7 +75,7 @@ def test_client_chat_success(monkeypatch):
 
 
 def test_client_chat_http_401_sets_error_no_raise(monkeypatch):
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         return 401, b'{"error": "unauthorized"}', {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
@@ -89,7 +89,7 @@ def test_client_chat_http_401_sets_error_no_raise(monkeypatch):
 def test_client_chat_retries_on_429_then_succeeds(monkeypatch):
     calls = []
 
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         calls.append(1)
         if len(calls) == 1:
             return 429, b"rate limited", {}
@@ -108,7 +108,7 @@ def test_client_chat_429_honors_retry_after_header(monkeypatch):
     calls = []
     delays = []
 
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         calls.append(1)
         if len(calls) == 1:
             return 429, b"rate limited", {"Retry-After": "2"}
@@ -127,7 +127,7 @@ def test_client_chat_429_honors_retry_after_header(monkeypatch):
 def test_client_chat_429_exhausts_retries_and_errors(monkeypatch):
     calls = []
 
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         calls.append(1)
         return 429, b"rate limited", {}
 
@@ -145,10 +145,11 @@ def test_client_chat_429_exhausts_retries_and_errors(monkeypatch):
     assert result.text == ""
 
 
-def test_client_chat_timeout_retries_once_then_succeeds(monkeypatch):
+def test_client_chat_timeout_is_not_retried(monkeypatch):
+    """A read timeout is never re-sent at the same cap (double-spend fix)."""
     calls = []
 
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         calls.append(1)
         if len(calls) == 1:
             return client_mod._TIMEOUT_STATUS, b"", {}
@@ -158,15 +159,14 @@ def test_client_chat_timeout_retries_once_then_succeeds(monkeypatch):
     c = Client(GROQ, "gsk_fake", sleep=lambda s: None)
     result = c.chat(model="openai/gpt-oss-20b", prompt="hello")
 
-    assert len(calls) == 2
-    assert result.error is None
-    assert result.text == "recovered"
+    assert len(calls) == 1
+    assert result.error.startswith("timeout ")
 
 
 def test_client_chat_length_finish_reason_empty_text_auto_retries(monkeypatch):
     request_bodies = []
 
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         request_bodies.append(json.loads(body))
         if len(request_bodies) == 1:
             body_dict = {
@@ -193,7 +193,7 @@ def test_client_chat_length_finish_reason_empty_text_auto_retries(monkeypatch):
 
 
 def test_client_chat_malformed_json_sets_error(monkeypatch):
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         return 200, b"not json at all {{{", {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
@@ -232,7 +232,7 @@ def test_run_pilot_dry_run(tmp_path, monkeypatch):
     responses = ["the front office", "the wrong room", ""]
     call_counter = {"n": 0}
 
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         idx = call_counter["n"] % len(responses)
         call_counter["n"] += 1
         text = responses[idx]
@@ -275,7 +275,7 @@ def test_run_pilot_dry_run(tmp_path, monkeypatch):
 
 
 def test_client_chat_parses_reasoning_and_finish_reason(monkeypatch):
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         body_dict = {
             "choices": [
                 {
@@ -296,7 +296,7 @@ def test_client_chat_parses_reasoning_and_finish_reason(monkeypatch):
 
 
 def test_client_chat_no_reasoning_field_is_none(monkeypatch):
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         return 200, _canned_ok_body(), {}
 
     monkeypatch.setattr(client_mod, "_post", fake_post)
@@ -308,7 +308,7 @@ def test_client_chat_no_reasoning_field_is_none(monkeypatch):
 
 
 def test_reasoning_and_finish_reason_round_trip_through_pilot(tmp_path, monkeypatch):
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         body_dict = {
             "choices": [
                 {
@@ -338,7 +338,7 @@ def test_reasoning_and_finish_reason_round_trip_through_pilot(tmp_path, monkeypa
 
 
 def test_finish_reason_length_forces_error_with_cap_hit(tmp_path, monkeypatch):
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         body_dict = {
             "choices": [
                 {"message": {"content": "the front"}, "finish_reason": "length"}
@@ -362,7 +362,7 @@ def test_finish_reason_length_forces_error_with_cap_hit(tmp_path, monkeypatch):
 
 
 def test_empty_stop_answer_flows_through_pilot_as_empty_answer_marker(tmp_path, monkeypatch):
-    def fake_post(url, headers, body):
+    def fake_post(url, headers, body, timeout=60):
         body_dict = {
             "choices": [{"message": {"content": ""}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 10, "completion_tokens": 0},

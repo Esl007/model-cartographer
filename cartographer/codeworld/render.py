@@ -33,6 +33,7 @@ from .model import (
     If,
     IfExp,
     Index,
+    Builtin,
     Len,
     ListLit,
     MethodCall,
@@ -82,7 +83,7 @@ def dialect_header(dialect) -> str:
     return "\n".join(lines)
 
 
-_RESERVED = set(keyword.kwlist) | {"range", "len", "print", "list", "dict", "str", "int", "sum", "min", "max"}
+_RESERVED = set(keyword.kwlist) | {"range", "len", "print", "list", "dict", "str", "int", "sum", "min", "max", "abs"}
 
 
 def _lookalikes(word: str) -> list[str]:
@@ -246,6 +247,8 @@ def _expr(e, n: dict) -> tuple[str, int]:
         return f"{_wrap(e.target, n, 9)}[{lo}:{hi}]", 9
     if isinstance(e, Len):
         return f"len({_wrap(e.arg, n, 1)})", 10
+    if isinstance(e, Builtin):
+        return f"{e.func}(" + ", ".join(_wrap(a, n, 1) for a in e.args) + ")", 10
     if isinstance(e, IfExp):
         return f"{_wrap(e.body, n, 2)} if {_wrap(e.test, n, 2)} else {_wrap(e.orelse, n, 1)}", 1
     if isinstance(e, Call):
