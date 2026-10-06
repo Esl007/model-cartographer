@@ -24,6 +24,8 @@ PRICES: dict[str, tuple[float, float]] = {
     # way as the Modal run it is the bf16 contrast for (comparable spend
     # ledgers; the tracked dollars are notional on both sides).
     "google/gemma-4-31b-it:free": (0.10, 0.30),
+    # bf16 contrast arm, self-hosted on Modal A100-80GB (~$2.5/h real cost).
+    "gemma-4-31b-it-bf16": (0.10, 0.30),
 }
 
 
