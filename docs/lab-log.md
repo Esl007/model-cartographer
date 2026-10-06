@@ -3579,3 +3579,21 @@ Consequence: the coding boundary for Gemma 4 must be looked for in code *writing
 - **Fix:** `codefix.tasks.trace_program(task)` builds the buggy function plus one top-level `result = solve(<visible input>)` as a codeworld `Program` with a `final_value` query (comments stripped); `codefix.verify.render_trace_prompt(task)` renders it with `codeworld.render.render(program, task.seed)` — the exact `CodeTraceEvaluator` path — and the evaluator grades it with `codeworld.verify.verify_answer` (detail now carries `render=round2`). Still a fresh single-message chat. Tests (tests/test_codefix.py): pair-trace prompt == `render(program, seed).prompt` for 30 repair tasks incl. stacked bugs and misleading comments; no "bug"/"repair"/"fix"/"wrong"/"should return"/comment text; round-2 truth == the buggy output on the visible input; evaluator sends exactly two independent prompts.
 - **Comparability:** all pre-fix /trace records — run ids `camp-code-repair*-gemma4qat-*/trace` (and their `/trace/verify` resamples) written before 2026-10-06 — are NON-COMPARABLE to round-2 code_trace numbers (different prompt template and grader). They were not contaminated by the expected output, so cause 1 in its strong form (anchoring on the fixed output) is ruled out; the A1.2 cross-check (`scripts/pairtrace_xcheck.py`, run id `camp-code-pairtrace-xcheck-gemma4qat-001`) decides whether the remaining template difference or the program family explains 9/30 traced-wrong. Dry run reconstructs all 9 traced-wrong programs via `make_repair_task(latent_params, task_seed)` and the reconstructed `buggy_source` reproduces each stored old prompt byte-for-byte (9/9).
 - **F:** `adversarial` removed from `_CodeFixBase`, `run_code_repair_campaign`, `run_code_write_campaign` (it was stored and never read; no caller passed it). No search wired.
+
+## 2026-10-06 (later) — Province V live resolutions: A1.2, B/C reruns, E determinism probe (Gemma 4 QAT, Modal)
+- **A1.2 resolved (partial coverage, 6/9 programs):** round-2 `CodeTraceEvaluator` on the buggy programs behind the old "traced wrong" (`camp-code-pairtrace-xcheck-gemma4qat-001`, k=5, gate n=3):
+  - **3 programs 5/5 PASS** (confirm 800001, 800004, 800006). The old pair-trace template caused their failure.
+  - **3 programs 0/5 PASS** with all FAILs stable (V.repair t0, kinds t3, confirm 800005). These are genuine trace failures inside the repair generator's 18-statement `solve(a, xs)` family.
+  - The round-2 reading null (384/384) is therefore scoped to round 2's program distribution and does NOT extend to the Province V repair family. The failure hunt should include that family.
+  - 800010/800012/800019 were unchecked (step cap).
+- **B/C:** all 7 ERROR tasks were rerun (`*-postfix-001`): 0 `outside_subset`, 0 timeouts.
+  - The 4 `sum` tasks are all stable FAILs.
+  - The 3 timeout tasks are all PASS, with base latencies of 42–98 s. The slowest call was 183 s, far over the old 60 s socket timeout.
+  - Confirm is now 7/13/0, kinds -001 is 1/4/0.
+- **E: we live in the "varies even serially" world.** `camp-determinism-probe-gemma4qat-001`, trials 800005/800006/800009, temperature 0, 5 serial + 5 at parallelism 4, raw outputs compared by sha256.
+  - **Serial:** every trial produced 2 distinct texts. Rep 1 differed and reps 2–5 were byte-identical (e.g. 800005: `65e49b9c83` `wrong_site`, then `17e256588f`×4 `pass`).
+  - **Parallel:** 3 distinct texts per trial (800005: `17e256588f`×3 pass, `d7925f63ac` and `8e7abcdb70` wrong_site).
+  - The rep-1-vs-rest serial split suggests the vLLM prefix-cache cold/warm path. Batching adds more variety on top.
+  - This is not parallel-only nondeterminism, so the resample gate stays parallel for modal.
+  - X.consistency's "zero flaky" result gets a scope note: it was measured on a different task family and does not imply byte determinism here. pass^k on this endpoint needs resample CIs.
+- **Cost and infrastructure:** 148 records, ≈$0.064 tracked. The app was up 77 min (incl. 309 s cold start), then stopped and verified stopped.

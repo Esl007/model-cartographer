@@ -812,8 +812,8 @@
     "p_value": null,
     "cause_code": "wrong_value",
     "cause": "gives a wrong value that matches no known misreading",
-    "cause_share": 0.38461538461538464,
-    "cause_n": 13,
+    "cause_share": 0.4375,
+    "cause_n": 16,
     "exemplar": {
      "record_id": "507c2dc56c724f018400cc6f7ec0053b",
      "run_id": "camp-code-repair-gemma4qat-001",
@@ -831,8 +831,8 @@
      {
       "value": 4.0,
       "label": "4 hidden checks",
-      "n_pass": 6,
-      "n_scored": 17,
+      "n_pass": 8,
+      "n_scored": 22,
       "n_error": 3
      }
     ],
@@ -844,22 +844,22 @@
     "label": "Fixes stacked bugs without breaking anything else",
     "province": "V \u00b7 Code repair",
     "status": "BREAKS",
-    "headline": "Breaks at 1 bugs: 0/6 pass -- already weak at the easiest level tested",
+    "headline": "Breaks at 1 bugs: 1/8 pass -- already weak at the easiest level tested",
     "boundary": "1 bugs",
     "held_through": null,
-    "n_pass": 0,
-    "n_scored": 6,
+    "n_pass": 1,
+    "n_scored": 8,
     "n_error": 4,
     "ci": [
-     0.0,
-     0.39
+     0.022,
+     0.471
     ],
     "confidence": "B",
     "p_value": null,
     "cause_code": "wrong_site",
     "cause": "edits a different line than the one with the bug",
-    "cause_share": 0.6666666666666666,
-    "cause_n": 6,
+    "cause_share": 0.7142857142857143,
+    "cause_n": 7,
     "exemplar": {
      "record_id": "8c35bddbbd6a48b791750efd4edc0dd0",
      "run_id": "camp-code-repair-kinds-gemma4qat-001",
@@ -870,8 +870,8 @@
      {
       "value": 1.0,
       "label": "1 bugs",
-      "n_pass": 0,
-      "n_scored": 6,
+      "n_pass": 1,
+      "n_scored": 8,
       "n_error": 4
      }
     ],

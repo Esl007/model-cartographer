@@ -293,3 +293,96 @@ Other failures seen while reconstructing tasks:
 ## App status
 
 `.venv/bin/modal app stop gemma4-qat --yes` was run at 07:09 UTC. `.venv/bin/modal app list` then showed `ap-ftrnh1c2ZNJxuYzuTaPdXA gemma4-qat stopped, Tasks 0`, stopped 2026-10-06 00:09 PDT. No other app is listed.
+
+## Resolutions, 2026-10-06
+
+This was a single live session on the same Modal app and checkpoint, with parallelism ≤ 4.
+- **Deploy:** 4.7 s. The URL host matched the key file.
+- **Warm-up:** 309 s (cold) until `/models` returned 200. A tiny chat confirmed `'ready'`.
+- **Stop:** `modal app stop gemma4-qat --yes` ran at 03:46 PDT, 77.3 min after deploy (≈1.3 L40S GPU-hours including the cold start). `modal app list` then showed `ap-NihH4LSifUY8y3oYhkGAKy gemma4-qat stopped`.
+- **Tracked $ (proxy prices):**
+
+  | run id | records | tracked $ |
+  |---|---|---|
+  | xcheck | 80 | 0.0268 |
+  | postfix | 38 | 0.0187 |
+  | determinism | 30 | 0.0188 |
+  | **total** | 148 | **≈0.064** |
+
+### A1.2: cross-evaluator rerun (`camp-code-pairtrace-xcheck-gemma4qat-001`)
+
+Each buggy program is traced with the round-2 `CodeTraceEvaluator` verbatim, k=5, resample gate n=3. The programs ran one at a time. The step hit its 40-min cap after **6 of 9** programs; confirm 800010, 800012 and 800019 were not run.
+
+| source | task_seed | round-2 trace pass | gate |
+|---|---|---|---|
+| V.repair -001 trial 0 | 421996770361213397 | 0/5 | 5 stable |
+| kinds -001 trial 3 | 56880350641256372 | 0/5 | 5 stable |
+| confirm 800001 | 855218970775950692 | 5/5 | - |
+| confirm 800004 | 988880262743947176 | 5/5 | 1 noise |
+| confirm 800005 | 159399059387578458 | 0/5 | 5 stable |
+| confirm 800006 | 95612652785695208 | 5/5 | - |
+
+Result: both causes are present.
+- **Template (cause 1):** 3 of the 6 programs trace correctly every time under the round-2 template. Their old "traced wrong" was an artefact of the bespoke pair-trace template.
+- **Program family (cause 2):** the other 3 programs fail 5/5 under the round-2 template too, and every FAIL reproduced on resample. The repair generator's family (18 statements, `solve(a, xs)` shape) contains programs Gemma 4 QAT cannot trace. Round 2's 384/384 reading null therefore does not cover this family, and its scope is narrowed accordingly (lab log).
+
+### B: subset boundary, rerun of `outside_subset:builtin_call` tasks (with C)
+
+The tasks were rebuilt from the stored latent_params and task_seed with `scripts/rerun_repair_seeds.py`. All 7 reconstructed prompts matched the stored prompts byte-for-byte. They ran through the stock `CodeRepairEvaluator` (pair_trace on, now the round-2 template) under the gate (n=3). Run ids: `camp-code-repair-kinds-gemma4qat-postfix-001` and `camp-code-repair-confirm-gemma4qat-postfix-001`. There were **0 `outside_subset:builtin_call`** and 0 ERROR across all 38 records (base, verify and trace).
+
+| task | old | postfix base | traced_ok | gate |
+|---|---|---|---|---|
+| kinds trial 1 (757445687747891210) | ERROR sum | FAIL `wrong_site` | 1 | stable |
+| confirm 800012 | FAIL; resamples 3× ERROR sum | FAIL `wrong_value` | 0 | stable |
+| confirm 800013 | ERROR sum | FAIL `wrong_value` | 1 | stable |
+| confirm 800015 | ERROR sum | FAIL `visible_fixed_hidden_broken` | 1 | stable |
+
+All four `sum` tasks are FAILs once scored. That matches the original inference that those submissions would have failed.
+
+### C: timeout tasks under the new modal read timeout
+
+| task | old | postfix base | base latency | gate call total | verdict back? |
+|---|---|---|---|---|---|
+| kinds task_seed 919830366599466775, trial 0 | ERROR timeout ×2 runs (318 s ×2 each) | **PASS** | 98 s | 137 s | yes |
+| confirm 800007 | ERROR timeout | **PASS** | 42 s | 81 s | yes |
+| confirm 800011 | FAIL; resamples 1 FAIL + 2 ERROR | **PASS** | 91 s | 121 s | yes |
+
+All three returned a scored verdict, with no timeouts and no retries. The slowest single call in the postfix run was 183 s (800015), under the new 700 s modal read timeout (max(360, 60 + 16000/25)) and above the old 60 s.
+
+### Corrected ERROR accounting (base records)
+
+| run | as reported | corrected (postfix verdicts substituted) |
+|---|---|---|
+| kinds -001 | 0 / 3 / 2 | 1 / 4 / 0 |
+| confirm | 6 / 11 / 3 | 7 / 13 / 0 (7/20 = 35 % pass) |
+
+The confirm resample entries 800011 (2 ERROR) and 800012 (3 ERROR) are replaced by a postfix PASS and a stable FAIL, respectively. No `outside_subset` or `api_error` remains in any Province V result for this model.
+
+### Corrected read-vs-write table (pooled -001 + kinds -001 + confirm)
+
+| | traced ok + repaired | traced ok + not repaired | traced wrong + repaired | traced wrong + not repaired | ERROR |
+|---|---|---|---|---|---|
+| as reported (old template) | 7 | 9 | 2 | 7 | 5 |
+| + 5 ERRORs rescored (postfix, round-2 trace) | 9 | 12 | 2 | 7 | 0 |
+
+How the A1.2 result changes the "traced wrong" cells:
+- 3 of the 9 traced-wrong programs (confirm 800001, 800004, 800006) trace correctly round-2-style. They belong in "traced ok"; all three were not repaired in base.
+- 3 programs (V.repair t0, kinds t3, confirm 800005) are confirmed traced-wrong.
+- 3 programs are unchecked.
+
+So the round-2-backed "traced wrong" cell is **3 confirmed, 3 unknown**, and **≥ 3 traced-ok + not-repaired** move in. The dissociation (correct reading, failed writing) gets stronger, not weaker.
+
+### E: serving determinism (`camp-determinism-probe-gemma4qat-001/{serial,parallel}`)
+
+Setup: repair prompt only, temperature 0, 5 reps per trial serially (one request in flight), then 5 reps in a pool of 4. Raw `response_text` was compared by sha256.
+
+| trial | serial: distinct outputs / verdicts | parallel: distinct outputs / verdicts |
+|---|---|---|
+| 800005 | 2: first rep `wrong_site`, reps 2–5 identical `pass` | 3: `pass`×3 (same bytes as serial), `wrong_site`×2 (two different texts) |
+| 800006 | 2: first rep `wrong_value`, reps 2–5 identical `wrong_site` | 3 |
+| 800009 | 2: first rep `pass`, reps 2–5 identical `introduced:predicate_frozen` | 3 |
+
+Outputs vary **even serially**. In each serial run the first request differed and the next four were byte-identical. That points to a prefix-cache cold/warm numeric path rather than batching alone. Parallel runs add more variety. This is true sampling-path nondeterminism at temperature 0 on this endpoint. Consequences:
+- The gate is **not** switched to serial for modal, because serialising would not make it deterministic.
+- X.consistency's "zero flaky" needs a scope note.
+- pass^k on this endpoint must carry resample CIs.
