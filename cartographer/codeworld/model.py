@@ -53,7 +53,12 @@ class BinOp:
 
 @dataclass(frozen=True)
 class Compare:
-    op: str  # == != < <= > >=
+    """`left op right`. `op` is one of COMPARE_OPS: the six ordering /
+    equality operators, plus membership `in` / `not in` (list / str element
+    or substring, dict KEY membership). The generator never emits `in` /
+    `not in`; they exist for parsed model-written code (Province V)."""
+
+    op: str  # == != < <= > >= | in | not in
     left: object
     right: object
 
@@ -123,6 +128,7 @@ Expr = Union[Const, ListLit, DictLit, Name, BinOp, Compare, BoolOp, Not, Index, 
              MethodCall, OpaqueLit]
 
 METHODS = {"append", "pop", "extend", "get", "upper", "replace"}
+COMPARE_OPS = ("==", "!=", "<", "<=", ">", ">=", "in", "not in")
 
 # ---------------------------------------------------------------------------
 # Statements
@@ -162,8 +168,13 @@ class If:
 
 @dataclass(frozen=True)
 class RangeIter:
-    lo: int | None
-    hi: int
+    """`range(hi)` / `range(lo, hi)`. The generator only emits int bounds; a
+    bound may also be an expression (`range(len(xs))`, `range(1, n)`) in
+    parsed model-written code, evaluated when the loop starts (must be an
+    int at run time)."""
+
+    lo: object | None  # int | Expr | None
+    hi: object  # int | Expr
 
 
 @dataclass(frozen=True)
@@ -211,7 +222,23 @@ class While:
     body: tuple
 
 
-Stmt = Union[Assign, SetItem, AugAssign, If, For, While, FuncDef, Return, ExprStmt, Print]
+@dataclass(frozen=True)
+class Break:
+    """`break` (innermost enclosing for / while). Never generated; parsed
+    model-written code only."""
+
+    sid: int
+
+
+@dataclass(frozen=True)
+class Continue:
+    """`continue` (innermost enclosing for / while). Never generated; parsed
+    model-written code only."""
+
+    sid: int
+
+
+Stmt = Union[Assign, SetItem, AugAssign, If, For, While, FuncDef, Return, ExprStmt, Print, Break, Continue]
 
 # ---------------------------------------------------------------------------
 # Program

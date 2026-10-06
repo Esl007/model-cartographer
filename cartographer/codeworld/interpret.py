@@ -18,9 +18,11 @@ from .model import (
     AugAssign,
     BinOp,
     BoolOp,
+    Break,
     Call,
     Compare,
     Const,
+    Continue,
     DictLit,
     ExprStmt,
     For,
@@ -140,6 +142,29 @@ class _Return(Exception):
         self.value = value
 
 
+class _Break(Exception):
+    """`break`: caught by the innermost enclosing for / while."""
+
+
+class _Continue(Exception):
+    """`continue`: caught by the innermost enclosing for / while."""
+
+
+_LOOP_EXITS = (_Break, _Continue)
+
+
+def _membership(op: str, a, b) -> bool:
+    """`a in b` / `a not in b` on a list, str or dict (dict: key membership)."""
+    if not isinstance(b, (list, str, dict)):
+        raise InterpError(f"compare {op}: not a container") from TypeError(
+            f"argument of type {type(b).__name__!r} is not iterable")
+    try:
+        r = a in b
+    except TypeError as err:
+        raise InterpError(f"compare {op}: {err}") from err
+    return r if op == "in" else not r
+
+
 @dataclass
 class Closure:
     defn: FuncDef
@@ -186,7 +211,10 @@ class Interpreter:
     # -- statements ---------------------------------------------------------
 
     def exec_top(self, stmt) -> None:
-        self._exec(stmt, self._gframe)
+        try:
+            self._exec(stmt, self._gframe)
+        except _LOOP_EXITS as e:
+            raise InterpError(f"{type(e).__name__[1:].lower()} outside loop") from None
 
     def _tick(self) -> None:
         self.steps += 1
@@ -254,8 +282,8 @@ class Interpreter:
                 self._exec_block(s.orelse, frame)
         elif isinstance(s, For):
             if isinstance(s.iter, RangeIter):
-                lo = 0 if s.iter.lo is None else s.iter.lo
-                hi = s.iter.hi + (1 if self.sem.range_upper == "inclusive" else 0)
+                lo = 0 if s.iter.lo is None else self._bound(s.iter.lo, frame)
+                hi = self._bound(s.iter.hi, frame) + (1 if self.sem.range_upper == "inclusive" else 0)
                 seq = range(lo, hi)
             else:
                 seq = self._eval(s.iter, frame)
@@ -267,7 +295,12 @@ class Interpreter:
                     if self.sem.loops == "once" and i >= 1:
                         break
                     self._store(frame, s.var, item)
-                    self._exec_block(s.body, frame)
+                    try:
+                        self._exec_block(s.body, frame)
+                    except _Break:
+                        break
+                    except _Continue:
+                        continue
             finally:
                 self._frozen.pop()
         elif isinstance(s, While):
@@ -280,7 +313,12 @@ class Interpreter:
                     if self.sem.loops == "once" and i >= 1:
                         break
                     self._tick()
-                    self._exec_block(s.body, frame)
+                    try:
+                        self._exec_block(s.body, frame)
+                    except _Break:
+                        break
+                    except _Continue:
+                        pass
                     i += 1
                     if not frozen:
                         cond = self._truthy(self._eval(s.test, frame))
@@ -301,6 +339,10 @@ class Interpreter:
             self._eval(s.value, frame)
         elif isinstance(s, Print):
             self.stdout.append(str(self._eval(s.value, frame)))
+        elif isinstance(s, Break):
+            raise _Break()
+        elif isinstance(s, Continue):
+            raise _Continue()
         else:  # pragma: no cover - generator never emits anything else
             raise InterpError(f"unknown statement {type(s).__name__}")
 
@@ -315,6 +357,17 @@ class Interpreter:
         if s.sid not in cache:
             cache[s.sid] = self._eval(s.test, frame)
         return cache[s.sid]
+
+    def _bound(self, b, frame: _Frame) -> int:
+        """A `range` bound: an int literal as is, an expression evaluated
+        (it must be an int at run time, exactly like Python's `range`)."""
+        if isinstance(b, int):
+            return b
+        v = self._eval(b, frame)
+        if not isinstance(v, int):
+            raise InterpError(f"range bound is {type(v).__name__}, not int") from TypeError(
+                f"{type(v).__name__!r} object cannot be interpreted as an integer")
+        return v
 
     def _read(self, name: str, frame: _Frame):
         if not frame.is_global:
@@ -369,6 +422,8 @@ class Interpreter:
             return self._binop(e.op, self._eval(e.left, frame), self._eval(e.right, frame))
         if isinstance(e, Compare):
             a, b = self._eval(e.left, frame), self._eval(e.right, frame)
+            if e.op in ("in", "not in"):
+                return _membership(e.op, a, b)
             try:
                 return _COMPARE[e.op](a, b)
             except TypeError as err:
@@ -457,6 +512,8 @@ class Interpreter:
             self._exec_block(fd.body, frame)
         except _Return as r:
             return r.value
+        except _LOOP_EXITS as e:  # a loop exit never crosses a call boundary
+            raise InterpError(f"{type(e).__name__[1:].lower()} outside loop") from None
         return None
 
     def call_function(self, name: str, args) -> object:

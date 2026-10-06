@@ -15,6 +15,30 @@ Accepted (beyond the renderer's own output):
   * unary minus on a non-literal, `-x` (-> `0 - x`, identical on ints);
   * `else: if ...` (re-rendered canonically as `elif`).
 
+Model-written constructs the generator never emits (accepted so a correct
+answer is not swallowed as `outside_subset`):
+  * `for x in range(a)` / `range(a, b)` whose bounds are any subset
+    expressions (`range(len(xs))`, `range(1, n)`); an int-literal bound stays
+    an int in `RangeIter`. `range` with a step argument (`unknown`,
+    `range_step`) and `range` anywhere but a `for` header (`builtin_call`)
+    are still rejected;
+  * membership `x in xs` / `x not in xs` (one operator; list / str / dict
+    key), still subject to the `chained_comparison` rule;
+  * `break` / `continue` inside a `for` / `while` body (also nested inside an
+    `if` there); anywhere else -> `unknown` (`break_outside_loop` /
+    `continue_outside_loop`).
+
+Unbounded `while` (`while_true_unbounded`, a conservative syntactic check;
+the interpreter's step cap stays the safety net for everything it lets
+through): rejected when the test reads no variable / call at all (`while
+True`, `while 1`, `while 1 == 1`), or when the test reads no name that the
+loop body (re)binds -- an assignment, augmented assignment or `for` target
+anywhere inside the body. It is NOT rejected (it cannot be told unbounded
+syntactically) when the test itself contains a call or a mutating method
+(`append` / `pop` / `extend`), or the body contains any call of a program
+function or any in-place mutation (`xs.pop()`, `xs[i] = v`), since aliasing
+or a callee may change what the test reads.
+
 Statement ids are assigned 1..n in source order (pre-order). With
 `keep_names=True` the source identifiers ARE the ids, so a program can be
 re-rendered with its own names (`render_source`); otherwise identifiers get
@@ -35,10 +59,12 @@ from cartographer.codeworld.model import (
     AugAssign,
     BinOp,
     BoolOp,
+    Break,
     Call,
     CodeDimParams,
     Compare,
     Const,
+    Continue,
     DictLit,
     ExprStmt,
     For,
@@ -76,13 +102,15 @@ _BUILTIN_NAMES = frozenset(dir(builtins))
 _OWN_BUILTINS = frozenset({"len", "print", "range"})  # the only builtins the subset has
 _BINOPS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.FloorDiv: "//", ast.Mod: "%"}
 _AUGOPS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*"}
-_CMPOPS = {ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">="}
+_CMPOPS = {ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">=",
+           ast.In: "in", ast.NotIn: "not in"}
+_MUTATING_METHODS = frozenset({"append", "pop", "extend"})
 
 
 class SubsetViolation(Exception):
     """The source uses a construct outside the subset. `construct` is one of
-    `CONSTRUCTS`; `detail` refines `unknown` (e.g. `in_operator`,
-    `range_nonliteral`, `break`) and is informational only."""
+    `CONSTRUCTS`; `detail` refines `unknown` (e.g. `range_step`,
+    `break_outside_loop`) and is informational only."""
 
     def __init__(self, construct: str, lineno: int, detail: str = "") -> None:
         self.construct = construct
@@ -128,6 +156,7 @@ _EXPR_CONSTRUCT = {
 class _Scope:
     func: str | None = None  # identifier of the enclosing def (None at module level)
     in_block: bool = False  # inside an if/for/while (a def there is not module-level)
+    in_loop: bool = False  # inside a for/while body (break / continue allowed)
 
 
 class _Converter:
@@ -237,18 +266,28 @@ class _Converter:
         if isinstance(s, ast.If):
             sid = self.sid()
             test = self.expr(s.test, scope)
-            inner = _Scope(scope.func, True)
+            inner = _Scope(scope.func, True, scope.in_loop)
             return If(sid, test, self.block(s.body, inner), self.block(s.orelse, inner))
         if isinstance(s, ast.For):
             return self.for_(s, scope)
         if isinstance(s, ast.While):
             if s.orelse:
                 raise _bad("unknown", s, "while_else")
-            if not any(isinstance(n, (ast.Name, ast.Call, ast.Attribute)) for n in ast.walk(s.test)):
-                raise _bad("while_true_unbounded", s)
+            constant_test = not any(isinstance(n, (ast.Name, ast.Call, ast.Attribute)) for n in ast.walk(s.test))
+            # `while True: ... break` is a common correct idiom: accept a constant test
+            # when the body contains a break (the step cap stays the safety net).
+            has_break = any(isinstance(n, ast.Break) for n in ast.walk(s))
+            if constant_test and not has_break:
+                raise _bad("while_true_unbounded", s, "constant test")
             sid = self.sid()
             test = self.expr(s.test, scope)
-            return While(sid, test, self.block(s.body, _Scope(scope.func, True)))
+            body = self.block(s.body, _Scope(scope.func, True, True))
+            unchanged = None if (constant_test or has_break) else _while_test_unchanged(test, body)
+            if unchanged is not None:
+                back = {v: k for k, v in self.ids.items()}
+                names = ", ".join(sorted(back.get(v, v) for v in unchanged))
+                raise _bad("while_true_unbounded", s, f"test reads {names}, never reassigned in the loop body")
+            return While(sid, test, body)
         if isinstance(s, ast.Return):
             if scope.func is None:
                 raise _bad("unknown", s, "return_outside_function")
@@ -271,7 +310,10 @@ class _Converter:
         if isinstance(s, ast.Pass):
             return ExprStmt(self.sid(), Const(None))
         if isinstance(s, (ast.Break, ast.Continue)):
-            raise _bad("unknown", s, type(s).__name__.lower())
+            kind = type(s).__name__.lower()
+            if not scope.in_loop:
+                raise _bad("unknown", s, f"{kind}_outside_loop")
+            return (Break if kind == "break" else Continue)(self.sid())
         raise _bad("unknown", s, type(s).__name__)
 
     def assign(self, t, value, s, scope: _Scope):
@@ -313,9 +355,7 @@ class _Converter:
                 raise _bad("starargs", it)
             if not 1 <= len(it.args) <= 2:
                 raise _bad("unknown", it, "range_step" if len(it.args) == 3 else "range_arity")
-            bounds = [_int_literal(a) for a in it.args]
-            if any(b is None for b in bounds):
-                raise _bad("unknown", it, "range_nonliteral")
+            bounds = [b if (b := _int_literal(a)) is not None else self.expr(a, scope) for a in it.args]
             iterator = RangeIter(None, bounds[0]) if len(bounds) == 1 else RangeIter(bounds[0], bounds[1])
             var = self.bind(s.target.id, s.target, scope, "i" if s.target.id not in self.ids else None)
         elif isinstance(it, ast.Name):
@@ -324,7 +364,7 @@ class _Converter:
         else:
             self.expr(it, scope)  # name the construct if it is a known one (comprehension, call, ...)
             raise _bad("unknown", it, "for_iter")
-        return For(sid, var, iterator, self.block(s.body, _Scope(scope.func, True)))
+        return For(sid, var, iterator, self.block(s.body, _Scope(scope.func, True, True)))
 
     def funcdef(self, s: ast.FunctionDef, scope: _Scope):
         if scope.func is not None or scope.in_block:
@@ -423,8 +463,7 @@ class _Converter:
                 raise _bad("is_operator", e)
             op = _CMPOPS.get(type(e.ops[0]))
             if op is None:
-                raise _bad("unknown", e, "in_operator" if isinstance(e.ops[0], (ast.In, ast.NotIn))
-                           else type(e.ops[0]).__name__)
+                raise _bad("unknown", e, type(e.ops[0]).__name__)
             return Compare(op, self.expr(e.left, scope), self.expr(e.comparators[0], scope))
         if isinstance(e, ast.IfExp):
             return IfExp(self.expr(e.test, scope), self.expr(e.body, scope), self.expr(e.orelse, scope))
@@ -483,6 +522,43 @@ class _Converter:
             raise _bad("keyword_argument", e)
         if any(isinstance(a, ast.Starred) for a in e.args):
             raise _bad("starargs", e)
+
+
+def _walk_nodes(x):
+    """Every model node (expressions and statements) inside `x`, depth-first."""
+    if isinstance(x, tuple):
+        for y in x:
+            yield from _walk_nodes(y)
+    elif hasattr(x, "__dataclass_fields__"):
+        yield x
+        for f in x.__dataclass_fields__:
+            yield from _walk_nodes(getattr(x, f))
+
+
+def _while_test_unchanged(test, body) -> set | None:
+    """The names a `while` test reads if NONE of them can change inside the
+    loop body (the loop can then never exit through its test), else None.
+    Conservative: any call, mutating method or in-place store in the body,
+    or any call / mutating method in the test, means "may change"."""
+    reads: set[str] = set()
+    for n in _walk_nodes(test):
+        if isinstance(n, Call) or isinstance(n, MethodCall) and n.method in _MUTATING_METHODS:
+            return None
+        if isinstance(n, Name):
+            reads.add(n.id)
+        elif isinstance(n, MethodCall):
+            reads.add(n.obj)
+    if not reads:
+        return None  # a constant test is caught earlier, on the source
+    assigned: set[str] = set()
+    for n in _walk_nodes(body):
+        if isinstance(n, (Call, SetItem)) or isinstance(n, MethodCall) and n.method in _MUTATING_METHODS:
+            return None
+        if isinstance(n, (Assign, AugAssign)):
+            assigned.add(n.target)
+        elif isinstance(n, For):
+            assigned.add(n.var)
+    return None if reads & assigned else reads
 
 
 def _int_literal(node) -> int | None:

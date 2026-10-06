@@ -214,8 +214,8 @@ def test_rejection_list_names_the_construct(src, construct):
     ("x = eval('1')", "builtin_call"),
     ("x = getattr(1, 'real')", "builtin_call"),
     ("x = range(3)", "builtin_call"),
-    ("x = [1]\ny = 1 in x", "unknown"),
-    ("for i in range(3):\n    break", "unknown"),
+    ("x = [1]\ny = {1}", "unknown"),  # (was `1 in x`: membership is in the subset now)
+    ("for i in range(3):\n    pass\nbreak", "unknown"),  # (was a break INSIDE the loop: accepted now)
     ("while 1 == 1:\n    y = 2", "while_true_unbounded"),
     ("y = __builtins__", "builtin_call"),
 ])
@@ -334,3 +334,317 @@ def test_equal_outputs_is_type_strict_and_normalises_tuples():
     assert equal_outputs(err_a, err_b) and not equal_outputs(err_a, err_c)
     assert not equal_outputs(err_a, ok(None))
     assert values_equal((1, (2, 3)), [1, [2, 3]]) and not values_equal(0, False)
+
+
+# --- model-written constructs: range(<expr>), in / not in, break / continue ----------------
+#
+# A small deterministic generator (test-side; NOT codeworld.generate, which never emits these
+# constructs) writes `solve(xs, s, d, n)` programs. Each is parsed and run by OUR harness on 5
+# inputs and, in this test only, also exec'd by CPython (programs we wrote ourselves, never
+# model text). The two must agree on every call: same value, or both raise (same error kind).
+
+import copy as _copy
+import random as _random
+
+
+class _ProgGen:
+    """`solve(xs, s, d, n)`: xs list[int], s str, d dict[str, int], n int >= 0."""
+
+    def __init__(self, seed: int, inclusive: bool = False) -> None:
+        self.r = _random.Random(seed)
+        self.inclusive = inclusive  # emit the CPython translation of the inclusive_range dialect
+        self.lines: list[str] = []
+        self.k = 0
+        self.used: set[str] = set()
+
+    def fresh(self, base: str) -> str:
+        self.k += 1
+        return f"{base}{self.k}"
+
+    def emit(self, depth: int, text: str) -> None:
+        self.lines.append("    " * depth + text)
+
+    def range_header(self, var: str) -> tuple[str, bool]:
+        """(`range(...)` text, True iff `xs[var]` is a safe index)."""
+        r = self.r
+        one = r.random() < 0.45
+        if one:
+            hi, safe = r.choice([("len(xs)", True), ("n", False), ("len(s)", False), ("n + 1", False),
+                                 ("len(xs) - 1", True), ("len(d)", False)])
+            if hi.startswith("len(xs)"):
+                self.used.add("len(xs)")
+            if self.inclusive:
+                hi = f"{hi} + 1"  # (safe stays: both sides then index one past the end alike)
+            return f"range({hi})", safe
+        lo, hi, safe = r.choice([("1", "n", False), ("1", "n", False), ("1", "len(xs)", True), ("n", "len(xs) + 2", False),
+                                 ("0 - n", "n", False), ("2", "len(s)", False), ("len(xs) - n", "len(xs)", False)])
+        if (lo, hi) == ("1", "n"):
+            self.used.add("range(1, n)")
+        if self.inclusive:
+            hi = f"{hi} + 1"
+        return f"range({lo}, {hi})", safe
+
+    def cond(self, kind: str, v: str, safe: bool) -> str:
+        r = self.r
+        if kind == "int":
+            opts = [f"{v} in xs", f"{v} not in xs", f"{v} % 3 == 0", f"{v} > n", f"{v} in [1, 4, 7]",
+                    f"{v} + n in xs", f"{v} not in [0, 2]", f"xs[{v}] == n"]  # last: may raise, like Python
+            if safe:
+                opts += [f"xs[{v}] in xs[0:{v}]", f"xs[{v}] not in xs[0:{v}]", f"xs[{v}] > {v}"]
+            c = r.choice(opts)
+        else:
+            c = r.choice([f"{v} in d", f"{v} not in d", f"{v} in 'aeiou'", f"{v} not in s", f"{v} == 'c'",
+                          f"{v} + 'a' in s", f"{v} in ['a', 'b']"])
+        if " in " in c:
+            self.used.add("in_dict" if c.endswith(" d") else "in")
+        return c
+
+    def leaf(self, depth: int, kind: str, v: str, safe: bool) -> None:
+        r = self.r
+        if kind == "int":
+            val = r.choice([v, f"{v} * 2", f"{v} - n"] + ([f"xs[{v}]"] if safe else []))
+        else:
+            val = r.choice([v, f"{v}.upper()"])
+        choice = r.randrange(5)
+        if choice == 0:
+            self.emit(depth, f"out.append({val})")
+        elif choice == 1 and kind == "int":
+            self.emit(depth, f"acc += {val}")
+        elif choice == 1:
+            self.emit(depth, f"if {v} in d:")
+            self.emit(depth + 1, f"acc += d[{v}]")
+            self.used.add("in_dict")
+        elif choice == 2:
+            self.emit(depth, f"if {self.cond(kind, v, safe)}:")
+            self.emit(depth + 1, "acc += 1")
+            self.emit(depth, "else:")
+            self.emit(depth + 1, "acc -= 1")
+        else:
+            self.emit(depth, "acc += 1")
+
+    def loop_body(self, depth: int, kind: str, v: str, safe: bool, loop: str, nest: int) -> None:
+        r = self.r
+        n_stmts = r.randint(1, 3)
+        for _ in range(n_stmts):
+            x = r.random()
+            if x < 0.25:
+                self.emit(depth, f"if {self.cond(kind, v, safe)}:")
+                self.emit(depth + 1, "break")
+                self.used.add(f"break_{loop}")
+            elif x < 0.47:
+                self.emit(depth, f"if {self.cond(kind, v, safe)}:")
+                self.emit(depth + 1, "continue")
+                self.used.add(f"continue_{loop}")
+            elif x < 0.54 and nest > 0:
+                self.loop(depth, nest - 1)
+            else:
+                self.leaf(depth, kind, v, safe)
+
+    def loop(self, depth: int, nest: int) -> None:
+        r = self.r
+        form = r.choice((0, 0, 1, 2, 3, 4))
+        if form == 0:
+            v = self.fresh("i")
+            header, safe = self.range_header(v)
+            self.emit(depth, f"for {v} in {header}:")
+            self.used.add("range")
+            self.loop_body(depth + 1, "int", v, safe, "for", nest)
+        elif form == 1:
+            v = self.fresh("x")
+            self.emit(depth, f"for {v} in xs:")
+            self.loop_body(depth + 1, "int", v, False, "for", nest)
+        elif form == 2:
+            v = self.fresh("ch")
+            self.emit(depth, f"for {v} in s:")
+            self.loop_body(depth + 1, "str", v, False, "for", nest)
+        elif form == 3:
+            v = self.fresh("k")
+            bound = r.choice(["n", "len(xs)", "len(s) + 1"])
+            self.emit(depth, f"{v} = 0")
+            self.emit(depth, f"while {v} < {bound}:")
+            self.emit(depth + 1, f"{v} += 1")  # increment first, so `continue` cannot skip it
+            self.loop_body(depth + 1, "int", v, False, "while", nest)
+        else:
+            v, w = self.fresh("ys"), self.fresh("e")
+            self.emit(depth, f"{v} = xs[:]")
+            self.emit(depth, f"while {v}:")
+            self.emit(depth + 1, f"{w} = {v}.pop()")
+            self.loop_body(depth + 1, "int", w, False, "while", nest)
+
+    def program(self) -> str:
+        r = self.r
+        self.emit(0, "def solve(xs, s, d, n):")
+        self.emit(1, "acc = 0")
+        self.emit(1, "out = []")
+        for _ in range(r.randint(1, 3)):
+            self.loop(1, 1)
+        self.emit(1, r.choice(["return acc", "return out", "return [acc, out]", "return [acc, len(out)]"]))
+        return "\n".join(self.lines) + "\n"
+
+
+def _inputs(seed: int) -> list[tuple]:
+    r = _random.Random(seed * 7919 + 1)
+    out = []
+    for _ in range(5):
+        xs = [r.randint(-3, 9) for _ in range(r.randint(0, 6))]
+        s = "".join(r.choice("abcdeu") for _ in range(r.randint(0, 6)))
+        d = {k: r.randint(-2, 5) for k in "abcde" if r.random() < 0.5}
+        out.append((xs, s, d, r.randint(0, 7)))
+    return out
+
+
+_PY_KINDS = {TypeError: "type_error", IndexError: "index_error", KeyError: "key_error",
+             ZeroDivisionError: "operand_error"}
+
+
+def _cpython_call(src: str, args: tuple):
+    """CPython reference: exec a program THIS TEST generated (never model text), call solve."""
+    ns: dict = {}
+    exec(compile(src, "<generated>", "exec"), ns)  # noqa: S102 - test-only, our own generated source
+    try:
+        return ns["solve"](*_copy.deepcopy(args)), None
+    except Exception as e:  # noqa: BLE001
+        return None, _PY_KINDS.get(type(e), type(e).__name__)
+
+
+def _agree(src: str, ref_src: str, args: tuple, params=None) -> None:
+    p = parse_program(src, entry="solve", params=params)
+    ours = call_entry(p, args)
+    val, kind = _cpython_call(ref_src, args)
+    if kind is None:
+        assert ours.error is None and values_equal(ours.value, val), (src, args, ours, val)
+    else:
+        assert ours.error is not None and ours.error.split(":", 1)[0] == kind, (src, args, ours, kind)
+
+
+def test_range_expr_membership_break_continue_agree_with_cpython_on_320_programs():
+    used: dict[str, int] = {}
+    n_calls = n_err = 0
+    for seed in range(320):
+        g = _ProgGen(seed)
+        src = g.program()
+        parsed = parse_program(src, keep_names=True, entry="solve")
+        assert render_source(parsed) == src, src  # renders back byte for byte
+        for args in _inputs(seed):
+            _agree(src, src, args)
+            n_calls += 1
+            n_err += _cpython_call(src, args)[1] is not None
+        for k in g.used:
+            used[k] = used.get(k, 0) + 1
+    assert n_calls == 1600 and n_err < 0.2 * n_calls, n_err
+    for k in ("range", "len(xs)", "range(1, n)", "in", "in_dict", "break_for", "continue_for", "break_while",
+              "continue_while"):
+        assert used.get(k, 0) >= 15, (k, used)
+
+
+def test_inclusive_range_dialect_on_expression_bounds_matches_translated_cpython():
+    dialect = CodeDimParams(dialect=("inclusive_range",))
+    n_range = 0
+    for seed in range(120):
+        src = _ProgGen(1000 + seed).program()
+        translated = _ProgGen(1000 + seed, inclusive=True).program()  # same draws, `range(.. hi + 1)`
+        if "range(" not in src:
+            continue
+        n_range += 1
+        assert translated != src
+        for args in _inputs(1000 + seed):
+            _agree(src, translated, args, params=dialect)
+    assert n_range >= 40
+    p = parse_program("def solve(n):\n    t = 0\n    for i in range(n):\n        t += i\n    return t\n",
+                      entry="solve", params=dialect)
+    assert call_entry(p, (4,)).value == 0 + 1 + 2 + 3 + 4
+    assert call_entry(parse_program("def solve(n):\n    t = 0\n    for i in range(n):\n        t += i\n"
+                                    "    return t\n", entry="solve"), (4,)).value == 6
+
+
+def test_membership_semantics_and_errors():
+    p = parse_program("def solve(a, b):\n    return [a in b, a not in b]\n", entry="solve")
+    for a, b in [(1, [1, 2]), (3, [1, 2]), ("b", "abc"), ("bc", "abc"), ("z", "abc"), ("k", {"k": 0}),
+                 ("v", {"k": "v"}), ([1], [[1], 2]), ("", "")]:
+        assert call_entry(p, (a, b)).value == [a in b, a not in b], (a, b)
+    assert call_entry(p, (1, "abc")).error.startswith("type_error")
+    assert call_entry(p, (1, 5)).error.startswith("type_error")
+    assert call_entry(p, ([1], {"a": 1})).error.startswith("type_error")
+    with pytest.raises(SubsetViolation) as ei:
+        parse_program("x = [1]\ny = 1 in x in x")
+    assert ei.value.construct == "chained_comparison"
+
+
+def test_range_bounds_must_be_ints_at_run_time():
+    p = parse_program("def solve(a):\n    t = 0\n    for i in range(a):\n        t += 1\n    return t\n",
+                      entry="solve")
+    assert call_entry(p, (3,)).value == 3 and call_entry(p, (-2,)).value == 0
+    assert call_entry(p, ("3",)).error.startswith("type_error")
+    assert call_entry(p, ([1],)).error.startswith("type_error")
+    big = parse_program("def solve():\n    t = 0\n    for i in range(10000000):\n        t += 1\n    return t\n",
+                        entry="solve")
+    assert call_entry(big, ()).error.startswith("step_cap")
+
+
+def test_break_and_continue_bind_to_the_innermost_loop():
+    src = ("def solve(xs):\n    out = []\n    for a in xs:\n        for b in xs:\n            if b > a:\n"
+           "                break\n            if b == a:\n                continue\n            out.append(b)\n"
+           "        if a == 3:\n            break\n    return out\n")
+    p = parse_program(src, entry="solve")
+    for xs in ([1, 2, 3, 4], [3, 1, 2], [], [5, 5, 0, 3, 1]):
+        assert values_equal(call_entry(p, (xs,)).value, _cpython_call(src, (xs,))[0]), xs
+
+
+@pytest.mark.parametrize("src,detail", [
+    ("x = 0\nwhile True:\n    x += 1", "constant test"),
+    ("x = 0\nwhile 1:\n    x += 1", "constant test"),  # no break: nothing can end it
+    ("x = 0\nwhile 'go':\n    x += 1", "constant test"),
+    ("def solve(n):\n    t = 0\n    while n > 0:\n        t += n\n    return t", "test reads n"),
+    ("def solve(xs, i):\n    t = 0\n    while i < len(xs):\n        t += xs[i]\n    return t", "test reads i, xs"),
+])
+def test_obviously_unbounded_while_is_rejected_at_parse_time(src, detail):
+    with pytest.raises(SubsetViolation) as ei:
+        parse_program(src, entry="solve")
+    assert ei.value.construct == "while_true_unbounded" and detail in ei.value.detail, ei.value
+
+
+@pytest.mark.parametrize("src,args,want", [
+    ("def solve(n):\n    t = 0\n    while n > 0:\n        t += n\n        n -= 1\n    return t", (4,), 10),
+    ("def solve(xs):\n    t = 0\n    while xs:\n        t += xs.pop()\n    return t", ([1, 2, 3],), 6),
+    ("def solve(xs):\n    i = 0\n    while i < len(xs):\n        if xs[i] < 0:\n            break\n"
+     "        i += 1\n    return i", ([2, 5, -1, 3],), 2),
+    ("def solve(xs):\n    ys = xs\n    while xs:\n        ys.pop()\n    return len(xs)", ([1, 2],), 0),
+    ("def solve(n):\n    t = 0\n    while n > 0:\n        for j in range(n):\n            t += 1\n"
+     "        n = n // 2\n    return t", (4,), 7),
+])
+def test_bounded_while_forms_are_accepted(src, args, want):
+    assert call_entry(parse_program(src, entry="solve"), args).value == want
+
+
+def test_break_continue_outside_a_loop_and_range_step_are_rejected():
+    cases = [
+        ("break", "unknown", "break_outside_loop"),
+        ("x = 1\nif x:\n    continue", "unknown", "continue_outside_loop"),
+        ("def solve(xs):\n    if xs:\n        break\n    return 1", "unknown", "break_outside_loop"),
+        ("for i in range(1, 10, 2):\n    x = i", "unknown", "range_step"),
+        ("n = 3\nfor i in range(0, n, 1):\n    x = i", "unknown", "range_step"),
+        ("x = range(3)", "builtin_call", "range"),
+        ("n = 3\nxs = [range(n)]", "builtin_call", "range"),
+        ("for i in range(1.5):\n    x = i", "float", ""),
+        ("for i in range(len(xs) ** 2):\n    x = i", "power", ""),
+    ]
+    for src, construct, detail in cases:
+        with pytest.raises(SubsetViolation) as ei:
+            parse_program(src)
+        assert ei.value.construct == construct and ei.value.detail == detail, (src, ei.value)
+
+
+def test_while_true_with_break_is_accepted_and_runs():
+    from cartographer.codefix import call_entry, parse_program
+
+    src = "def solve(n):\n    i = 0\n    while True:\n        i += 1\n        if i >= n:\n            break\n    return i\n"
+    prog = parse_program(src, entry="solve")
+    assert call_entry(prog, (5,)).value == 5
+    src2 = "def solve(n):\n    i = 0\n    while True:\n        i += 1\n    return i\n"
+    import pytest as _pt
+
+    from cartographer.codefix.parse import SubsetViolation
+
+    with _pt.raises(SubsetViolation) as e:
+        parse_program(src2, entry="solve")
+    assert e.value.construct == "while_true_unbounded"

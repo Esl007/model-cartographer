@@ -21,9 +21,11 @@ from .model import (
     AugAssign,
     BinOp,
     BoolOp,
+    Break,
     Call,
     Compare,
     Const,
+    Continue,
     DictLit,
     ExprStmt,
     For,
@@ -303,18 +305,28 @@ def _stmt_lines(s, n: dict, indent: int, notes: dict) -> list[str]:
         return lines
     if isinstance(s, For):
         if isinstance(s.iter, RangeIter):
-            it = f"range({s.iter.hi})" if s.iter.lo is None else f"range({s.iter.lo}, {s.iter.hi})"
+            hi = _bound(s.iter.hi, n)
+            it = f"range({hi})" if s.iter.lo is None else f"range({_bound(s.iter.lo, n)}, {hi})"
         else:
             it = render_expr(s.iter, n)
         return [f"{pad}for {n[s.var]} in {it}:{tail}"] + _block(s.body, n, indent + 1, notes)
     if isinstance(s, While):
         return [f"{pad}while {render_expr(s.test, n)}:{tail}"] + _block(s.body, n, indent + 1, notes)
+    if isinstance(s, Break):
+        return [f"{pad}break{tail}"]
+    if isinstance(s, Continue):
+        return [f"{pad}continue{tail}"]
     if isinstance(s, FuncDef):
         n_req = len(s.params) - len(s.defaults)
         parts = [n[p] for p in s.params[:n_req]]
         parts += [f"{n[p]}={render_expr(d, n)}" for p, d in zip(s.params[n_req:], s.defaults)]
         return [f"{pad}def {n[s.name]}({', '.join(parts)}):{tail}"] + _block(s.body, n, indent + 1, notes)
     raise TypeError(type(s).__name__)
+
+
+def _bound(b, n: dict) -> str:
+    """A range bound: an int as before (`range(3)`), or an expression."""
+    return str(b) if isinstance(b, int) else _wrap(b, n, 1)
 
 
 def _block(body, n: dict, indent: int, notes: dict) -> list[str]:
