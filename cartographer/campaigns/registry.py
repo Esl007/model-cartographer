@@ -30,6 +30,7 @@ from typing import Callable
 
 from ..exec import evaluator as E
 from ..interactive import campaign as IC
+from ..repo import evaluator as R
 from ..schedule.escalate import EscalationRay, RayDim
 from .consistency import run_consistency_campaign
 
@@ -39,6 +40,7 @@ PROVINCES: dict[str, str] = {
     "III": "Interactive execution (multi-turn tool calls)",
     "IV": "Code tracing",
     "V": "Code repair and writing",
+    "VI": "Repository navigation and repair",
     "X": "Cross-cutting",
 }
 
@@ -102,6 +104,9 @@ _NARRATIVE = "One-shot story + question; answers checked against the generator's
 _CODE = "One-shot program + question; ground truth from the project's own interpreter."
 _CODEFIX = ("One-shot repair / write; the answer is parsed into the project's own AST (never run as Python) and "
             "checked by its own interpreter on hidden inputs.")
+_REPO = ("Interactive repository episodes (native tool calling; `--text-tools` switches to text_fallback). The "
+         "files are parsed into the project's own AST and run by its interpreter on hidden inputs -- nothing the "
+         "model writes is executed as Python. Records under <run_id>; resample reruns under <run_id>/verify.")
 _TICKET = ("Interactive, text_fallback protocol by default; resample-gated (failures re-run before "
            "they count). Attribution ablations: scripts/run_ticket_fidelity.py --attribute.")
 
@@ -340,6 +345,60 @@ _SPECS: tuple[CampaignSpec, ...] = (
         "axis", E.run_code_breaking_point_campaign, "camp-code-gotcha-{label}-{n:03d}",
         ray_factory=E.default_code_gotcha_ray, protocol_note=_CODE,
         default_kwargs={"budget": 200, "cost_cap": 0.30, "k_trials": 7, "parallelism": 6}),
+    # ---- Province VI: repositories ------------------------------------------
+    CampaignSpec(
+        "VI.navigate", "VI", "Find a bug's cause across files",
+        "When a failing test's cause sits one to six function calls away in another file, does the model follow "
+        "the calls to the right file and fix the cause there, not the symptom?",
+        "cause 1 -> 6 calls from the tested function x 4 -> 12 files, 20 tool calls",
+        "axis", R.run_repo_breaking_point_campaign, "camp-repo-navigate-{label}-{n:03d}",
+        ray_factory=R.default_repo_navigate_ray, frontier_rows=("repo_navigate",), protocol_note=_REPO,
+        default_kwargs={"budget": 60, "cost_cap": 2.0, "k_trials": 5, "parallelism": 4}),
+    CampaignSpec(
+        "VI.lookalike", "VI", "Look-alike function names across files",
+        "When other files define functions whose names differ by a letter or two from the real ones, does the "
+        "model call and import the functions that exist -- or ones that only look right?",
+        "look-alike twins on x 4 -> 12 files, cause 1 -> 3 calls away",
+        "axis", R.run_repo_breaking_point_campaign, "camp-repo-lookalike-{label}-{n:03d}",
+        ray_factory=R.default_repo_lookalike_ray, frontier_rows=("repo_lookalike",), protocol_note=_REPO,
+        default_kwargs={"budget": 60, "cost_cap": 2.0, "k_trials": 5, "parallelism": 4}),
+    CampaignSpec(
+        "VI.clone", "VI", "A near-copy of the buggy function elsewhere",
+        "When another file holds a near-copy of the buggy function that nothing calls, does the model fix the "
+        "function that actually runs?",
+        "near-miss clone on x 4 -> 12 files, cause 1 -> 3 calls away",
+        "axis", R.run_repo_breaking_point_campaign, "camp-repo-clone-{label}-{n:03d}",
+        ray_factory=R.default_repo_clone_ray, frontier_rows=("repo_clone",), protocol_note=_REPO,
+        default_kwargs={"budget": 60, "cost_cap": 2.0, "k_trials": 5, "parallelism": 4}),
+    CampaignSpec(
+        "VI.budget", "VI", "Tool-call budget for a cross-file fix",
+        "How few tool calls does the model need to find and fix a cause three calls away in an eight-file "
+        "repository?",
+        "tool budget 30 -> 6 calls, cause 3 calls away, 8 files",
+        "axis", R.run_repo_breaking_point_campaign, "camp-repo-budget-{label}-{n:03d}",
+        ray_factory=R.default_repo_budget_ray, frontier_rows=("repo_budget",), protocol_note=_REPO,
+        default_kwargs={"budget": 60, "cost_cap": 2.0, "k_trials": 5, "parallelism": 4}),
+    CampaignSpec(
+        "VI.control", "VI", "The same program over more files (navigation control)",
+        "Does the model fix the same bug in the same program less often when that program is split over more "
+        "files?",
+        "1 -> 8 files, program pinned at 8 functions, cause 1 call away",
+        "axis", R.run_repo_breaking_point_campaign, "camp-repo-control-{label}-{n:03d}",
+        ray_factory=R.default_repo_control_ray, frontier_rows=("repo_control",),
+        protocol_note=_REPO + " At one file this is Province V's task, so the drop along the ray is the cost "
+                              "of navigation itself.",
+        default_kwargs={"budget": 60, "cost_cap": 2.0, "k_trials": 5, "parallelism": 4}),
+    CampaignSpec(
+        "VI.graph_value", "VI", "Value of a code-graph tool (paired)",
+        "On identical repositories, does a tool that lists a function's callers and callees shorten the model's "
+        "search for the cause -- and does it change whether the bug gets fixed?",
+        "get_code_neighbors off vs on, same repositories, 4 and 8 files, cause 3 calls away",
+        "rate", R.run_graph_value_campaign, "camp-repo-graph-{label}-{n:03d}",
+        frontier_rows=("repo_graph_value",),
+        protocol_note=_REPO + " Paired: <run_id>/graph_off and <run_id>/graph_on hold the two arms; the H4 "
+                              "statistics (Wilcoxon on calls before the cause's file is read, McNemar on "
+                              "verdicts) are in the result note.",
+        default_kwargs={"levels": (4, 8), "n_seeds": 10, "cost_cap": 3.0, "parallelism": 4}),
     # ---- Cross-cutting -----------------------------------------------------
     CampaignSpec(
         "X.full_map", "X", "Full narrative battery",

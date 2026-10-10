@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import sys
 from dataclasses import dataclass
 
 from cartographer.codeworld.model import (
@@ -103,6 +104,8 @@ CONSTRUCTS = (
     "global_nonlocal", "attribute", "float", "power", "is_operator", "chained_comparison", "tuple_unpacking",
     "delete", "assert", "starargs", "nested_def_depth", "print_multiple_args", "builtin_call", "walrus",
     "match", "async", "with", "raise", "yield", "slice_step", "keyword_argument", "augassign_op", "unknown",
+    # repository mode only (Province VI, `parse_module`; docs/province-vi-spec.md §4.5)
+    "foreign_import", "import_alias", "import_star", "relative_import", "module_statement",
 )
 
 MAX_SOURCE_CHARS = 50_000
@@ -724,3 +727,159 @@ def render_source(program: Program, names: dict | None = None) -> str:
         if isinstance(s, FuncDef) and i + 1 < len(program.body):
             lines.append("")
     return "\n".join(lines) + "\n"
+
+
+# -- repository mode (Province VI, docs/province-vi-spec.md §4.5) -----------------------------
+#
+# One file of a generated repository. Module level may hold only `def`s and imports (plus
+# docstrings, dropped). Imports between the repository's own modules are accepted in two forms,
+# `from <m> import <n>[, <n>...]` and `import <m>` with calls `<m>.<n>(...)`; whether `<n>`
+# exists in `<m>` is decided later, over the whole repository (`cartographer.repo.flatten`),
+# because a model may add a helper in one file and import it from another. A call to a name the
+# file neither defines nor imports is NOT a parse error: it is recorded (`unresolved`) and the
+# repository verifier scores it `fabricated_symbol` -- that is the mechanism under test.
+# `from typing import ...` / `from __future__ import ...` are dropped like annotations are
+# (the V-B lesson: never reject a harmless spelling a correct answer uses).
+
+_NOOP_IMPORT_MODULES = frozenset({"typing", "__future__"})
+_FOREIGN_THIRD_PARTY = frozenset({"numpy", "pandas", "scipy", "sympy", "requests", "pytest", "attr", "attrs",
+                                  "pydantic", "typing_extensions", "six", "yaml", "toml", "dateutil"})
+
+
+def is_foreign_module(name: str) -> bool:
+    """A module that is not part of any generated repository: the standard
+    library or a common third-party package (importing it is outside the
+    subset, `foreign_import`). Repository module names never collide with
+    these (asserted in tests)."""
+    top = name.split(".")[0]
+    return top in sys.stdlib_module_names or top in _FOREIGN_THIRD_PARTY
+
+
+@dataclass(frozen=True)
+class ParsedModule:
+    """One repository file in our AST. `body` holds only `FuncDef`s whose ids
+    ARE the source identifiers. Calls inside them name either a def of this
+    file (`f`), a from-imported name (`f`, resolved by `from_imports`), a
+    module-qualified callee (`m.f`, for `import m`), or an unresolved name
+    (`?f`)."""
+
+    body: tuple
+    from_imports: tuple  # ((local name, module, name, lineno), ...) in source order
+    module_imports: tuple  # ((module, lineno), ...) for `import m`
+    unresolved: tuple  # ((name, lineno), ...)
+    attr_calls: tuple  # ((module, name, lineno), ...)
+
+
+class _RepoConverter(_Converter):
+    def __init__(self, repo_modules) -> None:
+        super().__init__(keep_names=True)
+        self.repo_modules = frozenset(repo_modules)
+        self.imported: dict[str, tuple[str, str]] = {}
+        self.aliases: set[str] = set()
+        self.from_imports: list = []
+        self.module_imports: list = []
+        self.unresolved: list = []
+        self.attr_calls: list = []
+
+    def module(self, tree: ast.Module) -> tuple:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                self.bound.add(node.id)
+            elif isinstance(node, ast.arg):
+                self.bound.add(node.arg)
+            elif isinstance(node, ast.FunctionDef):
+                self.bound.add(node.name)
+                self.def_names.add(node.name)
+        for s in tree.body:  # imports first: a call may precede the import line textually
+            if isinstance(s, (ast.Import, ast.ImportFrom)):
+                self.import_(s)
+        body = []
+        for s in tree.body:
+            if isinstance(s, (ast.Import, ast.ImportFrom)):
+                continue
+            if isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and isinstance(s.value.value, str):
+                continue  # module docstring / bare string
+            if isinstance(s, ast.FunctionDef):
+                body.append(self.stmt(s, _Scope()))
+                continue
+            construct = _STMT_CONSTRUCT.get(type(s))
+            if construct is not None:
+                raise _bad(construct, s)
+            raise _bad("module_statement", s, type(s).__name__)
+        self._check_cycles()
+        return tuple(body)
+
+    def import_(self, s) -> None:
+        if isinstance(s, ast.ImportFrom):
+            mod = s.module or ""
+            if s.level:
+                raise _bad("relative_import", s)
+            if mod.split(".")[0] in _NOOP_IMPORT_MODULES:
+                return
+            if any(a.name == "*" for a in s.names):
+                raise _bad("import_star", s, mod)
+            if any(a.asname for a in s.names):
+                raise _bad("import_alias", s, mod)
+            if mod not in self.repo_modules and ("." in mod or is_foreign_module(mod)):
+                raise _bad("foreign_import", s, mod)
+            for a in s.names:
+                if a.name in _OWN_BUILTINS:
+                    raise _bad("unknown", s, f"shadows_builtin:{a.name}")
+                self.imported[a.name] = (mod, a.name)
+                self.bound.add(a.name)
+                self.from_imports.append((a.name, mod, a.name, _line(s)))
+            return
+        for a in s.names:
+            if a.asname:
+                raise _bad("import_alias", s, a.name)
+            if a.name.split(".")[0] in _NOOP_IMPORT_MODULES:
+                continue
+            if a.name not in self.repo_modules and ("." in a.name or is_foreign_module(a.name)):
+                raise _bad("foreign_import", s, a.name)
+            self.aliases.add(a.name)
+            self.module_imports.append((a.name, _line(s)))
+
+    def stmt(self, s, scope: _Scope):
+        if isinstance(s, (ast.Import, ast.ImportFrom)):
+            raise _bad("import", s, "import inside a def")
+        return super().stmt(s, scope)
+
+    def call(self, e: ast.Call, scope: _Scope):
+        f = e.func
+        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in self.aliases:
+            self._call_args(e)
+            self.attr_calls.append((f.value.id, f.attr, _line(e)))
+            return Call(f"{f.value.id}.{f.attr}", tuple(self.expr(a, scope) for a in e.args))
+        if isinstance(f, ast.Name):
+            name = f.id
+            if name in self.imported and name not in self.def_names:
+                self._call_args(e)
+                return Call(name, tuple(self.expr(a, scope) for a in e.args))
+            if name not in self.bound and name not in _BUILTIN_NAMES:
+                self._call_args(e)
+                self.unresolved.append((name, _line(e)))
+                return Call("?" + name, tuple(self.expr(a, scope) for a in e.args))
+        return super().call(e, scope)
+
+
+def parse_module(source: str, *, repo_modules) -> ParsedModule:
+    """Parse one repository file (no execution). Raises `SubsetViolation` /
+    `CodeParseError` exactly like `parse_program`; see the block comment above
+    for what repository mode adds."""
+    if not isinstance(source, str):
+        raise CodeParseError("source is not text")
+    if len(source) > MAX_SOURCE_CHARS:
+        raise CodeParseError(f"source longer than {MAX_SOURCE_CHARS} characters")
+    try:
+        tree = ast.parse(source, mode="exec")  # syntax tree only: nothing is compiled or run
+    except SyntaxError as e:
+        raise CodeParseError(f"syntax error: {e.msg}", e.lineno or 0) from None
+    except (RecursionError, MemoryError, ValueError) as e:
+        raise CodeParseError(f"unreadable source: {type(e).__name__}") from None
+    conv = _RepoConverter(repo_modules)
+    try:
+        body = conv.module(tree)
+    except RecursionError:
+        raise CodeParseError("source nested too deeply") from None
+    return ParsedModule(body, tuple(conv.from_imports), tuple(conv.module_imports), tuple(conv.unresolved),
+                        tuple(conv.attr_calls))

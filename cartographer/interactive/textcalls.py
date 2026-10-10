@@ -76,6 +76,41 @@ def _json_calls(blob: str) -> list[tuple[str, dict]]:
     return calls
 
 
+def _ast_calls(body: str, param_orders: dict[str, list[str]]) -> list[tuple[str, dict]] | None:
+    """The calls of a fenced block that parses as Python and holds nothing but
+    call statements (optionally wrapped in `print(...)`), or None. This is the
+    exact reading of a call whose string arguments span lines (a multi-line
+    `edit_file(..., old=\"\"\"...\"\"\")`), which the line regex cannot see; on
+    single-line calls it agrees with the regex."""
+    try:
+        tree = ast.parse(body)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    calls: list[tuple[str, dict]] = []
+    for st in tree.body:
+        if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Call)):
+            return None
+        c = st.value
+        if isinstance(c.func, ast.Name) and c.func.id == "print" and len(c.args) == 1 \
+                and isinstance(c.args[0], ast.Call):
+            c = c.args[0]
+        if not isinstance(c.func, ast.Name):
+            return None
+        order = param_orders.get(c.func.id, [])
+        args: dict = {}
+        try:
+            for i, a in enumerate(c.args):
+                if i < len(order):
+                    args[order[i]] = ast.literal_eval(a)
+            for kw in c.keywords:
+                if kw.arg is not None:
+                    args[kw.arg] = ast.literal_eval(kw.value)
+        except (ValueError, SyntaxError, TypeError):
+            args = {}
+        calls.append((c.func.id, args))
+    return calls or None
+
+
 def parse_text_tool_calls(text: str | None, param_orders: dict[str, list[str]]) -> list[tuple[str, dict]]:
     """Every tool call written in `text`, in order, as (name, args).
 
@@ -93,6 +128,8 @@ def parse_text_tool_calls(text: str | None, param_orders: dict[str, list[str]]) 
             continue
         found = _json_calls(body.strip())
         if not found:
+            found = _ast_calls(body, param_orders) or []
+        if not found:
             for name, argstr in _CALL_RE.findall(body):
                 found.append((name, _parse_args(argstr, param_orders.get(name, []))))
         calls.extend(found)
@@ -104,9 +141,13 @@ def parse_text_tool_calls(text: str | None, param_orders: dict[str, list[str]]) 
     return calls
 
 
-def format_tool_results(results: list[tuple[str, dict]]) -> str:
+def format_tool_results(results: list[tuple[str, dict]], render=None) -> str:
     """The user-turn message carrying results back, in the `tool_output`
-    convention text-protocol models use."""
+    convention text-protocol models use. `render(result) -> str`, when given
+    (an environment's own `render_result`), replaces the JSON form -- file
+    contents read far better as text than as an escaped JSON string."""
+    if render is not None:
+        return "```tool_output\n" + "\n\n".join(f"{name}:\n{render(result)}" for name, result in results) + "\n```"
     lines = [f"{name}: {json.dumps(result)}" for name, result in results]
     return "```tool_output\n" + "\n".join(lines) + "\n```"
 

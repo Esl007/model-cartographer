@@ -68,6 +68,17 @@ launch.
 | `V.repair_regressions` | When a function has one to three bugs, shifting from simple slips (wrong operator, off by one) to behaviour bugs (shared lists, dropped updates), does the model fix the causes without breaking anything? | 1 -> 3 bugs, syntactic -> semantic mix, 4 hidden checks, size pinned at 18 | axis | -- | -- |
 | `V.write` | Given a plain-English description and a few examples, can the model write a function that also gets unseen inputs and edge cases (empty list, zero, negative) right? | 0 -> 3 edge cases in the hidden checks while the examples shrink 3 -> 1 | axis | -- | -- |
 
+## Province VI -- Repository navigation and repair
+
+| id | question | what is turned up | evidence | legacy alias | frontier rows fed |
+|---|---|---|---|---|---|
+| `VI.navigate` | When a failing test's cause sits one to six function calls away in another file, does the model follow the calls to the right file and fix the cause there, not the symptom? | cause 1 -> 6 calls from the tested function x 4 -> 12 files, 20 tool calls | axis | -- | `repo_navigate` |
+| `VI.lookalike` | When other files define functions whose names differ by a letter or two from the real ones, does the model call and import the functions that exist -- or ones that only look right? | look-alike twins on x 4 -> 12 files, cause 1 -> 3 calls away | axis | -- | `repo_lookalike` |
+| `VI.clone` | When another file holds a near-copy of the buggy function that nothing calls, does the model fix the function that actually runs? | near-miss clone on x 4 -> 12 files, cause 1 -> 3 calls away | axis | -- | `repo_clone` |
+| `VI.budget` | How few tool calls does the model need to find and fix a cause three calls away in an eight-file repository? | tool budget 30 -> 6 calls, cause 3 calls away, 8 files | axis | -- | `repo_budget` |
+| `VI.control` | Does the model fix the same bug in the same program less often when that program is split over more files? | 1 -> 8 files, program pinned at 8 functions, cause 1 call away | axis | -- | `repo_control` |
+| `VI.graph_value` | On identical repositories, does a tool that lists a function's callers and callees shorten the model's search for the cause -- and does it change whether the bug gets fixed? | get_code_neighbors off vs on, same repositories, 4 and 8 files, cause 3 calls away | rate | -- | `repo_graph_value` |
+
 ## Province X -- Cross-cutting
 
 | id | question | what is turned up | evidence | legacy alias | frontier rows fed |

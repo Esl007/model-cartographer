@@ -148,6 +148,7 @@ class InteractiveEvaluator:
             f";errors={s['n_errors']};invalid_tickets={s['invalid_tickets']};recovered={int(s['recovered'])}"
             f";first_deviation_step={s['first_deviation_step']};links={s['n_links']}"
             f";fault_step={int(latent['fault_step'])};turns={res.turns}"
+            f";protocol_version={res.protocol_version};result_rendering={res.result_rendering}"
         )
         if s["ticket_errors"]:
             detail += ";ticket_errors=" + ",".join(f"{k}:{v}" for k, v in sorted(s["ticket_errors"].items()))
@@ -165,6 +166,7 @@ class InteractiveEvaluator:
             "fabricated_tickets": float(s["fabricated_tickets"]),
             "realized_carry_distance": float(s["carry_distance"]),
             "realized_live_tickets": float(s["max_live_tickets"]),
+            "protocol_version": float(res.protocol_version),
             **{f"ticket_error_{k}": float(v) for k, v in s["ticket_errors"].items()},
         })
         prompt = env.opening_messages()[1]["content"]
