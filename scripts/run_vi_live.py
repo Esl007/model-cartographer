@@ -65,22 +65,42 @@ def log(fh, msg: str) -> None:
     fh.flush()
 
 
+def _apps() -> list | None:
+    """This app's rows from `modal app list --json`, or None when the listing itself failed
+    (a failed listing must never read as "stopped": 2026-10-10 it did, and an idle app stayed
+    deployed until a manual stop)."""
+    import json as _json
+
+    for _ in range(3):
+        try:
+            r = subprocess.run([MODAL, "app", "list", "--json"], capture_output=True, text=True, timeout=120)
+            rows = _json.loads(r.stdout)
+            return [x for x in rows if x.get("description") == APP]
+        except (subprocess.TimeoutExpired, ValueError):
+            time.sleep(10)
+    return None
+
+
 def app_state() -> str:
-    try:
-        out = subprocess.run([MODAL, "app", "list"], capture_output=True, text=True, timeout=120).stdout
-    except subprocess.TimeoutExpired:
+    rows = _apps()
+    if rows is None:
         return "unknown"
-    rows = [ln for ln in out.splitlines() if APP[:8] in ln]
-    if any(("deployed" in ln) or ("initiali" in ln) or ("stopping" in ln) for ln in rows):
-        return "deployed"  # any live app of this name counts; stopped history rows are ignored
+    if any(x.get("state") not in ("stopped",) for x in rows):
+        return "deployed"
     return "stopped" if rows else "absent"
 
 
 def stop_app(fh) -> None:
-    for attempt in range(3):
-        r = subprocess.run([MODAL, "app", "stop", APP, "--yes"], capture_output=True, text=True, timeout=180)
+    """Stop every live row of this app by id (and by name), until a listing confirms it."""
+    for attempt in range(5):
+        rows = _apps()
+        live = [x["app_id"] for x in (rows or []) if x.get("state") != "stopped"]
+        targets = live or ([APP] if rows is None or attempt == 0 else [])
+        for t in targets:
+            r = subprocess.run([MODAL, "app", "stop", t, "--yes"], capture_output=True, text=True, timeout=180)
+            log(fh, f"app stop {t} rc={r.returncode}")
         state = app_state()
-        log(fh, f"app stop rc={r.returncode} state={state}")
+        log(fh, f"app state after stop: {state}")
         if state in ("stopped", "absent"):
             return
         time.sleep(20)
@@ -101,7 +121,7 @@ def watchdog(deadline: float, pid: int, fh) -> None:
         if not alive:
             state = app_state()
             log(fh, f"WATCHDOG session process gone; app {state}")
-            if state == "deployed":
+            if state != "stopped":  # deployed, unknown, or (suspiciously) absent: stop to be sure
                 stop_app(fh)
             break
         if now - last_report >= 600:
