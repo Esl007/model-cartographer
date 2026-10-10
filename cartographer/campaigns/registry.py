@@ -31,6 +31,7 @@ from typing import Callable
 from ..exec import evaluator as E
 from ..interactive import campaign as IC
 from ..repo import evaluator as R
+from . import evidence_fidelity as EFC
 from ..schedule.escalate import EscalationRay, RayDim
 from .consistency import run_consistency_campaign
 
@@ -41,6 +42,7 @@ PROVINCES: dict[str, str] = {
     "IV": "Code tracing",
     "V": "Code repair and writing",
     "VI": "Repository navigation and repair",
+    "EF": "Evidence fidelity (paired condition grid over the provinces)",
     "X": "Cross-cutting",
 }
 
@@ -107,6 +109,10 @@ _CODEFIX = ("One-shot repair / write; the answer is parsed into the project's ow
 _REPO = ("Interactive repository episodes (native tool calling; `--text-tools` switches to text_fallback). The "
          "files are parsed into the project's own AST and run by its interpreter on hidden inputs -- nothing the "
          "model writes is executed as Python. Records under <run_id>; resample reruns under <run_id>/verify.")
+_EF = ("Evidence Fidelity Campaign (docs/spec-evidence-fidelity-campaign.md): every trial seed runs through the "
+       "family's arms -- A agree, B conflict, C salience, D presentation (+ X transfer / E exploratory) -- on the "
+       "SAME task, under <run_id>/<arm>; paired McNemar (pass) and Wilcoxon (mechanism signature), Holm within "
+       "the family. `resample_gate` reruns every FAIL under <run_id>/<arm>/verify.")
 _TICKET = ("Interactive, text_fallback protocol by default; resample-gated (failures re-run before "
            "they count). Attribution ablations: scripts/run_ticket_fidelity.py --attribute.")
 
@@ -399,6 +405,53 @@ _SPECS: tuple[CampaignSpec, ...] = (
                               "statistics (Wilcoxon on calls before the cause's file is read, McNemar on "
                               "verdicts) are in the result note.",
         default_kwargs={"levels": (4, 8), "n_seeds": 10, "cost_cap": 3.0, "parallelism": 4}),
+    # ---- Evidence fidelity (cross-cutting condition grid) --------------------
+    CampaignSpec(
+        "EF.belief", "EF", "Evidence vs prior: other people's beliefs",
+        "When a story makes clear where a person last saw something, does the model answer from what that "
+        "person saw, or from where the object really is -- and does restating or flagging what they saw help?",
+        "A the person saw every move / B they missed the last ones / C what they saw restated before the "
+        "question / D the same sentences flagged in place", "battery", EFC.run_ef_belief,
+        "camp-ef-belief-{label}-{n:03d}", frontier_rows=("ef_belief",), protocol_note=_EF,
+        default_kwargs={"n_trials": 20, "cost_cap": 0.5, "parallelism": 6}),
+    CampaignSpec(
+        "EF.tools", "EF", "Evidence vs prior: exact tool ids",
+        "When tool ids are near-misspellings of what they 'should' be called, does the model copy the exact "
+        "ids -- and does restating or flagging the ids help?",
+        "A natural ids / B look-alike ids / C every id restated at the end / D ids flagged in the catalog",
+        "battery", EFC.run_ef_tools, "camp-ef-tools-{label}-{n:03d}", frontier_rows=("ef_tools",),
+        protocol_note=_EF, default_kwargs={"n_trials": 20, "cost_cap": 0.5, "parallelism": 6}),
+    CampaignSpec(
+        "EF.tickets", "EF", "Evidence vs prior: carried values (tickets)",
+        "When a tool returns an opaque ticket a later call needs, does the model copy it or invent a "
+        "plausible one -- and does restating or flagging the ticket help?",
+        "A the ticket is guessable / B opaque, 3 calls later / C restated in every result / D flagged when "
+        "issued / X the dependency chain restated (no values)", "battery", EFC.run_ef_tickets,
+        "camp-ef-tickets-{label}-{n:03d}", frontier_rows=("ef_tickets",), protocol_note=_EF + " " + _TEXT_TOOLS,
+        default_kwargs={"n_trials": 20, "cost_cap": 1.0, "parallelism": 4}),
+    CampaignSpec(
+        "EF.comments", "EF", "Evidence vs prior: misleading code comments",
+        "When a comment asserts a wrong value for a line of code, does the model trace the code or trust the "
+        "comment -- and does flagging the line help?",
+        "A neutral comments / B misleading comments / C not applicable (it would leak the answer) / D the line "
+        "flagged / E the comment itself shouted (exploratory)", "battery", EFC.run_ef_comments,
+        "camp-ef-comments-{label}-{n:03d}", frontier_rows=("ef_comments",), protocol_note=_EF,
+        default_kwargs={"n_trials": 20, "cost_cap": 0.5, "parallelism": 6}),
+    CampaignSpec(
+        "EF.repair", "EF", "Evidence vs prior: where a bug's cause is",
+        "When the failing test names one file and the cause sits in another, does the model fix the cause -- "
+        "and does showing the data flow, or flagging expected vs actual, help?",
+        "A the bug is in the test's own file / B two calls away / C the data flow shown / D expected vs actual "
+        "aligned / X the symbol table restated", "battery", EFC.run_ef_repair,
+        "camp-ef-repair-{label}-{n:03d}", frontier_rows=("ef_repair",), protocol_note=_EF + " " + _REPO,
+        default_kwargs={"n_trials": 20, "cost_cap": 2.0, "parallelism": 4}),
+    CampaignSpec(
+        "EF.transfer", "EF", "Evidence vs prior: which help fixes which failure (H-EF4)",
+        "Does the help that fixes carried values (restating them) also fix bug-finding, and does the help that "
+        "fixes bug-finding (the data flow) also fix carried values?",
+        "tickets B / C restated values / X restated dependency chain; repair B / C data flow / X restated "
+        "symbols", "battery", EFC.run_ef_transfer, "camp-ef-transfer-{label}-{n:03d}", protocol_note=_EF,
+        default_kwargs={"n_trials": 20, "cost_cap": 2.0, "parallelism": 4}),
     # ---- Cross-cutting -----------------------------------------------------
     CampaignSpec(
         "X.full_map", "X", "Full narrative battery",

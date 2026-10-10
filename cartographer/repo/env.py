@@ -364,7 +364,10 @@ class RepoEnv:
                 continue
             n_fail += 1
             lines += [f"{name} FAILED", f"    assert {call} == {expected!r}"]
-            if err is None:
+            if err is None and self.params.diff_emphasis:
+                # EF condition D (formatting only): the same two values, aligned in a block
+                lines += ["    AssertionError:", f"    | expected: {expected!r}", f"    | actual:   {v!r}"]
+            elif err is None:
                 lines.append(f"    AssertionError: {call} returned {v!r}")
             elif err.startswith("step_cap"):
                 lines.append(f"    {call} did not finish (step limit exceeded)")
@@ -372,11 +375,33 @@ class RepoEnv:
                 lines.append(f"    RuntimeError: {err.split(':', 1)[1].strip()}")
         n = len(task.tests())
         lines.append(f"{n_fail} failed, {n - n_fail} passed")
+        if self.params.show_data_flow and n_fail:
+            lines.append("\n" + self.data_flow_text(flat))
         if self.params.restate_imports:
             src = self.files.get(f"{task.entry_module}.py", "")
             imps = [ln for ln in src.split("\n") if ln.startswith(("from ", "import "))]
             lines.append(f"\n{task.entry_module}.py imports:\n" + ("\n".join(f"  {x}" for x in imps) or "  (none)"))
         return "\n".join(lines)
+
+    def data_flow_text(self, flat) -> str:
+        """EF causal C (`show_data_flow`): how the failing test's value is produced right now, as
+        recorded by OUR interpreter on the visible input -- the chain of calls from `solve` down
+        the call path that reaches the bug, with each call's arguments and returned value. It
+        names functions and values the model could trace itself; it never shows a fix."""
+        task = self.task
+        wanted = [task.qualified(f) for f in task.path]
+        calls = _record_calls(flat.program, task.visible_input, set(wanted))
+        out = [f"Data flow for solve{_args(task.visible_input)} in the code as it is now:"]
+        depth = 0
+        for q in wanted:
+            if q not in calls:
+                break
+            a, r = calls[q]
+            mod, _, fn = q.partition("__")
+            out.append(f"{'  ' * (depth + 1)}{'' if depth == 0 else 'which uses '}{mod}.{fn}{_args(a)}"
+                       f" -> returns {r!r}")
+            depth += 1
+        return "\n".join(out)
 
     # -- outcome -------------------------------------------------------------------------------------
     def edited_files(self) -> list[str]:
@@ -428,6 +453,38 @@ class RepoEnv:
 
 class _BadArgs(Exception):
     pass
+
+
+def _args(a) -> str:
+    return "(" + ", ".join(repr(x) for x in a) + ")"
+
+
+def _record_calls(program, args, wanted: set) -> dict:
+    """{qualified function id: (args, return value)} of the FIRST call of each wanted function when
+    `program`'s entry runs on `args`, recorded by our interpreter (never Python)."""
+    import copy
+
+    from ..codeworld.interpret import TRUE, InterpError, Interpreter
+
+    seen: dict = {}
+
+    class _Rec(Interpreter):
+        def _call(self, fn, argvals):
+            snapshot = copy.deepcopy(list(argvals))
+            out = super()._call(fn, argvals)
+            name = fn.defn.name
+            if name in wanted and name not in seen:
+                seen[name] = (tuple(snapshot), copy.deepcopy(out))
+            return out
+
+    it = _Rec(TRUE, 40_000)
+    try:
+        for st in program.body:
+            it.exec_top(st)
+        it.call_function(program.entry, copy.deepcopy(list(args)))
+    except (InterpError, RecursionError):
+        pass
+    return seen
 
 
 def _arg(args: dict, name: str, allow_empty: bool = False) -> str:

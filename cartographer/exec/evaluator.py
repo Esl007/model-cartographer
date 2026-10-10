@@ -55,6 +55,9 @@ from .pricing import cost_usd
 _INT_KEYS = {"chain_length", "coref_pressure", "distractor_events", "filler_events", "noop_distractors"}
 # Config keys that map onto float-valued DimParams fields.
 _FLOAT_KEYS = {"scramble", "witness_cutoff", "relational_time"}
+# Evidence Fidelity Campaign render options for the tool and code provinces (never in a task seed).
+EF_TOOL_KEYS = ("restate_ids", "ids_emphasis")
+EF_CODE_KEYS = ("line_emphasis", "prior_emphasis")
 _KNOWN_KEYS = _INT_KEYS | _FLOAT_KEYS
 
 # Default token budgets. These are CEILINGS, not targets: a model is billed
@@ -116,11 +119,24 @@ def _default_base(query_kind: str) -> DimParams:
     )
 
 
+# Evidence Fidelity Campaign (docs/spec-evidence-fidelity-campaign.md) prompt transforms for the
+# narrative province: answer-key-preserving, applied after rendering, never part of the task seed.
+EF_NARRATIVE_KEYS = ("witness_restatement", "witness_emphasis")
+
+
+def _seed_config(config: dict[str, float], pair_keys=()) -> dict[str, float]:
+    """The config items a task seed is derived from. `pair_keys` (opt-in, default none) and the
+    campaign-only EF transform keys are left out, so conditions of one paired trial draw the SAME
+    world; with neither present this is `config` itself, i.e. legacy seeds are unchanged."""
+    drop = set(pair_keys) | set(EF_NARRATIVE_KEYS) | set(EF_TOOL_KEYS) | set(EF_CODE_KEYS)
+    return {k: v for k, v in config.items() if k not in drop}
+
+
 def _apply_config(base: DimParams, config: dict[str, float]) -> DimParams:
     overrides: dict[str, object] = {}
     for key, value in config.items():
-        if key == "full_witness":
-            continue  # a world transform, not a DimParams field (world/trivial.py)
+        if key == "full_witness" or key in EF_NARRATIVE_KEYS:
+            continue  # world / prompt transforms, not DimParams fields (world/trivial.py, ablate/evidence.py)
         if key in _INT_KEYS:
             overrides[key] = int(round(value))
         elif key in _FLOAT_KEYS:
@@ -146,6 +162,9 @@ def _narrative_latent(params: DimParams, config: dict[str, float]) -> dict[str, 
     }
     if config.get("full_witness", 0.0) >= 0.5:
         out["full_witness"] = 1.0
+    for key in EF_NARRATIVE_KEYS:
+        if config.get(key, 0.0) >= 0.5:
+            out[key] = 1.0
     return out
 
 
@@ -200,12 +219,19 @@ class PipelineEvaluator:
         adversarial_candidates: int = 40,
         renderer_model: str | None = None,
         extractor_model: str | None = None,
+        pair_keys: tuple = (),
+        on_task=None,
     ) -> None:
         self.client = client
         self.model = model
         self.store = store
         self.run_id = run_id
         self.query_kind = query_kind
+        # Evidence Fidelity Campaign hooks (both default off: legacy behaviour byte-identical):
+        # `pair_keys` are left out of the task seed so paired conditions share one world;
+        # `on_task(prompt=, world=, name_map=, rendered=, config=)` sees each task before the call.
+        self.pair_keys = tuple(pair_keys)
+        self.on_task = on_task
         self.cost_cap_usd = cost_cap_usd
         self.base = base if base is not None else _default_base(query_kind)
         self.adversarial = adversarial
@@ -251,16 +277,16 @@ class PipelineEvaluator:
 
     def __call__(self, config: dict[str, float], trial_seed: int, run_suffix: str = "") -> bool:
         params = _apply_config(self.base, config)
-        seed = _task_seed(config, trial_seed)
+        seed = _task_seed(_seed_config(config, self.pair_keys), trial_seed)
 
         with self._lock:
             if self.spent_usd >= self.cost_cap_usd:
                 self.capped = True
-                self._record_capped(params, config, seed, trial_seed, reason="cost_capped")
+                self._record_capped(params, config, seed, trial_seed, reason="cost_capped", run_suffix=run_suffix)
                 return False
             if self.cancel_event is not None and self.cancel_event.is_set():
                 self.cancelled = True
-                self._record_capped(params, config, seed, trial_seed, reason="cancelled")
+                self._record_capped(params, config, seed, trial_seed, reason="cancelled", run_suffix=run_suffix)
                 return False
 
         adversarial_note = ""
@@ -292,7 +318,8 @@ class PipelineEvaluator:
                 world = make_full_witness(world, seed)
             except FullWitnessUnavailable:
                 with self._lock:
-                    self._record_capped(params, config, seed, trial_seed, reason="full_witness_unavailable")
+                    self._record_capped(params, config, seed, trial_seed, reason="full_witness_unavailable",
+                                        run_suffix=run_suffix)
                 return False
         name_map = build_name_map(world, seed)
         rendered = render(world, name_map, seed)
@@ -304,6 +331,20 @@ class PipelineEvaluator:
         verifier_detail = f"kind={self.query_kind};campaign=1{adversarial_note}"
 
         prompt = rendered.prompt
+        ef_keys = [k for k in EF_NARRATIVE_KEYS if config.get(k, 0.0) >= 0.5]
+        if ef_keys:
+            from ..ablate.evidence import EvidenceUnavailable, apply_narrative_conditions
+
+            try:
+                prompt = apply_narrative_conditions(world, name_map, rendered, ef_keys, seed)
+            except EvidenceUnavailable:
+                with self._lock:
+                    self._record_capped(params, config, seed, trial_seed, reason="ef_unavailable",
+                                        run_suffix=run_suffix)
+                return False
+            verifier_detail += ";ef=" + "+".join(ef_keys)
+        if self.on_task is not None:
+            self.on_task(prompt=prompt, world=world, name_map=name_map, rendered=rendered, config=config)
         render_mode = RenderMode.TEMPLATE
         if self.renderer_model is not None:
             gate = gated_render(
@@ -419,6 +460,7 @@ class PipelineEvaluator:
         seed: int,
         trial_seed: int,
         reason: str = "cost_capped",
+        run_suffix: str = "",
     ) -> None:
         """Record a zero-cost, zero-call trial once the cost cap (or a
         cooperative cancellation) has been hit -- no API call is made, so
@@ -430,7 +472,7 @@ class PipelineEvaluator:
         """
         self.error_count += 1
         record = ExperimentRecord(
-            run_id=self.run_id,
+            run_id=self.run_id + run_suffix,
             model_name=self.model,
             latent_params=_narrative_latent(params, config),
             realized_dims={},
@@ -1740,6 +1782,8 @@ class ToolBreakingPointEvaluator:
         max_tokens: int | None = None,
         max_tokens_retry: int | None = None,
         cancel_event: threading.Event | None = None,
+        pair_keys: tuple = (),
+        on_task=None,
     ) -> None:
         self.client = client
         self.model = model
@@ -1747,6 +1791,8 @@ class ToolBreakingPointEvaluator:
         self.run_id = run_id
         self.cost_cap_usd = cost_cap_usd
         self.base = base if base is not None else _default_tool_base()
+        self.pair_keys = tuple(pair_keys)  # EF campaign: left out of the task seed (default none)
+        self.on_task = on_task  # EF campaign zoo hook: on_task(prompt=, world=, config=)
 
         default_max_tokens, default_max_tokens_retry = default_token_budget(model)
         self.max_tokens = max_tokens if max_tokens is not None else default_max_tokens
@@ -1771,7 +1817,7 @@ class ToolBreakingPointEvaluator:
             if k in _TOOL_KNOWN_KEYS
         }
         params = _apply_tool_config(self.base, scalar_cfg)
-        seed = _task_seed(config, trial_seed)
+        seed = _task_seed(_seed_config(config, self.pair_keys), trial_seed)
 
         with self._lock:
             if self.spent_usd >= self.cost_cap_usd:
@@ -1784,9 +1830,17 @@ class ToolBreakingPointEvaluator:
                 return False
 
         world = tool_generate(params, seed)
+        base_world = world
         world, style = _apply_tool_trap_config(world, config, seed)
-        rendered = tool_render(world, seed, style=style)
+        ef_keys = [k for k in EF_TOOL_KEYS if config.get(k, 0.0) >= 0.5]
+        if ef_keys:
+            rendered = tool_render(world, seed, style=style, restate_ids="restate_ids" in ef_keys,
+                                   ids_emphasis="ids_emphasis" in ef_keys)
+        else:
+            rendered = tool_render(world, seed, style=style)
         realized_dims = tool_measure(world)
+        if self.on_task is not None:
+            self.on_task(prompt=rendered.prompt, world=world, base_world=base_world, config=config)
 
         trap_dim_names = (
             "poison_traps", "dishonest_decoys_on", "implicit_preconditions_on",
@@ -1805,6 +1859,8 @@ class ToolBreakingPointEvaluator:
             if k in config
         )
         verifier_detail = f"kind=tool_plan;campaign=1;traps={trap_note}"
+        if ef_keys:
+            verifier_detail += ";ef=" + "+".join(ef_keys)
 
         result = self.client.chat(
             model=self.model,
@@ -1861,6 +1917,7 @@ class ToolBreakingPointEvaluator:
                 "irreversibility": float(params.irreversibility),
                 "parallel_goals": float(params.parallel_goals),
                 **trap_dims,
+                **{k: 1.0 for k in ef_keys},
             },
             realized_dims={**realized_dims, **trap_dims},
             render_mode=RenderMode.TEMPLATE,
@@ -2039,7 +2096,7 @@ def _apply_code_config(base: CodeDimParams, config: dict[str, float]) -> CodeDim
 
 
 def build_code_task(config: dict[str, float], trial_seed: int, base: CodeDimParams | None = None,
-                    adversarial: bool = False, adversarial_candidates: int = 20):
+                    adversarial: bool = False, adversarial_candidates: int = 20, pair_keys: tuple = ()):
     """(params, program, rendered, task_seed) for one trial. Deterministic in
     (config, trial_seed); raises `GenerationFailed` (recorded as ERROR).
 
@@ -2050,10 +2107,14 @@ def build_code_task(config: dict[str, float], trial_seed: int, base: CodeDimPara
     is the winning candidate's."""
     params = _apply_code_config(base if base is not None else _default_code_base(),
                                 {k: v for k, v in config.items() if k in _CODE_KNOWN_KEYS})
-    seed = _task_seed(config, trial_seed)
+    seed = _task_seed(_seed_config(config, pair_keys), trial_seed)
+    # EF campaign presentations (render only; neither key present = legacy render)
+    emphasis = "line" if config.get("line_emphasis", 0.0) >= 0.5 else (
+        "prior" if config.get("prior_emphasis", 0.0) >= 0.5 else "")
     if not adversarial:
         program = code_generate(params, seed)
-        return params, program, code_render(program, seed), seed
+        rendered = code_render(program, seed, emphasis=emphasis) if emphasis else code_render(program, seed)
+        return params, program, rendered, seed
     from ..codeworld.search import search_adversarial_seeds
 
     best = search_adversarial_seeds(params, seed, n_candidates=max(1, adversarial_candidates), top_k=1)
@@ -2096,12 +2157,16 @@ class CodeTraceEvaluator:
         cancel_event: threading.Event | None = None,
         adversarial: bool = False,
         adversarial_candidates: int = 20,
+        pair_keys: tuple = (),
+        on_task=None,
     ) -> None:
         self.client = client
         self.model = model
         self.store = store
         self.run_id = run_id
         self.cost_cap_usd = cost_cap_usd
+        self.pair_keys = tuple(pair_keys)  # EF campaign: left out of the task seed (default none)
+        self.on_task = on_task  # EF campaign zoo hook: on_task(prompt=, program=, rendered=, config=)
         self.adversarial = adversarial
         self.adversarial_candidates = adversarial_candidates
         self.base = base if base is not None else _default_code_base()
@@ -2122,7 +2187,7 @@ class CodeTraceEvaluator:
 
     def __call__(self, config: dict[str, float], trial_seed: int, run_suffix: str = "") -> bool:
         params = _apply_code_config(self.base, {k: v for k, v in config.items() if k in _CODE_KNOWN_KEYS})
-        seed = _task_seed(config, trial_seed)
+        seed = _task_seed(_seed_config(config, self.pair_keys), trial_seed)
         with self._lock:
             reason = None
             if self.spent_usd >= self.cost_cap_usd:
@@ -2134,7 +2199,7 @@ class CodeTraceEvaluator:
                 return False
         try:
             _, program, rendered, _ = build_code_task(config, trial_seed, self.base, self.adversarial,
-                                                      self.adversarial_candidates)
+                                                      self.adversarial_candidates, self.pair_keys)
         except CodeGenerationFailed:
             with self._lock:
                 self._record_error(params, seed, trial_seed, "generation_failed")
@@ -2150,6 +2215,11 @@ class CodeTraceEvaluator:
         )
         if self.adversarial:
             detail += f";adversarial=1;adversarial_candidates={self.adversarial_candidates}"
+        ef_code = [k for k in EF_CODE_KEYS if config.get(k, 0.0) >= 0.5]
+        if ef_code:
+            detail += ";ef=" + "+".join(ef_code)
+        if self.on_task is not None:
+            self.on_task(prompt=rendered.prompt, program=program, rendered=rendered, config=config)
         result = self.client.chat(
             model=self.model, prompt=rendered.prompt,
             max_tokens=self.max_tokens, max_tokens_retry=self.max_tokens_retry,

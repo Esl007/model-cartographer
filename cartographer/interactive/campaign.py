@@ -36,7 +36,9 @@ _TRAP_DIMS = (
 # the surface the ablation touches.
 _TICKET_INT_DIMS = ("ticket_length", "carry_distance", "n_live_tickets", "decoy_tickets")
 _TICKET_FLOAT_DIMS = ("ticket_entropy",)
-ABLATION_KEYS = ("restate_tickets", "copy_instruction", "opaque_names")
+ABLATION_KEYS = ("restate_tickets", "copy_instruction", "opaque_names",
+                 # Evidence Fidelity Campaign conditions (spec-evidence-fidelity-campaign.md): same world
+                 "ticket_guessable", "ticket_emphasis", "restate_chain")
 
 
 def default_interactive_ray() -> EscalationRay:
@@ -65,8 +67,10 @@ class InteractiveEvaluator:
         max_tokens: int = 16000,
         cancel_event: threading.Event | None = None,
         protocol: str = "native",
+        on_task=None,
     ) -> None:
         self.client, self.model, self.store, self.run_id = client, model, store, run_id
+        self.on_task = on_task  # EF campaign zoo hook: on_task(env=, config=) before the episode
         self.protocol = protocol
         self.cost_cap_usd = cost_cap_usd
         self.base = base if base is not None else _default_tool_base()
@@ -111,7 +115,7 @@ class InteractiveEvaluator:
             if reason:
                 self.error_count += 1
                 self._append(latent, {}, seed, trial_seed, None, None, Verdict.ERROR,
-                             f"kind=interactive;campaign=1;{reason}=1", 0, 0, 0.0, 0.0, None)
+                             f"kind=interactive;campaign=1;{reason}=1", 0, 0, 0.0, 0.0, None, run_suffix)
                 return False
 
         world = tool_generate(params, seed)
@@ -128,8 +132,20 @@ class InteractiveEvaluator:
                 restate_tickets=bool(latent.get("restate_tickets", 0.0)),
                 copy_instruction=bool(latent.get("copy_instruction", 0.0)),
                 opaque_names=bool(latent.get("opaque_names", 0.0)),
+                ticket_guessable=bool(latent.get("ticket_guessable", 0.0)),
+                ticket_emphasis=bool(latent.get("ticket_emphasis", 0.0)),
+                restate_chain=bool(latent.get("restate_chain", 0.0)),
             ),
         )
+        if env.guessable_unavailable:
+            with self._lock:
+                self.error_count += 1
+                self._append(latent, {}, seed, trial_seed, None, None, Verdict.ERROR,
+                             "kind=interactive;campaign=1;ticket_guessable_unavailable=1", 0, 0, 0.0, 0.0, None,
+                             run_suffix)
+            return False
+        if self.on_task is not None:
+            self.on_task(env=env, config=config)
         res = run_episode(
             self.client, self.model, env, max_tokens=self.max_tokens, cost_fn=cost_usd,
             may_continue=lambda ep_cost: self.spent_usd + ep_cost < self.cost_cap_usd,

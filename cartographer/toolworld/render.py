@@ -67,15 +67,16 @@ _MECHANICS_PARAGRAPH = (
 )
 
 
-def _tool_catalog_prose(world: ToolWorld, style: str = "explicit") -> str:
+def _tool_catalog_prose(world: ToolWorld, style: str = "explicit", ids_emphasis: bool = False) -> str:
     lines: list[str] = []
     for tool in world.catalog:
         param_str = ", ".join(f"{p.name}: {p.kind}" for p in tool.params) or "(no args)"
         desc = tool.description
         if style == "implicit":
             desc = _strip_precondition_sentences(desc)
+        tid = f"`{tool.id}`" if ids_emphasis else tool.id
         lines.append(
-            f"- id: {tool.id} | name: {tool.name} | params: {param_str}\n"
+            f"- id: {tid} | name: {tool.name} | params: {param_str}\n"
             f"    {desc}"
         )
     return "\n".join(lines)
@@ -115,6 +116,8 @@ def render(
     seed: int,
     style: str = "explicit",
     allow_decline: bool = False,
+    restate_ids: bool = False,
+    ids_emphasis: bool = False,
 ) -> RenderedToolTask:
     """Render `world` to a prompt. `style="explicit"` (default) is the
     original rendering: every tool spells out its own "Precondition: ..."
@@ -128,7 +131,9 @@ def render(
 
     `allow_decline=True` adds the irrelevance affordance: the prompt tells
     the model the goal may be impossible and that `[]` is the correct answer
-    if so (see `mutate.make_unsolvable`). This MUST be set uniformly across
+    if so (see `mutate.make_unsolvable`). `restate_ids` / `ids_emphasis` are the
+    Evidence Fidelity Campaign's C and D presentations (docs/spec-evidence-
+    fidelity-campaign.md); both off renders byte-identically to before. This MUST be set uniformly across
     every trial in a campaign that contains any unsolvable world -- if only
     the unsolvable ones carried the instruction, its mere presence would
     give the answer away. It is off by default so existing solvable-only
@@ -141,7 +146,7 @@ def render(
     goal_lines = "\n".join(
         f"- {_goal_clause_prose(c, world)}" for c in world.goal.clauses
     )
-    catalog = _tool_catalog_prose(world, style=style)
+    catalog = _tool_catalog_prose(world, style=style, ids_emphasis=ids_emphasis)
     legend = _entity_reference_prose(world)
 
     mechanics = f"\n{_MECHANICS_PARAGRAPH}\n\n" if style == "implicit" else "\n"
@@ -168,6 +173,11 @@ def render(
         "JSON array.\n\n"
         f"You may use at most {world.budget} tool calls."
         + (f"\n\n{_DECLINE_PARAGRAPH}" if allow_decline else "")
+        # Evidence Fidelity Campaign C (salience): every catalog id restated verbatim at the tail,
+        # nearest the decision point. Information-identical: the ids are all in the catalog above,
+        # in the same order (restating only the plan's tools would add WHICH tools matter).
+        + ("\n\nTool ids, verbatim (use them exactly as written): "
+           + ", ".join(t.id for t in world.catalog) if restate_ids else "")
     )
 
     meta = {

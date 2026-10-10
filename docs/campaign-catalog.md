@@ -79,6 +79,17 @@ launch.
 | `VI.control` | Does the model fix the same bug in the same program less often when that program is split over more files? | 1 -> 8 files, program pinned at 8 functions, cause 1 call away | axis | -- | `repo_control` |
 | `VI.graph_value` | On identical repositories, does a tool that lists a function's callers and callees shorten the model's search for the cause -- and does it change whether the bug gets fixed? | get_code_neighbors off vs on, same repositories, 4 and 8 files, cause 3 calls away | rate | -- | `repo_graph_value` |
 
+## Province EF -- Evidence fidelity (paired condition grid over the provinces)
+
+| id | question | what is turned up | evidence | legacy alias | frontier rows fed |
+|---|---|---|---|---|---|
+| `EF.belief` | When a story makes clear where a person last saw something, does the model answer from what that person saw, or from where the object really is -- and does restating or flagging what they saw help? | A the person saw every move / B they missed the last ones / C what they saw restated before the question / D the same sentences flagged in place | battery | -- | `ef_belief` |
+| `EF.tools` | When tool ids are near-misspellings of what they 'should' be called, does the model copy the exact ids -- and does restating or flagging the ids help? | A natural ids / B look-alike ids / C every id restated at the end / D ids flagged in the catalog | battery | -- | `ef_tools` |
+| `EF.tickets` | When a tool returns an opaque ticket a later call needs, does the model copy it or invent a plausible one -- and does restating or flagging the ticket help? | A the ticket is guessable / B opaque, 3 calls later / C restated in every result / D flagged when issued / X the dependency chain restated (no values) | battery | -- | `ef_tickets` |
+| `EF.comments` | When a comment asserts a wrong value for a line of code, does the model trace the code or trust the comment -- and does flagging the line help? | A neutral comments / B misleading comments / C not applicable (it would leak the answer) / D the line flagged / E the comment itself shouted (exploratory) | battery | -- | `ef_comments` |
+| `EF.repair` | When the failing test names one file and the cause sits in another, does the model fix the cause -- and does showing the data flow, or flagging expected vs actual, help? | A the bug is in the test's own file / B two calls away / C the data flow shown / D expected vs actual aligned / X the symbol table restated | battery | -- | `ef_repair` |
+| `EF.transfer` | Does the help that fixes carried values (restating them) also fix bug-finding, and does the help that fixes bug-finding (the data flow) also fix carried values? | tickets B / C restated values / X restated dependency chain; repair B / C data flow / X restated symbols | battery | -- | -- |
+
 ## Province X -- Cross-cutting
 
 | id | question | what is turned up | evidence | legacy alias | frontier rows fed |

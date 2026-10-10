@@ -76,7 +76,7 @@ def test_ids_unique_well_formed_and_complete():
     assert len(ids) == len(set(ids))
     for cid, s in REGISTRY.items():
         assert s.id == cid
-        assert re.fullmatch(r"(I|II|III|IV|V|VI|X)\.[a-z_]+", cid), cid
+        assert re.fullmatch(r"(I|II|III|IV|V|VI|EF|X)\.[a-z_]+", cid), cid
         assert cid.split(".")[0] == s.province and s.province in PROVINCES
         assert s.evidence_kind in ("axis", "rate", "battery")
         assert s.question.endswith("?") and s.stressor

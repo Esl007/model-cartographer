@@ -71,6 +71,11 @@ class RepoParams:
     bug_mix: float = 0.0
     hidden_inputs: int = 4
     n_statements: int = 8
+    # Evidence Fidelity Campaign (docs/spec-evidence-fidelity-campaign.md; all off by default and
+    # outside `latent_key`, so the latent program is identical with and without them):
+    bug_local: bool = False  # condition A: the bug in `solve` (the test's file), same latent draw
+    show_data_flow: bool = False  # causal C: run_tests appends the call chain's values on the visible input
+    diff_emphasis: bool = False  # D: run_tests shows expected vs actual as an aligned block
     tool_budget: int = 20
     graph_tools: bool = False
     restate_symbols: bool = False
@@ -92,6 +97,8 @@ class RepoParams:
         for ok, msg in checks:
             if not ok:
                 raise ValueError(msg)
+        if self.bug_local and self.clone_trap:
+            raise ValueError("bug_local and clone_trap cannot be combined (the clone would copy solve)")
 
     @property
     def effective_n_funcs(self) -> int:
@@ -550,7 +557,7 @@ def _splice(prog: Program, new_def: FuncDef) -> Program:
 
 
 def _inject(latent: _Latent, params: RepoParams, seed: int, want: list, probe: list):
-    carrier = latent.path[-1]
+    carrier = latent.path[0] if params.bug_local else latent.path[-1]
     node = latent.nodes[carrier]
     allowed = node.original_sids - {node.root.body[-1].sid}
     prog = latent.program
@@ -559,7 +566,8 @@ def _inject(latent: _Latent, params: RepoParams, seed: int, want: list, probe: l
     for k in want:
         prev = repo_outputs(prog, probe)
         found = None
-        for kind in ([k] if params.bug_kind is not None else _fallback(k)):
+        kinds_to_try = _fallback(k) if (params.bug_kind is None or params.bug_local) else [k]
+        for kind in kinds_to_try:
             try:
                 options = B.inject(_carrier_sub(prog, node), kind, _stable_int(seed, kind, len(sites)), None,
                                    exclude=tuple(sites))
@@ -693,50 +701,72 @@ def _complete_names(defn: FuncDef, names: dict, taken: set, salt: str) -> None:
 
 def compose(params: RepoParams, seed: int) -> RepoTask:
     """The repository task for (params, seed). Raises GenerationFailed after
-    MAX_DRAWS latent draws without a load-bearing bug."""
+    MAX_DRAWS latent draws without a load-bearing bug.
+
+    `bug_local` (Evidence Fidelity Campaign condition A): the SAME draw the
+    non-local task uses -- same latent program, call graph and partition --
+    with the bug injected into `solve` instead of the carrier. If `solve` has
+    no load-bearing, input-dependent site on that draw, the task is
+    unavailable (GenerationFailed); it never falls through to another draw,
+    which would silently unpair it from its B."""
     from .render import render_repo
 
     last = "no draw"
     total_draws = 0
+    base = replace(params, bug_local=False) if params.bug_local else params
     for draw in range(MAX_DRAWS):
+        got, draws, latent_draw = _attempt(base, seed, draw)
+        total_draws += draws
+        if isinstance(got, str):
+            last = got
+            continue
+        if not params.bug_local:
+            return _finish(params, seed, *got, total_draws, render_repo)
+        local, _, _ = _attempt(params, seed, draw, latent_draw)
+        if isinstance(local, str):
+            raise GenerationFailed(f"bug_local unavailable for seed {seed}: {local}")
+        return _finish(params, seed, *local, total_draws, render_repo)
+    raise GenerationFailed(f"no repository task for seed {seed}: {last}")
+
+
+def _attempt(params: RepoParams, seed: int, draw: int, prebuilt=None):
+    """One latent draw -> ((latent, ref, buggy, sites, kinds, visible, hidden, cases, extra_tests), n draws,
+    (ls, want, latent)) or (failure reason, n draws, None)."""
+    if prebuilt is None:
         ls = _stable_int("repo-latent", seed, repr(params.latent_key()), draw)
         want = _pick_kinds(params, _Rng("repo-kinds", ls))
         try:
             latent, draws = build_latent(params, ls, tuple(want))
         except GenerationFailed as e:
-            last = str(e)
-            continue
-        total_draws += draws
-        pool = _probe_inputs(latent.program, ls, 8 + params.hidden_inputs + 8)
-        if len(pool) < 8 + params.hidden_inputs:
-            last = "too few inputs on which the reference runs"
-            continue
-        probe = pool[:8]
-        inj = _inject(latent, params, ls, want, probe)
-        if inj is None:
-            last = f"no load-bearing site for {want} in the carrier"
-            continue
-        buggy, sites, kinds = inj
-        ref = latent.program
-        ref_probe, bug_probe = repo_outputs(ref, probe), repo_outputs(buggy, probe)
-        vis = next((i for i, (o, r) in enumerate(zip(bug_probe, ref_probe)) if o != r and o[0] != "error"), None)
-        if vis is None:
-            last = "no visible input"
-            continue
-        visible = probe[vis]
-        rest = [a for a in pool if a != visible]
-        hidden, cases = _hidden(ref, buggy, visible, rest, params.hidden_inputs)
-        if hidden is not None and params.hidden_inputs and not _catches_constant_patch(ref, buggy, visible, hidden):
-            last = "no hidden input catches a constant patch"
-            continue
-        if params.hidden_inputs and hidden is None:
-            last = "no hidden input catches a symptom patch"
-            continue
-        extra_tests = tuple((a, repo_execute(ref, a)[0]) for a in rest
-                            if a not in (hidden or ()) and repo_outputs(ref, [a]) == repo_outputs(buggy, [a]))[:2]
-        return _finish(params, seed, latent, ref, buggy, sites, kinds, visible, tuple(hidden or ()), tuple(cases or ()),
-                       extra_tests, total_draws, render_repo)
-    raise GenerationFailed(f"no repository task for seed {seed}: {last}")
+            return str(e), 0, None
+    else:
+        ls, want, latent = prebuilt
+        draws = 0
+    pool = _probe_inputs(latent.program, ls, 8 + params.hidden_inputs + 8)
+    if len(pool) < 8 + params.hidden_inputs:
+        return "too few inputs on which the reference runs", draws, None
+    probe = pool[:8]
+    inj = _inject(latent, params, ls, want, probe)
+    if inj is None:
+        return f"no load-bearing site for {want} in the {'entry function' if params.bug_local else 'carrier'}", \
+            draws, None
+    buggy, sites, kinds = inj
+    ref = latent.program
+    ref_probe, bug_probe = repo_outputs(ref, probe), repo_outputs(buggy, probe)
+    vis = next((i for i, (o, r) in enumerate(zip(bug_probe, ref_probe)) if o != r and o[0] != "error"), None)
+    if vis is None:
+        return "no visible input", draws, None
+    visible = probe[vis]
+    rest = [a for a in pool if a != visible]
+    hidden, cases = _hidden(ref, buggy, visible, rest, params.hidden_inputs)
+    if hidden is not None and params.hidden_inputs and not _catches_constant_patch(ref, buggy, visible, hidden):
+        return "no hidden input catches a constant patch", draws, None
+    if params.hidden_inputs and hidden is None:
+        return "no hidden input catches a symptom patch", draws, None
+    extra_tests = tuple((a, repo_execute(ref, a)[0]) for a in rest
+                        if a not in (hidden or ()) and repo_outputs(ref, [a]) == repo_outputs(buggy, [a]))[:2]
+    return (latent, ref, buggy, sites, kinds, visible, tuple(hidden or ()), tuple(cases or ()), extra_tests), \
+        draws, (ls, want, latent)
 
 
 def _catches_constant_patch(ref, buggy, visible, hidden) -> bool:
@@ -784,9 +814,10 @@ def _hidden(ref, buggy, visible, rest, n):
 
 
 def _finish(params, seed, latent, ref, buggy, sites, kinds, visible, hidden, cases, extra_tests, draws, render_repo):
-    module_of = _partition(latent, params, seed)
+    module_of = _partition(latent, params, seed)  # from latent.path: identical with and without bug_local
     nodes = dict(latent.nodes)
-    carrier = latent.path[-1]
+    carrier = latent.path[0] if params.bug_local else latent.path[-1]
+    task_path = latent.path[:1] if params.bug_local else latent.path
     buggy_defs = {s.name: s for s in buggy.body if isinstance(s, FuncDef)}
     # module indices actually used (a pinned n_funcs below n_modules leaves some empty)
     used = sorted(set(module_of.values()))
@@ -891,7 +922,8 @@ def _finish(params, seed, latent, ref, buggy, sites, kinds, visible, hidden, cas
     edges = tuple(_edges_of(buggy))
     realized = {
         "n_modules": float(k), "n_files": float(n_mod), "n_funcs": float(len(latent.order)),
-        "bug_distance": float(len(latent.path) - 1), "inlined": float(latent.inlined),
+        "bug_distance": float(len(task_path) - 1), "inlined": float(latent.inlined),
+        "bug_local": float(params.bug_local),
         "n_edges": float(len(edges)),
         "n_crossing_edges": float(sum(1 for a, b in edges if module_of[a] != module_of[b])),
         "path_crosses_every_hop": float(all(module_of[a] != module_of[b]
@@ -905,7 +937,7 @@ def _finish(params, seed, latent, ref, buggy, sites, kinds, visible, hidden, cas
         realized["clone_first"] = float(mnames[module_of[clone[0]]] < mnames[module_of[carrier]])
     notes = {sites[0]: "this line is correct"} if params.misleading_comments else {}
     shell = RepoTask(params, seed, ref, buggy, module_of, tuple(mnames), {m: tuple(v) for m, v in order.items()},
-                     fnames, local, tuple(latent.path), carrier, sites, kinds, edges, tuple(twins), clone,
+                     fnames, local, tuple(task_path), carrier, sites, kinds, edges, tuple(twins), clone,
                      tuple(distractors), visible, repo_execute(ref, visible)[0], repo_execute(buggy, visible)[0],
                      hidden, cases, extra_tests, {}, {}, realized, draws)
     files = render_repo(shell, buggy, notes)

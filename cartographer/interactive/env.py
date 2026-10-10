@@ -215,6 +215,15 @@ class InteractiveSpec:
     restate_tickets: bool = False
     copy_instruction: bool = False
     opaque_names: bool = False
+    # Evidence Fidelity Campaign (docs/spec-evidence-fidelity-campaign.md; all default off):
+    # A `ticket_guessable`: the issued ticket is the bare pattern scaffold `ticket_<entity>`, so
+    #   regenerating the pattern IS copying (prior agrees); D `ticket_emphasis`: the ticket is shown
+    #   as `<<value>>` at issuance (decoys likewise), the delimiters never part of the value;
+    # `restate_chain`: the causal scaffold for the transfer arm -- every result restates which
+    #   tool needs which producer's ticket (already in the tool descriptions; no ticket values).
+    ticket_guessable: bool = False
+    ticket_emphasis: bool = False
+    restate_chain: bool = False
 
     @property
     def controlled(self) -> bool:
@@ -267,6 +276,13 @@ class InteractiveEnv:
         self.call_budget = self.world.budget + (1 if self.spec.fault_step else 0)
         self.steps: list[StepRecord] = []
         self._fault_fired = False
+        # A `ticket_guessable` world is unusable when two producers on the plan would issue the same
+        # scaffold (`ticket_<entity>` collides): the evaluator records it ERROR, never a model result.
+        self.guessable_unavailable = False
+        if self.spec.ticket_guessable:
+            ents = [self._entity_for(c.tool, {k: str(v) for k, v in c.args.items()})
+                    for c in self.plan if c.tool in self.producers]
+            self.guessable_unavailable = len(ents) != len(set(ents))
         self._dist: dict[State, int | None] = {}
         self.initial_distance = self.distance(self.state)
 
@@ -323,7 +339,20 @@ class InteractiveEnv:
         raw = next(iter(call_args.values()), tool) if call_args else tool
         return self._out(str(raw)).replace("-", "_")
 
+    def _bare(self, value):
+        """A submitted ticket with `ticket_emphasis` delimiters removed (identity otherwise)."""
+        if self.spec.ticket_emphasis and isinstance(value, str):
+            v = value.strip()
+            if v.startswith("<<") and v.endswith(">>"):
+                return v[2:-2].strip()
+        return value
+
+    def _shown(self, ticket: str) -> str:
+        return f"<<{ticket}>>" if self.spec.ticket_emphasis else ticket
+
     def _new_ticket(self, tool: str, count: int, entity: str) -> str:
+        if self.spec.ticket_guessable:
+            return f"ticket_{entity}"
         digest = hashlib.sha256(f"{self.seed}|{tool}|{count}".encode("utf-8")).hexdigest()
         length = min(max(self.spec.ticket_length, 4), 64) if self.spec.ticket_length else 6
         return _ticket_form(self.spec.ticket_level, entity, digest, length)
@@ -335,9 +364,11 @@ class InteractiveEnv:
             digest = hashlib.sha256(f"{self.seed}|decoy|{n}|{k}".encode("utf-8")).hexdigest()
             out[label] = _ticket_form(self.spec.ticket_level, entity, digest, length)
             self.decoys_shown.add(out[label])
+            out[label] = self._shown(out[label])
         return out
 
     def classify_ticket_error(self, submitted, producer: str) -> str:
+        submitted = self._bare(submitted)
         expected = self.tickets.get(producer)
         if submitted is None or str(submitted).strip() == "":
             return "missing"
@@ -367,7 +398,7 @@ class InteractiveEnv:
         if self.spec.fault_step and n == self.spec.fault_step and not self._fault_fired:
             self._fault_fired = True
             kind, result = "transient", {"status": "error", "error": TRANSIENT_ERROR}
-        elif tool in self.producer_for and args.get("ticket") != self.tickets.get(self.producer_for[tool]):
+        elif tool in self.producer_for and self._bare(args.get("ticket")) != self.tickets.get(self.producer_for[tool]):
             producer = self.producer_for[tool]
             kind = "invalid_ticket"
             ticket_error = self.classify_ticket_error(args.get("ticket"), producer)
@@ -395,12 +426,17 @@ class InteractiveEnv:
                     ticket = self._new_ticket(tool, count, entity)
                     self.tickets[tool] = ticket
                     self.issued[ticket] = (tool, count)
-                    result["ticket"] = ticket
+                    result["ticket"] = self._shown(ticket)
                 if self.spec.decoy_tickets:
                     result.update(self._decoys(n, entity))
         if self.spec.restate_tickets and self.tickets:
             result["valid_tickets"] = {
                 f"from {self._out(p)}": t for p, t in sorted(self.tickets.items())
+            }
+        if self.spec.restate_chain and self.producer_for:
+            result["ticket_dependencies"] = {
+                self._out(c): f"needs the ticket from the most recent successful call to {self._out(p)}"
+                for c, p in sorted(self.producer_for.items())
             }
         result = self._out_result(result)
         self.steps.append(

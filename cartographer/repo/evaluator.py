@@ -37,7 +37,9 @@ INT_KEYS = ("n_modules", "bug_distance", "fanout", "n_funcs", "distractor_module
             "n_statements", "tool_budget")
 FLOAT_KEYS = ("inline_p", "bug_mix")
 BOOL_KEYS = ("lookalike_names", "clone_trap", "misleading_comments", "graph_tools", "restate_symbols",
-             "restate_imports", "opaque_names")
+             "restate_imports", "opaque_names",
+             # Evidence Fidelity Campaign conditions (outside the latent key: same program)
+             "bug_local", "show_data_flow", "diff_emphasis")
 KNOWN_KEYS = INT_KEYS + FLOAT_KEYS + BOOL_KEYS
 
 
@@ -93,8 +95,10 @@ class RepoFixEvaluator:
                  base: RepoParams | None = None, max_tokens: int = 16000,
                  cancel_event: threading.Event | None = None, protocol: str = "native",
                  context_window: int | None = None, deadline: float | None = None,
-                 episode_wall_s: float | None = None, retry_max_tokens: int | None = 32000) -> None:
+                 episode_wall_s: float | None = None, retry_max_tokens: int | None = 32000,
+                 on_task=None) -> None:
         self.retry_max_tokens = retry_max_tokens
+        self.on_task = on_task  # EF campaign zoo hook: on_task(env=, task=, config=) before the episode
         self.client, self.model, self.store, self.run_id = client, model, store, run_id
         self.context_window = context_window
         # wall-clock guards, checked before every turn: an absolute session deadline (epoch
@@ -144,6 +148,8 @@ class RepoFixEvaluator:
                 self.outcomes[key] = (Verdict.ERROR, "generation_failed", {})
             return False
         env = RepoEnv(task)
+        if self.on_task is not None:
+            self.on_task(env=env, task=task, config=config)
         started = time.time()
         timed_out = [False]
 

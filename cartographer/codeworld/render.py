@@ -339,10 +339,18 @@ def _block(body, n: dict, indent: int, notes: dict) -> list[str]:
     return out
 
 
-def _notes(program: Program, n: dict, annotate) -> dict:
+def _notes(program: Program, n: dict, annotate, emphasis: str = "") -> dict:
     notes: dict[int, str] = {}
     for sid, vid, value, _foil, neutral in program.comments:
         notes[sid] = comment_text(n[vid], value, neutral)
+        # Evidence Fidelity Campaign presentations (docs/spec-evidence-fidelity-campaign.md §14):
+        # "line": a claim-free marker on the commented statement, the comment itself unchanged
+        # (condition D: the evidence line made louder); "prior": the asserting comment upper-cased
+        # (exploratory arm E: the PRIOR made louder). Neutral control comments are never touched.
+        if emphasis == "line":
+            notes[sid] += " <<<"
+        elif emphasis == "prior" and not neutral:
+            notes[sid] = notes[sid].upper()
     by_sid = {s.sid: s for s in iter_stmts(program.body)}
     for trap, sid in program.trap_sites:
         s = by_sid.get(sid)
@@ -368,11 +376,13 @@ def comment_text(name: str, value, neutral: bool) -> str:
 
 
 def render(program: Program, rendering_seed: int = 0, naming: str = "auto",
-           annotate: tuple = ()) -> RenderedProgram:
+           annotate: tuple = (), emphasis: str = "") -> RenderedProgram:
     """`naming`: "auto" (look-alike spellings for twin pairs, when the program
-    has any) or "descriptive". `annotate`: subset of {"aliasing", "closures"}."""
+    has any) or "descriptive". `annotate`: subset of {"aliasing", "closures"}.
+    `emphasis`: "" (default, byte-identical to before), "line" or "prior" --
+    the Evidence Fidelity Campaign's comment presentations (see `_notes`)."""
     names, style = build_names(program, rendering_seed, naming)
-    notes = _notes(program, names, annotate)
+    notes = _notes(program, names, annotate, emphasis)
     lines: list[str] = []
     for i, s in enumerate(program.body):
         if isinstance(s, FuncDef) and lines and lines[-1] != "":

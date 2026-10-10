@@ -221,6 +221,10 @@ def _flag(key: str, on: bool) -> Callable:
     return lambda r: (r.latent_params.get(key, 0.0) >= 0.5) == on
 
 
+def _ef_conflict_arm(r) -> bool:
+    return r.run_id.endswith("/B")
+
+
 SPECS: tuple[Spec, ...] = (
     Spec("state", "Tracks where things actually are", "tracking where things are",
          "I · Narrative", "state", "rate"),
@@ -306,6 +310,20 @@ SPECS: tuple[Spec, ...] = (
          where=lambda r: r.latent_params.get("graph_tools", 0.0) >= 0.5,
          note="Graph-on arm of the paired VI.graph_value campaign; the paired comparison with the graph-off "
               "arm (<run_id>/graph_off) is in the campaign result note."),
+    # Evidence Fidelity Campaign: the conflict arm (B) of each family; the full condition matrix is the
+    # report view (cartographer/report/evidence_matrix.py), not a frontier row.
+    Spec("ef_belief", "Answers from what a person saw, against where things really are (paired, B arm)",
+         "belief against reality", "EF · Evidence fidelity", "belief", "rate",
+         runs=(r"^camp-ef-belief-[A-Za-z0-9_]+-\d+(/B)?$",), where=_ef_conflict_arm),
+    Spec("ef_tools", "Copies exact look-alike tool ids (paired, B arm)", "exact ids against natural names",
+         "EF · Evidence fidelity", "tool_plan", "rate", runs=(r"^camp-ef-tools-[A-Za-z0-9_]+-\d+(/B)?$",), where=_ef_conflict_arm),
+    Spec("ef_tickets", "Copies a carried opaque value instead of inventing one (paired, B arm)",
+         "carried values", "EF · Evidence fidelity", "interactive", "rate",
+         runs=(r"^camp-ef-tickets-[A-Za-z0-9_]+-\d+(/B)?$",), where=_ef_conflict_arm),
+    Spec("ef_comments", "Traces code over a misleading comment (paired, B arm)", "code over comments",
+         "EF · Evidence fidelity", "code_trace", "rate", runs=(r"^camp-ef-comments-[A-Za-z0-9_]+-\d+(/B)?$",), where=_ef_conflict_arm),
+    Spec("ef_repair", "Fixes a bug's cause in another file (paired, B arm)", "cause over symptom",
+         "EF · Evidence fidelity", "repo_fix", "rate", runs=(r"^camp-ef-repair-[A-Za-z0-9_]+-\d+(/B)?$",), where=_ef_conflict_arm),
     Spec("consistency", "Gets the same task right every time (pass^k)", "consistency",
          "Reliability", None, "rate", runs=(r"^camp-consistency-",), where=lambda r: True,
          note="Rate shown is pass^1 over repeats of the same tasks (X.consistency campaign); pass^k needs "
@@ -629,6 +647,10 @@ def _verdict(name: str, rows: list[FrontierRow]) -> str:
 
 
 def _matches(spec: Spec, r) -> bool:
+    # Evidence Fidelity Campaign runs carry deliberately manipulated conditions (agree / conflict /
+    # restated / emphasized): they feed only the `ef_*` rows, and those rows only them.
+    if r.run_id.startswith("camp-ef-") != spec.key.startswith("ef_"):
+        return False
     if spec.kind is not None and _query_kind_of(r) != spec.kind:
         return False
     if spec.runs and not any(re.search(p, r.run_id) for p in spec.runs):
