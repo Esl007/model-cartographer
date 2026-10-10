@@ -181,6 +181,9 @@ def test_zoo_agent_fails_exactly_on_its_mechanism(agent):
     for seed in range(12):
         t = compose(RepoParams(n_modules=6, bug_distance=2, **kw), seed)
         v, s = run_agent(AGENTS[agent], t)
+        if v.signature == "skipped":  # the task has no twin / clone for this agent (realized dims say so)
+            assert agent in ("twin_caller", "clone_editor")
+            continue
         assert v.signature == want, (agent, seed, v)
         if agent == "copier":
             assert s["edit_nomatch"] == 2
@@ -334,7 +337,8 @@ class _Client:
     def __init__(self, plan, text=False):
         self.plan, self.text, self.i = plan, text, 0
 
-    def chat_turn(self, model, messages, tools=None, max_tokens=0, temperature=0.0):
+    def chat_turn(self, model, messages, tools=None, max_tokens=0, temperature=0.0, stop=None):
+        self.stops = stop
         if self.i >= len(self.plan):
             return ToolChatResult(message={"content": "done"}, tool_calls=(), text="done", tokens_in=10,
                                   tokens_out=2, latency_ms=1.0, finish_reason="stop")
@@ -457,9 +461,9 @@ def test_context_window_clamps_turns_and_ends_the_episode(tmp_path):
     seen = []
 
     class Talky(_Client):
-        def chat_turn(self, model, messages, tools=None, max_tokens=0, temperature=0.0):
+        def chat_turn(self, model, messages, tools=None, max_tokens=0, temperature=0.0, stop=None):
             seen.append(max_tokens)
-            return super().chat_turn(model, messages, tools, max_tokens, temperature)
+            return super().chat_turn(model, messages, tools, max_tokens, temperature, stop)
 
     t = compose(RepoParams(n_modules=6, bug_distance=2, tool_budget=40), 4)
     plan = [("read_file", {"path": p}) for p in sorted(t.files)] * 6
@@ -468,3 +472,45 @@ def test_context_window_clamps_turns_and_ends_the_episode(tmp_path):
     assert res.outcome == "context_exhausted" and env.calls_left > 0
     assert seen[0] < 8000 and all(b <= a for a, b in zip(seen, seen[1:]))
     assert verify_repo(t, env.files, res.outcome).signature == "no_change"
+
+
+
+def test_a_constant_patch_never_passes():
+    """The generator keeps only bugs whose effect varies with the input, and the
+    hidden inputs include one whose delta differs from the visible test's."""
+    from cartographer.repo.compose import input_dependent
+
+    n = 0
+    for p, seed in _grid(40):
+        t = compose(replace(p, hidden_inputs=4), seed)
+        v, _ = run_agent(AGENTS["constant_patcher"], t)
+        if v.signature == "skipped":
+            continue
+        n += 1
+        assert v.verdict == Verdict.FAIL, (p, seed, v)
+        ins = [t.visible_input] + list(t.hidden_inputs)
+        assert input_dependent(repo_outputs(t.buggy, ins), repo_outputs(t.reference, ins))
+    assert n >= 20
+
+
+def test_one_call_per_turn_and_stop_sequence_in_the_text_protocol():
+    from cartographer.interactive.episode import run_episode
+
+    t = compose(RepoParams(n_modules=3, bug_distance=1), 6)
+
+    class Batch(_Client):
+        def chat_turn(self, model, messages, tools=None, max_tokens=0, temperature=0.0, stop=None):
+            self.stops = stop
+            if self.i:
+                return ToolChatResult(message={"content": "done"}, tool_calls=(), text="done", tokens_in=1,
+                                      tokens_out=1, latency_ms=1.0, finish_reason="stop")
+            self.i = 1
+            txt = "\n".join("```tool_code\n" + c + "\n```" for c in ("list_files()", "run_tests()", "list_files()"))
+            return ToolChatResult(message={"content": txt}, tool_calls=(), text=txt, tokens_in=1, tokens_out=1,
+                                  latency_ms=1.0, finish_reason="stop")
+
+    c = Batch([], text=True)
+    env = RepoEnv(t)
+    res = run_episode(c, "m", env, protocol="text_fallback")
+    assert res.skipped_calls == 2 and len(env.steps) == 1 and env.steps[0].tool == "list_files"
+    assert c.stops == ["```tool_output"]

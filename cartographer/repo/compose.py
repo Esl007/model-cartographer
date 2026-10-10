@@ -498,6 +498,28 @@ def _probe_inputs(program: Program, seed: int, n: int = 40) -> list:
 
 # -- bug -----------------------------------------------------------------------------------------
 
+def delta_signature(bug_out, ref_out):
+    """How a buggy output differs from the reference's, as a value a CONSTANT
+    patch could reproduce: an int offset, or a list's per-position offsets,
+    replaced elements and length change. If every differing input has the same
+    signature, a constant edit anywhere on the path (e.g. `return t - 3` in
+    `solve`) would pass every hidden input without fixing the cause."""
+    if bug_out[0] == "int" and ref_out[0] == "int":
+        return ("int", bug_out[1] - ref_out[1])
+    if bug_out[0] == "list" and ref_out[0] == "list":
+        b, r = bug_out[1], ref_out[1]
+        items = tuple((i, (x[1] - y[1]) if x[0] == y[0] == "int" else (x, y))
+                      for i, (x, y) in enumerate(zip(b, r)) if x != y)
+        return ("list", len(b) - len(r), items, tuple(b[len(r):]))
+    return ("other", bug_out, ref_out)
+
+
+def input_dependent(bug_outs: list, ref_outs: list) -> bool:
+    """True iff the bug shows on >= 2 inputs with >= 2 different delta signatures."""
+    sigs = {delta_signature(b, r) for b, r in zip(bug_outs, ref_outs) if b != r and b[0] != "error"}
+    return len(sigs) >= 2
+
+
 def _pick_kinds(params: RepoParams, rng: _Rng) -> list[str]:
     if params.bug_kind is not None:
         return [params.bug_kind] * params.n_bugs
@@ -532,6 +554,7 @@ def _inject(latent: _Latent, params: RepoParams, seed: int, want: list, probe: l
     node = latent.nodes[carrier]
     allowed = node.original_sids - {node.root.body[-1].sid}
     prog = latent.program
+    ref = repo_outputs(prog, probe)
     sites, kinds = [], []
     for k in want:
         prev = repo_outputs(prog, probe)
@@ -547,7 +570,8 @@ def _inject(latent: _Latent, params: RepoParams, seed: int, want: list, probe: l
                     continue
                 cand = _splice(prog, next(s for s in cand_sub.body if isinstance(s, FuncDef) and s.name == carrier))
                 out = repo_outputs(cand, probe)
-                if any(o != p and o[0] != "error" for o, p in zip(out, prev)):
+                # load-bearing AND input-dependent: a constant patch must not be able to hide it
+                if any(o != p and o[0] != "error" for o, p in zip(out, prev)) and input_dependent(out, ref):
                     found = (cand, sid, kind)
                     break
             if found:
@@ -598,7 +622,7 @@ def _partition(latent: _Latent, params: RepoParams, seed: int) -> dict:
 # -- extras ----------------------------------------------------------------------------------------
 
 def _twin_node(fid: str, like: _Node, params: RepoParams, seed: int, offset: int) -> _Node | None:
-    for attempt in range(16):
+    for attempt in range(48):
         cfp = CodeFixParams(n_statements=params.n_statements, n_params=len(like.param_kinds))
         node = _component(fid, cfp, _stable_int("repo-twin", seed, fid, attempt), (), offset)
         if node is not None and node.param_kinds == like.param_kinds and node.ret_kind == like.ret_kind \
@@ -702,6 +726,9 @@ def compose(params: RepoParams, seed: int) -> RepoTask:
         visible = probe[vis]
         rest = [a for a in pool if a != visible]
         hidden, cases = _hidden(ref, buggy, visible, rest, params.hidden_inputs)
+        if hidden is not None and params.hidden_inputs and not _catches_constant_patch(ref, buggy, visible, hidden):
+            last = "no hidden input catches a constant patch"
+            continue
         if params.hidden_inputs and hidden is None:
             last = "no hidden input catches a symptom patch"
             continue
@@ -710,6 +737,15 @@ def compose(params: RepoParams, seed: int) -> RepoTask:
         return _finish(params, seed, latent, ref, buggy, sites, kinds, visible, tuple(hidden or ()), tuple(cases or ()),
                        extra_tests, total_draws, render_repo)
     raise GenerationFailed(f"no repository task for seed {seed}: {last}")
+
+
+def _catches_constant_patch(ref, buggy, visible, hidden) -> bool:
+    vis = delta_signature(repo_outputs(buggy, [visible])[0], repo_outputs(ref, [visible])[0])
+    for a in hidden:
+        b, r = repo_outputs(buggy, [a])[0], repo_outputs(ref, [a])[0]
+        if b == r or b[0] == "error" or delta_signature(b, r) != vis:
+            return True  # a patch tuned to the visible test's delta is wrong here
+    return False
 
 
 def _hidden(ref, buggy, visible, rest, n):
@@ -729,6 +765,15 @@ def _hidden(ref, buggy, visible, rest, n):
             hidden.pop(), cases.pop()
         hidden.append(differing[0])
         cases.append("differs")
+    if not _catches_constant_patch(ref, buggy, visible, hidden):
+        vis = delta_signature(repo_outputs(buggy, [visible])[0], repo_outputs(ref, [visible])[0])
+        other = next((a for a in rest if a not in hidden and repo_outputs(buggy, [a])[0][0] != "error"
+                      and delta_signature(repo_outputs(buggy, [a])[0], repo_outputs(ref, [a])[0]) != vis), None)
+        if other is not None:
+            if len(hidden) >= n:
+                hidden.pop(), cases.pop()
+            hidden.append(other)
+            cases.append("delta_differs")
     for a in rest:
         if len(hidden) >= n:
             break

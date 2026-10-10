@@ -227,6 +227,21 @@ def copier(env: RepoEnv) -> None:
             env.step("edit_file", {"path": path, "old": old, "new": h[1]})
 
 
+def constant_patcher(env: RepoEnv) -> None:
+    """Shifts `solve`'s returned value by the visible test's error (int
+    outputs only): the symptom patch a constant-delta bug would let pass."""
+    task = env.task
+    exp, got = task.visible_expected, task.visible_wrong
+    if not (isinstance(exp, int) and isinstance(got, int)) or isinstance(exp, bool):
+        return
+    path = f"{task.entry_module}.py"
+    src = env.files[path]
+    ret = re.findall(r"^    return (\w+)$", src, re.M)[-1]
+    env.step("edit_file", {"path": path, "old": f"    return {ret}\n",
+                           "new": f"    return {ret} + ({exp - got})\n"})
+    env.step("run_tests", {})
+
+
 def explorer(env: RepoEnv) -> None:
     """The paired-graph fake: graph walk when the tool exists, blind reading otherwise."""
     (explorer_graph if env.params.graph_tools else explorer_blind)(env)
@@ -242,13 +257,21 @@ AGENTS = {
     "fabricator_plausible": fabricator("plausible"), "fabricator_lookalike": fabricator("lookalike"),
     "fabricator_wrong_module": fabricator("wrong_module"), "twin_caller": twin_caller,
     "clone_editor": clone_editor, "copier": copier, "do_nothing": do_nothing, "explorer": explorer,
+    "constant_patcher": constant_patcher,
 }
 
 
 def run_agent(agent, task) -> tuple:
-    """(RepoVerification, env.summary()) for one scripted episode."""
+    """(RepoVerification, env.summary()) for one scripted episode. An agent
+    that does not apply to this task (makes no call) yields signature
+    `skipped`."""
     env = RepoEnv(task)
     agent(env)
+    if not env.steps:
+        from ..store.schema import Verdict
+        from .verify import RepoVerification
+
+        return RepoVerification(Verdict.ERROR, "skipped"), env.summary()
     outcome = "budget_exhausted" if env.calls_left <= 0 else "stopped_short"
     return verify_repo(task, env.files, outcome), env.summary()
 

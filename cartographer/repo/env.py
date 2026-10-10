@@ -126,6 +126,14 @@ class RepoIndex:
 # -- the environment ----------------------------------------------------------------------------------
 
 class RepoEnv:
+    # Episode protocol opt-ins read by `run_episode` (Province III's env defines neither):
+    # stop generating where a text-protocol model starts writing a tool result itself, and
+    # execute at most one call per turn, so every call is made after reading every earlier
+    # result (first smoke, 2026-10-09: Gemma 4 QAT wrote up to 20 calls in one message with
+    # imagined results between them).
+    text_stop = ("```tool_output",)
+    max_calls_per_turn = 1
+
     def __init__(self, task: RepoTask) -> None:
         self.task = task
         self.params = task.params

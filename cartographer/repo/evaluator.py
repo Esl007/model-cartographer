@@ -93,7 +93,8 @@ class RepoFixEvaluator:
                  base: RepoParams | None = None, max_tokens: int = 16000,
                  cancel_event: threading.Event | None = None, protocol: str = "native",
                  context_window: int | None = None, deadline: float | None = None,
-                 episode_wall_s: float | None = None) -> None:
+                 episode_wall_s: float | None = None, retry_max_tokens: int | None = 32000) -> None:
+        self.retry_max_tokens = retry_max_tokens
         self.client, self.model, self.store, self.run_id = client, model, store, run_id
         self.context_window = context_window
         # wall-clock guards, checked before every turn: an absolute session deadline (epoch
@@ -155,7 +156,8 @@ class RepoFixEvaluator:
             return self.spent_usd + ep_cost < self.cost_cap_usd
 
         res = run_episode(self.client, self.model, env, max_tokens=self.max_tokens, cost_fn=cost_usd,
-                          may_continue=may_continue, protocol=self.protocol, context_window=self.context_window)
+                          may_continue=may_continue, protocol=self.protocol, context_window=self.context_window,
+                          retry_max_tokens=self.retry_max_tokens)
         v = verify_repo(task, env.files, res.outcome)
         s = env.summary()
         measures = {k: float(s[k]) for k in MEASURE_KEYS}
@@ -163,6 +165,8 @@ class RepoFixEvaluator:
                   f";bug={'+'.join(task.bug_kinds)};bug_module={task.bug_module}"
                   f";edited={'+'.join(s['edited_files']) or '-'};turns={res.turns}"
                   f";protocol_version={res.protocol_version};result_rendering={res.result_rendering}"
+                  f";calls_per_turn={env.max_calls_per_turn};text_stop={int(bool(env.text_stop))}"
+                  f";skipped_calls={res.skipped_calls};max_tokens={self.max_tokens}"
                   + "".join(f";{k}={int(measures[k])}" for k in MEASURE_KEYS))
         if "fabricated" in v.extra:
             detail += f";fabricated={v.extra['fabricated']}"

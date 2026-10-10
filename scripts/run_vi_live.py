@@ -47,6 +47,12 @@ DB = str(ROOT / "results/campaign.sqlite")
 CONTEXT_WINDOW = 32768  # scripts/modal_serve_gemma4.py MAX_MODEL_LEN
 PARALLELISM = 4
 EPISODE_WALL_S = 25 * 60
+# Per-turn output budget for tool turns (a call, or a whole small module in write_file, fits
+# well inside 6k). The first smoke (16k, retry 32k) saw first turns run to the cap and the
+# retry die in Modal's 303 polling after ~22 min.
+TURN_TOKENS = 6000
+TURN_RETRY_TOKENS = 12000
+SMOKE_RUN = f"smoke-vi-{LABEL}-2"  # `smoke-vi-<label>` holds the pre-fix protocol-debug smoke
 
 
 def log(fh, msg: str) -> None:
@@ -179,7 +185,7 @@ def session(hours: float, fh, dry_run: bool) -> dict:
         raise RuntimeError("no `modal <key> <url>` line in the key file")
     store = ResultsStore(DB)
     run_ids = {s: next_run_id(REGISTRY[s], LABEL, DB) for s in ("VI.control", "VI.graph_value", "VI.navigate")}
-    summary["run_ids"] = {**run_ids, "smoke": f"smoke-vi-{LABEL}"}
+    summary["run_ids"] = {**run_ids, "smoke": SMOKE_RUN}
     log(fh, f"run ids: {summary['run_ids']}")
     if dry_run:
         return summary
@@ -193,6 +199,7 @@ def session(hours: float, fh, dry_run: bool) -> dict:
 
     def evaluator(run_id: str) -> RepoFixEvaluator:
         return RepoFixEvaluator(client, MODEL, store, run_id, cost_cap_usd=5.0, protocol="text_fallback",
+                                max_tokens=TURN_TOKENS, retry_max_tokens=TURN_RETRY_TOKENS,
                                 context_window=CONTEXT_WINDOW, deadline=hard - 10 * 60,
                                 episode_wall_s=EPISODE_WALL_S)
 

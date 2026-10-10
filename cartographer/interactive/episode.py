@@ -76,6 +76,7 @@ class EpisodeResult:
     protocol: str = "none"  # native | text | mixed | none (no call ever made)
     protocol_version: int = PROTOCOL_VERSION
     result_rendering: str = "json"  # json | text (the environment's own render_result)
+    skipped_calls: int = 0  # calls beyond the environment's max_calls_per_turn (not executed)
 
 
 def run_episode(
@@ -112,6 +113,10 @@ def run_episode(
     request_tools = None if protocol == "text_fallback" else tools
     # an environment may render its own results as text (Province VI's file contents); default JSON
     render = getattr(env, "render_result", None)
+    # environment opt-ins (Province VI): stop sequences for the text protocol, calls per turn
+    stop = list(getattr(env, "text_stop", ()) or ()) if protocol == "text_fallback" else []
+    per_turn = getattr(env, "max_calls_per_turn", None)
+    skipped = 0
     used: set[str] = set()
     t_in = t_out = 0
     cost = latency = 0.0
@@ -131,7 +136,9 @@ def run_episode(
                 break
             caps = list(dict.fromkeys(min(c, room) for c in caps))
         for cap in caps:
-            r = client.chat_turn(model, messages, request_tools, max_tokens=cap, temperature=temperature)
+            r = (client.chat_turn(model, messages, request_tools, max_tokens=cap, temperature=temperature, stop=stop)
+                 if stop else
+                 client.chat_turn(model, messages, request_tools, max_tokens=cap, temperature=temperature))
             t_in += r.tokens_in
             t_out += r.tokens_out
             latency += r.latency_ms
@@ -157,6 +164,13 @@ def run_episode(
             used.add("text")
             messages.append({"role": "assistant", "content": r.text or ""})
             results = []
+            if per_turn and len(text_calls) > per_turn:
+                skipped += len(text_calls) - per_turn
+                text_calls = text_calls[:per_turn]
+                results_note = (f"(only the first {per_turn} call of your message was executed: one call per "
+                                "turn; read its result, then send the next call)")
+            else:
+                results_note = None
             for name, args in text_calls:
                 if env.calls_left <= 0:
                     results.append((name, {"status": "error", "error": "call budget exhausted"}))
@@ -164,7 +178,8 @@ def run_episode(
                 results.append((name, env.step(name, args if isinstance(args, dict) else {})))
                 if env.goal_reached:
                     break
-            messages.append({"role": "user", "content": format_tool_results(results, render)})
+            messages.append({"role": "user", "content": format_tool_results(results, render)
+                             + (f"\n{results_note}" if results_note else "")})
             if env.goal_reached:
                 outcome = "goal_reached"
                 break
@@ -176,7 +191,12 @@ def run_episode(
         messages.append(
             {"role": "assistant", "content": r.text or "", "tool_calls": r.message.get("tool_calls")}
         )
-        for call_id, name, arg_json in r.tool_calls:
+        for i_call, (call_id, name, arg_json) in enumerate(r.tool_calls):
+            if per_turn and i_call >= per_turn:
+                skipped += 1
+                messages.append({"role": "tool", "tool_call_id": call_id, "content":
+                                 "not executed: one tool call per turn; send it again after reading the result"})
+                continue
             if env.calls_left <= 0:
                 result = {"status": "error", "error": "call budget exhausted"}
             else:
@@ -208,4 +228,5 @@ def run_episode(
         protocol="mixed" if len(used) > 1 else (next(iter(used)) if used else "none"),
         protocol_version=PROTOCOL_VERSION,
         result_rendering="text" if render is not None else "json",
+        skipped_calls=skipped,
     )

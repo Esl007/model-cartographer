@@ -14,6 +14,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
+
+# Modal web endpoints answer a request that runs past ~150 s with a 303 to a result URL that
+# is polled (each poll may 303 again). urllib follows a POST 303 as a GET, but gives up after
+# 4 repeats of the same URL ("infinite loop"); allow a longer generation to be collected.
+urllib.request.HTTPRedirectHandler.max_repeats = 12
+urllib.request.HTTPRedirectHandler.max_redirections = 24
 from dataclasses import dataclass, replace as dataclasses_replace
 from typing import Callable
 
@@ -410,6 +416,7 @@ class Client:
         tools: list[dict] | None = None,
         max_tokens: int = 16000,
         temperature: float = 0.0,
+        stop: list[str] | None = None,
     ) -> ToolChatResult:
         """One assistant turn over a full message history, optionally with
         native function-calling `tools` (OpenAI-compatible schema).
@@ -433,6 +440,8 @@ class Client:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        if stop:
+            payload["stop"] = list(stop)
         body = json.dumps(payload).encode("utf-8")
 
         timeout = read_timeout_for(self._provider, max_tokens)
