@@ -131,7 +131,12 @@ class RepoEnv:
     # execute at most one call per turn, so every call is made after reading every earlier
     # result (first smoke, 2026-10-09: Gemma 4 QAT wrote up to 20 calls in one message with
     # imagined results between them).
-    text_stop = ("```tool_output",)
+    # Stop strings end the turn where a SECOND call (or a self-written result) begins -- what
+    # native function calling does by construction, and what ReAct harnesses do by stopping at
+    # "Observation:". Diagnostic smoke 2026-10-09 (smoke-vi-gemma4qat-3): after its first
+    # ```tool_code block Gemma 4 QAT wrote a leaked thinking marker (`thought`) and the next
+    # call, acting out a whole imagined trajectory until the token cap. vLLM accepts <= 4 here.
+    text_stop = ("```tool_output", "\nthought\n```", "```\n```tool_code", "```\n\n```tool_code")
     max_calls_per_turn = 1
 
     def __init__(self, task: RepoTask) -> None:

@@ -157,7 +157,7 @@ class RepoFixEvaluator:
 
         res = run_episode(self.client, self.model, env, max_tokens=self.max_tokens, cost_fn=cost_usd,
                           may_continue=may_continue, protocol=self.protocol, context_window=self.context_window,
-                          retry_max_tokens=self.retry_max_tokens)
+                          retry_max_tokens=self.retry_max_tokens, keep_texts=1500)
         v = verify_repo(task, env.files, res.outcome)
         s = env.summary()
         measures = {k: float(s[k]) for k in MEASURE_KEYS}
@@ -180,7 +180,8 @@ class RepoFixEvaluator:
         realized = {**task.realized, **measures, "tokens_in_total": float(res.tokens_in),
                     "protocol_version": float(res.protocol_version)}
         prompt = env.opening_messages()[1]["content"]
-        response = json.dumps({"steps": json.loads(env.transcript()), "diff": file_diff(task.files, env.files)})
+        response = json.dumps({"steps": json.loads(env.transcript()), "diff": file_diff(task.files, env.files),
+                               "assistant": list(res.assistant_texts)})
         with self._lock:
             self.spent_usd += res.cost_usd
             self.call_count += res.turns

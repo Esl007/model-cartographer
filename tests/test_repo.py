@@ -513,4 +513,27 @@ def test_one_call_per_turn_and_stop_sequence_in_the_text_protocol():
     env = RepoEnv(t)
     res = run_episode(c, "m", env, protocol="text_fallback")
     assert res.skipped_calls == 2 and len(env.steps) == 1 and env.steps[0].tool == "list_files"
-    assert c.stops == ["```tool_output"]
+    assert c.stops == list(RepoEnv.text_stop) and "```tool_output" in c.stops
+
+
+def test_a_stop_string_cut_fence_is_closed_before_parsing():
+    from cartographer.interactive.episode import run_episode
+
+    t = compose(RepoParams(n_modules=3, bug_distance=1), 6)
+
+    class Cut(_Client):
+        def chat_turn(self, model, messages, tools=None, max_tokens=0, temperature=0.0, stop=None):
+            self.stops = stop
+            if self.i:
+                return ToolChatResult(message={"content": "done"}, tool_calls=(), text="done", tokens_in=1,
+                                      tokens_out=1, latency_ms=1.0, finish_reason="stop")
+            self.i = 1  # as if vLLM stopped at "```\n```tool_code": the first block's closing fence is cut
+            txt = "Let me look.\n```tool_code\nlist_files()\n"
+            return ToolChatResult(message={"content": txt}, tool_calls=(), text=txt, tokens_in=1, tokens_out=1,
+                                  latency_ms=1.0, finish_reason="stop")
+
+    c = Cut([], text=True)
+    env = RepoEnv(t)
+    run_episode(c, "m", env, protocol="text_fallback")
+    assert [s.tool for s in env.steps] == ["list_files"]
+    assert "\nthought\n```" in c.stops and len(c.stops) <= 4

@@ -77,6 +77,7 @@ class EpisodeResult:
     protocol_version: int = PROTOCOL_VERSION
     result_rendering: str = "json"  # json | text (the environment's own render_result)
     skipped_calls: int = 0  # calls beyond the environment's max_calls_per_turn (not executed)
+    assistant_texts: tuple = ()  # each turn's text (clipped to `keep_texts` head + tail), when asked for
 
 
 def run_episode(
@@ -90,6 +91,7 @@ def run_episode(
     retry_max_tokens: int | None = 32000,
     protocol: str = "native",
     context_window: int | None = None,
+    keep_texts: int = 0,
 ) -> EpisodeResult:
     """Run until the goal is reached, the model stops calling tools, the
     call budget is spent, or an infrastructure problem ends the episode.
@@ -117,6 +119,7 @@ def run_episode(
     stop = list(getattr(env, "text_stop", ()) or ()) if protocol == "text_fallback" else []
     per_turn = getattr(env, "max_calls_per_turn", None)
     skipped = 0
+    texts: list[str] = []
     used: set[str] = set()
     t_in = t_out = 0
     cost = latency = 0.0
@@ -150,6 +153,9 @@ def run_episode(
                 break
         turns += 1
         finish = r.finish_reason
+        if keep_texts:
+            t = r.text or ""
+            texts.append(t if len(t) <= 2 * keep_texts else t[:keep_texts] + f"\n...[{len(t) - 2 * keep_texts} chars clipped]...\n" + t[-keep_texts:])
         if r.error is not None:
             outcome, error = "api_error", r.error
             break
@@ -157,12 +163,15 @@ def run_episode(
             outcome = "cap_hit"
             break
         if not r.tool_calls:
-            text_calls = parse_text_tool_calls(r.text, param_orders) if protocol == "text_fallback" else []
+            reply = r.text or ""
+            if stop and reply.count("```") % 2 == 1:  # a stop string cut the closing fence of the last block
+                reply += "\n```"
+            text_calls = parse_text_tool_calls(reply, param_orders) if protocol == "text_fallback" else []
             if not text_calls:
                 outcome = "goal_reached" if env.goal_reached else "stopped_short"
                 break
             used.add("text")
-            messages.append({"role": "assistant", "content": r.text or ""})
+            messages.append({"role": "assistant", "content": reply})
             results = []
             if per_turn and len(text_calls) > per_turn:
                 skipped += len(text_calls) - per_turn
@@ -229,4 +238,5 @@ def run_episode(
         protocol_version=PROTOCOL_VERSION,
         result_rendering="text" if render is not None else "json",
         skipped_calls=skipped,
+        assistant_texts=tuple(texts),
     )

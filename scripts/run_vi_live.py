@@ -53,6 +53,7 @@ EPISODE_WALL_S = 25 * 60
 TURN_TOKENS = 6000
 TURN_RETRY_TOKENS = 12000
 SMOKE_RUN = f"smoke-vi-{LABEL}-2"  # `smoke-vi-<label>` holds the pre-fix protocol-debug smoke
+SMOKE_ONLY = False
 
 
 def log(fh, msg: str) -> None:
@@ -67,10 +68,10 @@ def app_state() -> str:
         out = subprocess.run([MODAL, "app", "list"], capture_output=True, text=True, timeout=120).stdout
     except subprocess.TimeoutExpired:
         return "unknown"
-    for ln in out.splitlines():
-        if APP[:8] in ln:
-            return "deployed" if "deployed" in ln else ("stopped" if "stopped" in ln else ln.strip())
-    return "absent"
+    rows = [ln for ln in out.splitlines() if APP[:8] in ln]
+    if any(("deployed" in ln) or ("initiali" in ln) or ("stopping" in ln) for ln in rows):
+        return "deployed"  # any live app of this name counts; stopped history rows are ignored
+    return "stopped" if rows else "absent"
 
 
 def stop_app(fh) -> None:
@@ -199,7 +200,7 @@ def session(hours: float, fh, dry_run: bool) -> dict:
 
     def evaluator(run_id: str) -> RepoFixEvaluator:
         return RepoFixEvaluator(client, MODEL, store, run_id, cost_cap_usd=5.0, protocol="text_fallback",
-                                max_tokens=TURN_TOKENS, retry_max_tokens=TURN_RETRY_TOKENS,
+                                max_tokens=TURN_TOKENS, retry_max_tokens=TURN_RETRY_TOKENS or None,
                                 context_window=CONTEXT_WINDOW, deadline=hard - 10 * 60,
                                 episode_wall_s=EPISODE_WALL_S)
 
@@ -211,6 +212,9 @@ def session(hours: float, fh, dry_run: bool) -> dict:
              for k in (1, 4) for s in range(3)]
     s0 = run_jobs(fh, evaluator(summary["run_ids"]["smoke"]), smoke, "S0")
     summary["stages"]["S0"] = s0
+    if SMOKE_ONLY:
+        log(fh, "smoke-only session: stopping after S0")
+        return summary
     if s0["errors"] >= 3:
         log(fh, "S0 smoke: too many ERRORs -- aborting before the campaign stages")
         summary["aborted"] = "smoke errors"
@@ -263,7 +267,16 @@ def main() -> None:
     ap.add_argument("--watchdog", action="store_true")
     ap.add_argument("--deadline", type=float)
     ap.add_argument("--pid", type=int)
+    ap.add_argument("--smoke-only", action="store_true")
+    ap.add_argument("--smoke-run", default=None)
+    ap.add_argument("--turn-tokens", type=int, default=None)
+    ap.add_argument("--retry-tokens", type=int, default=None, help="0 = no retry of a truncated turn")
     a = ap.parse_args()
+    global SMOKE_ONLY, SMOKE_RUN, TURN_TOKENS, TURN_RETRY_TOKENS
+    SMOKE_ONLY = a.smoke_only
+    SMOKE_RUN = a.smoke_run or SMOKE_RUN
+    TURN_TOKENS = a.turn_tokens or TURN_TOKENS
+    TURN_RETRY_TOKENS = TURN_RETRY_TOKENS if a.retry_tokens is None else a.retry_tokens
     fh = open(a.log, "a")
     if a.watchdog:
         watchdog(a.deadline, a.pid, fh)
