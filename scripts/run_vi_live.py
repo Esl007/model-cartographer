@@ -174,6 +174,24 @@ def run_jobs(fh, ev, jobs, name: str) -> dict:
             "errors": sum(n for k, n in tally.items() if k.startswith("ERROR"))}
 
 
+def _fresh_run_id(spec, store) -> str:
+    """The next `<template>-NNN` with no record under it, suffixed runs
+    (`<id>/graph_on`, `<id>/verify`) included -- the registry's `next_run_id`
+    matches exact ids only, and the paired graph study stores only suffixed ones."""
+    import sqlite3
+
+    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    try:
+        ids = {r[0] for r in con.execute("select distinct run_id from experiments")}
+    finally:
+        con.close()
+    for n in range(1, 1000):
+        rid = spec.run_id(LABEL, n)
+        if not any(x == rid or x.startswith(rid + "/") for x in ids):
+            return rid
+    raise RuntimeError("no free run id")
+
+
 def session(hours: float, fh, dry_run: bool) -> dict:
     from cartographer.campaigns.registry import REGISTRY, next_run_id
     from cartographer.exec.client import Client, modal_provider
@@ -186,7 +204,7 @@ def session(hours: float, fh, dry_run: bool) -> dict:
     if "modal_url" not in keys:
         raise RuntimeError("no `modal <key> <url>` line in the key file")
     store = ResultsStore(DB)
-    run_ids = {s: next_run_id(REGISTRY[s], LABEL, DB) for s in ("VI.control", "VI.graph_value", "VI.navigate")}
+    run_ids = {s: _fresh_run_id(REGISTRY[s], store) for s in ("VI.control", "VI.graph_value", "VI.navigate")}
     summary["run_ids"] = {**run_ids, "smoke": SMOKE_RUN}
     log(fh, f"run ids: {summary['run_ids']}")
     if dry_run:
