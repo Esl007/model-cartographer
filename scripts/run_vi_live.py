@@ -55,6 +55,7 @@ TURN_RETRY_TOKENS = 12000
 SMOKE_RUN = f"smoke-vi-{LABEL}-2"  # `smoke-vi-<label>` holds the pre-fix protocol-debug smoke
 SMOKE_ONLY = False
 GRAPH_LEVELS = (4, 8, 12)  # §8 H4: paired at n_modules in {4, 8, 12}
+ONLY = None  # "S1" | "S3": run one stage alone (no smoke) -- completing or re-measuring a stage
 
 
 def log(fh, msg: str) -> None:
@@ -226,6 +227,18 @@ def session(hours: float, fh, dry_run: bool) -> dict:
     def remaining() -> float:
         return soft - time.time()
 
+    if ONLY == "S3":
+        jobs = [({"bug_distance": float(d), "n_modules": float(k), "tool_budget": 20.0}, 300 + s)
+                for s in range(6) for d, k in ((1, 4), (4, 9), (6, 12))]
+        summary["plan"] = {"S3": 6}
+        summary["stages"]["S3"] = run_jobs(fh, evaluator(run_ids["VI.navigate"]), jobs, "S3")
+        return summary
+    if ONLY == "S1":
+        jobs = [({"n_modules": float(k), "n_funcs": 8.0, "bug_distance": 1.0, "tool_budget": 20.0}, 100 + s)
+                for s in range(8) for k in (1, 4, 8)]
+        summary["plan"] = {"S1": 8}
+        summary["stages"]["S1"] = run_jobs(fh, evaluator(run_ids["VI.control"]), jobs, "S1")
+        return summary
     # S0 smoke
     smoke = [({"n_modules": float(k), "n_funcs": 8.0, "bug_distance": 1.0, "tool_budget": 20.0}, s)
              for k in (1, 4) for s in range(3)]
@@ -287,12 +300,14 @@ def main() -> None:
     ap.add_argument("--deadline", type=float)
     ap.add_argument("--pid", type=int)
     ap.add_argument("--smoke-only", action="store_true")
+    ap.add_argument("--only", choices=["S1", "S3"], default=None)
     ap.add_argument("--smoke-run", default=None)
     ap.add_argument("--turn-tokens", type=int, default=None)
     ap.add_argument("--retry-tokens", type=int, default=None, help="0 = no retry of a truncated turn")
     a = ap.parse_args()
-    global SMOKE_ONLY, SMOKE_RUN, TURN_TOKENS, TURN_RETRY_TOKENS
+    global SMOKE_ONLY, SMOKE_RUN, TURN_TOKENS, TURN_RETRY_TOKENS, ONLY
     SMOKE_ONLY = a.smoke_only
+    ONLY = a.only
     SMOKE_RUN = a.smoke_run or SMOKE_RUN
     TURN_TOKENS = a.turn_tokens or TURN_TOKENS
     TURN_RETRY_TOKENS = TURN_RETRY_TOKENS if a.retry_tokens is None else a.retry_tokens

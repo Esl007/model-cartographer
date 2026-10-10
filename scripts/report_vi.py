@@ -74,6 +74,10 @@ def measures_table(recs) -> list[str]:
         ("edit_file `old` not found (episodes with >= 1)", f"{sum(1 for x in m('edit_nomatch') if x)}/{len(scored)}"),
         ("whole-file rewrites (episodes with >= 1)", f"{sum(1 for x in m('whole_file_rewrite') if x)}/{len(scored)}"),
         ("ran the tests after the last edit", f"{sum(1 for x in m('ran_tests_after_last_edit') if x)}/{sum(1 for x in m('n_edits') if x)} of episodes that edited"),
+        ("turns that ran to the 6k cap after a complete call (episodes with >= 1)",
+         f"{sum(1 for x in m('truncated_turns') if x)}/{len(scored)}"),
+        ("extra calls in one message, not executed (episodes with >= 1)",
+         f"{sum(1 for r in scored if detail(r).get('skipped_calls', '0') not in ('0', ''))}/{len(scored)}"),
         ("wall seconds per episode (median)", med([float(detail(r).get('wall_s', 'nan')) for r in scored if 'wall_s' in detail(r)])),
         ("prompt tokens sent per episode (median)", med(m("tokens_in_total"))),
     ]

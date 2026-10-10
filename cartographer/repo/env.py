@@ -171,7 +171,8 @@ class RepoEnv:
         s = {"type": "string"}
         out = [
             tool("list_files", "List every file in the repository."),
-            tool("read_file", "Read a file; lines come back numbered (the numbers are not part of the file).",
+            tool("read_file", "Read a file. Each line comes back as its number, a TAB, then the line exactly as "
+                 "in the file (the number and the TAB are not part of the file).",
                  {"path": {**s, "description": "file path, e.g. `pricing.py`"}}, ["path"]),
             tool("search", "Find a literal, case-sensitive text in every file; returns `path:line: text` "
                  f"(at most {MAX_SEARCH_HITS} hits).", {"pattern": {**s, "description": "the text to find"}},
@@ -243,7 +244,10 @@ class RepoEnv:
         lines = self.files[path].split("\n")
         if lines and lines[-1] == "":
             lines.pop()
-        return True, None, "\n".join(f"{i:4d}  {ln}" for i, ln in enumerate(lines, 1))
+        # `cat -n` layout: the number, then a TAB, then the line exactly. With a spaces-only
+        # separator ("   3  " + line) a model cannot tell separator from indentation: live run
+        # camp-repo-control-gemma4qat-002, 37 of 38 failed edits carried 6 spaces for 4.
+        return True, None, "\n".join(f"{i:6d}\t{ln}" for i, ln in enumerate(lines, 1))
 
     def _search(self, args) -> tuple:
         pat = _arg(args, "pattern")
@@ -282,8 +286,8 @@ class RepoEnv:
                 src, old, count = norm_src, norm_old, 1
         if count == 0:
             return False, "edit_nomatch", (f"`old` was not found in {path}; it must match the file exactly, "
-                                           "indentation included (line numbers from read_file are not part of "
-                                           "the file)")
+                                           "indentation included (read_file's line number and the TAB after it "
+                                           "are not part of the file)")
         if count > 1:
             return False, "edit_nonunique", f"`old` occurs {count} times in {path}; include more surrounding lines"
         self.files[path] = src.replace(old, new, 1)

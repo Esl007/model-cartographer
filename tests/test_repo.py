@@ -295,7 +295,7 @@ def test_env_tools():
     env = RepoEnv(t)
     assert env.step("list_files", {})["output"].split("\n") == sorted(t.files)
     r = env.step("read_file", {"path": f"{t.entry_module}.py"})
-    assert r["output"].startswith("   1  ") and "defined_symbols" in r
+    assert r["output"].startswith("     1\t") and "defined_symbols" in r
     assert env.step("edit_file", {"path": f"tests/test_{t.entry_module}.py", "old": "a", "new": "b"})["status"] == "error"
     assert env.step("edit_file", {"path": f"{t.entry_module}.py", "old": "no such text", "new": "x"})["status"] == "error"
     assert env.step("edit_file", {"path": f"{t.entry_module}.py", "old": "    ", "new": "x"})["error"].startswith("`old` occurs")
