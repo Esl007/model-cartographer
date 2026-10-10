@@ -138,6 +138,10 @@ class RepoEnv:
     # call, acting out a whole imagined trajectory until the token cap. vLLM accepts <= 4 here.
     text_stop = ("```tool_output", "\nthought\n```", "```\n```tool_code", "```\n\n```tool_code")
     max_calls_per_turn = 1
+    # A capped turn whose first call block was complete before the cap executes that call
+    # (the cap only cut what followed it). Live run 2026-10-09 (camp-repo-*-001): 16 of 16
+    # remaining cap_hits were complete calls followed by thousands of tokens of hand-tracing.
+    accept_capped_complete_call = True
 
     def __init__(self, task: RepoTask) -> None:
         self.task = task

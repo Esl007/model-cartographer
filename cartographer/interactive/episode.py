@@ -43,6 +43,24 @@ CONTEXT_MARGIN = 512
 MIN_TURN_TOKENS = 1536
 
 
+_COMPLETE_BLOCK = None
+
+
+def _first_complete_call(text: str) -> str | None:
+    """`text` up to the end of its first complete fenced block that parses as
+    at least one call, or None."""
+    import re
+
+    global _COMPLETE_BLOCK
+    if _COMPLETE_BLOCK is None:
+        _COMPLETE_BLOCK = re.compile(r"```[ \t]*[A-Za-z_]*[ \t]*\n.*?```", re.DOTALL)
+    for m in _COMPLETE_BLOCK.finditer(text):
+        head = text[:m.end()]
+        if parse_text_tool_calls(m.group(0), {}):
+            return head
+    return None
+
+
 def estimate_tokens(messages: list[dict], tools: list | None = None) -> int:
     chars = sum(len(str(m.get("content") or "")) + len(json.dumps(m.get("tool_calls") or "")) for m in messages)
     if tools:
@@ -77,6 +95,7 @@ class EpisodeResult:
     protocol_version: int = PROTOCOL_VERSION
     result_rendering: str = "json"  # json | text (the environment's own render_result)
     skipped_calls: int = 0  # calls beyond the environment's max_calls_per_turn (not executed)
+    truncated_turns: int = 0  # capped turns accepted because their call was complete (env opt-in)
     assistant_texts: tuple = ()  # each turn's text (clipped to `keep_texts` head + tail), when asked for
 
 
@@ -118,6 +137,8 @@ def run_episode(
     # environment opt-ins (Province VI): stop sequences for the text protocol, calls per turn
     stop = list(getattr(env, "text_stop", ()) or ()) if protocol == "text_fallback" else []
     per_turn = getattr(env, "max_calls_per_turn", None)
+    accept_capped = bool(getattr(env, "accept_capped_complete_call", False))
+    truncated = 0
     skipped = 0
     texts: list[str] = []
     used: set[str] = set()
@@ -159,13 +180,24 @@ def run_episode(
         if r.error is not None:
             outcome, error = "api_error", r.error
             break
+        truncated_reply = None
         if r.finish_reason == "length":
-            outcome = "cap_hit"
-            break
+            # An environment may accept a capped TEXT turn whose action was already complete:
+            # the first complete call block was emitted before the cap, and only what came after
+            # it was cut (Province VI: Gemma 4 QAT hand-traces code after its call). The kept
+            # message ends at that block, like a native call ends its message. No complete call
+            # -> `cap_hit` (ERROR) as before.
+            head = _first_complete_call(r.text or "") if (accept_capped and protocol == "text_fallback"
+                                                          and not r.tool_calls) else None
+            if head is None:
+                outcome = "cap_hit"
+                break
+            truncated += 1
+            truncated_reply = head
         if not r.tool_calls:
-            reply = r.text or ""
-            if stop and reply.count("```") % 2 == 1:  # a stop string cut the closing fence of the last block
-                reply += "\n```"
+            reply = truncated_reply if truncated_reply is not None else (r.text or "")
+            if stop and truncated_reply is None and reply.count("```") % 2 == 1:
+                reply += "\n```"  # a stop string cut the closing fence of the last block
             text_calls = parse_text_tool_calls(reply, param_orders) if protocol == "text_fallback" else []
             if not text_calls:
                 outcome = "goal_reached" if env.goal_reached else "stopped_short"
@@ -238,5 +270,6 @@ def run_episode(
         protocol_version=PROTOCOL_VERSION,
         result_rendering="text" if render is not None else "json",
         skipped_calls=skipped,
+        truncated_turns=truncated,
         assistant_texts=tuple(texts),
     )

@@ -166,7 +166,8 @@ class RepoFixEvaluator:
                   f";edited={'+'.join(s['edited_files']) or '-'};turns={res.turns}"
                   f";protocol_version={res.protocol_version};result_rendering={res.result_rendering}"
                   f";calls_per_turn={env.max_calls_per_turn};text_stop={int(bool(env.text_stop))}"
-                  f";skipped_calls={res.skipped_calls};max_tokens={self.max_tokens}"
+                  f";skipped_calls={res.skipped_calls};truncated_turns={res.truncated_turns}"
+                  f";max_tokens={self.max_tokens}"
                   + "".join(f";{k}={int(measures[k])}" for k in MEASURE_KEYS))
         if "fabricated" in v.extra:
             detail += f";fabricated={v.extra['fabricated']}"
@@ -178,6 +179,7 @@ class RepoFixEvaluator:
         if res.error:
             detail += f";error={res.error}"
         realized = {**task.realized, **measures, "tokens_in_total": float(res.tokens_in),
+                    "truncated_turns": float(res.truncated_turns),
                     "protocol_version": float(res.protocol_version)}
         prompt = env.opening_messages()[1]["content"]
         response = json.dumps({"steps": json.loads(env.transcript()), "diff": file_diff(task.files, env.files),

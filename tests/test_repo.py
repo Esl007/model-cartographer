@@ -537,3 +537,31 @@ def test_a_stop_string_cut_fence_is_closed_before_parsing():
     run_episode(c, "m", env, protocol="text_fallback")
     assert [s.tool for s in env.steps] == ["list_files"]
     assert "\nthought\n```" in c.stops and len(c.stops) <= 4
+
+
+def test_a_capped_turn_with_a_complete_call_executes_it_and_one_without_is_cap_hit():
+    from cartographer.interactive.episode import run_episode
+
+    t = compose(RepoParams(n_modules=3, bug_distance=1), 6)
+
+    class Rambler(_Client):
+        def __init__(self, first):
+            super().__init__([], text=True)
+            self.first = first
+
+        def chat_turn(self, model, messages, tools=None, max_tokens=0, temperature=0.0, stop=None):
+            if self.i:
+                return ToolChatResult(message={"content": "done"}, tool_calls=(), text="done", tokens_in=1,
+                                      tokens_out=1, latency_ms=1.0, finish_reason="stop")
+            self.i = 1
+            return ToolChatResult(message={"content": self.first}, tool_calls=(), text=self.first, tokens_in=1,
+                                  tokens_out=6000, latency_ms=1.0, finish_reason="length")
+
+    env = RepoEnv(t)
+    res = run_episode(Rambler("```tool_code\nrun_tests()\n```\nLet me trace: x = 1, x = 2, ..."), "m", env,
+                      protocol="text_fallback", retry_max_tokens=None)
+    assert res.truncated_turns == 1 and [s.tool for s in env.steps] == ["run_tests"] and res.outcome != "cap_hit"
+    env2 = RepoEnv(t)
+    res2 = run_episode(Rambler("Let me think about this for a long time ... ```tool_code\nread_fi"), "m", env2,
+                       protocol="text_fallback", retry_max_tokens=None)
+    assert res2.outcome == "cap_hit" and not env2.steps

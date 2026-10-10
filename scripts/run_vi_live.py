@@ -54,6 +54,7 @@ TURN_TOKENS = 6000
 TURN_RETRY_TOKENS = 12000
 SMOKE_RUN = f"smoke-vi-{LABEL}-2"  # `smoke-vi-<label>` holds the pre-fix protocol-debug smoke
 SMOKE_ONLY = False
+GRAPH_LEVELS = (4, 8, 12)  # §8 H4: paired at n_modules in {4, 8, 12}
 
 
 def log(fh, msg: str) -> None:
@@ -192,7 +193,7 @@ def session(hours: float, fh, dry_run: bool) -> dict:
         return summary
     t_deploy = time.time()
     hard = t_deploy + hours * 3600
-    soft = hard - 25 * 60  # no new episode after this; in-flight ones stop at `hard - 10 min`
+    soft = hard - 15 * 60  # no new episode after this; in-flight ones stop at `hard - 8 min`
     summary["t_deploy"] = t_deploy
     deploy_and_warm(fh, keys)
     client = Client(modal_provider(keys["modal_url"]), keys["modal"])
@@ -201,7 +202,7 @@ def session(hours: float, fh, dry_run: bool) -> dict:
     def evaluator(run_id: str) -> RepoFixEvaluator:
         return RepoFixEvaluator(client, MODEL, store, run_id, cost_cap_usd=5.0, protocol="text_fallback",
                                 max_tokens=TURN_TOKENS, retry_max_tokens=TURN_RETRY_TOKENS or None,
-                                context_window=CONTEXT_WINDOW, deadline=hard - 10 * 60,
+                                context_window=CONTEXT_WINDOW, deadline=hard - 8 * 60,
                                 episode_wall_s=EPISODE_WALL_S)
 
     def remaining() -> float:
@@ -224,12 +225,12 @@ def session(hours: float, fh, dry_run: bool) -> dict:
     log(fh, f"measured {per_ep / 60:.2f} wall-min per episode at parallelism {PARALLELISM}; "
             f"capacity ~{cap} episodes before the soft deadline")
     # allocate: S1 control 3 levels, S2 graph pairs (2 episodes each), S3 navigate 3 points
-    want = {"S1": 8, "S2": 8, "S3": 6}  # seeds per level / pairs / seeds per point
+    want = {"S1": 8, "S2": 5, "S3": 6}  # seeds per level / pairs per graph level / seeds per point
 
     def cost(w):
-        return 3 * w["S1"] + 2 * w["S2"] + 3 * w["S3"]
+        return 3 * w["S1"] + 2 * len(GRAPH_LEVELS) * w["S2"] + 3 * w["S3"]
 
-    floor = {"S1": 4, "S2": 4, "S3": 3}
+    floor = {"S1": 4, "S2": 3, "S3": 3}
     while cost(want) > cap and any(want[k] > floor[k] for k in want):
         for k in ("S3", "S2", "S1"):
             if want[k] > floor[k] and cost(want) > cap:
@@ -246,7 +247,7 @@ def session(hours: float, fh, dry_run: bool) -> dict:
     if remaining() > 10 * 60:
         t0 = time.time()
         ev = evaluator(run_ids["VI.graph_value"])
-        res = run_paired_graph(ev, levels=(8,), n_seeds=want["S2"], tool_budget=20, bug_distance=3,
+        res = run_paired_graph(ev, levels=GRAPH_LEVELS, n_seeds=want["S2"], tool_budget=20, bug_distance=3,
                                parallelism=PARALLELISM, seed_base=200)
         summary["stages"]["S2"] = {"wall_s": time.time() - t0, "note": res.note, "result": res.to_json_dict()}
         log(fh, f"S2 done in {(time.time() - t0) / 60:.1f} min: {res.note}")
