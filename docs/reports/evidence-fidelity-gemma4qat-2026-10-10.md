@@ -67,3 +67,7 @@ Cells: mechanism-signature rate per scored episode (primary) and pass rate (seco
 - **H-EF2 (C rescues carried, not in-view):** {'tickets': False, 'belief': False, 'comments': False}
 - **H-EF3 (D rescues nothing, or reclassifies):** {'belief': {'D_rescues': False, 'C_rescues': False}, 'tools': {'D_rescues': False, 'C_rescues': False}, 'comments': {'D_rescues': False, 'C_rescues': False}, 'tickets': {'D_rescues': False, 'C_rescues': False}, 'repair': {'D_rescues': False, 'C_rescues': False}}
 - **H-EF4 (two families):** {'tickets_info_C': False, 'tickets_causal_X': False, 'repair_causal_C': False, 'repair_info_X': False, 'verdict': 'unresolved'}
+
+## Addendum (2026-10-10 evening): protocol v3 re-measure
+
+The ticket arm was re-run under Province III protocol v3 (one call per turn) as `camp-ef-tickets-gemma4qat-002`: 50/50 in every arm, zero fabricated tickets, so the v2 arm above stands as a protocol artefact. The belief arm was extended to 30 paired seeds: C vs B Holm p = 1.6e-4, D vs B Holm p = 0.69 (retrieval, not attention). F-G4Q-1 is retracted as stated (X10). Full report: `docs/reports/iii-v3-ticket-remeasure-2026-10-10.md`. This report's sections above are unedited.

@@ -380,6 +380,7 @@ Two patterns stand out:
 | X7 | Nano interactive "drop to 2/5" at its ceiling | 3 trials never ran (cost cap); caught before reporting, and the escalation code now discards cut-short probes |
 | X8 | (never claimed) Ultra interactive "0/10" | Every episode was truncated by the per-turn cap; recorded as no measurement |
 | X9 | (never claimed) Gemma Province III "0 calls, gives up" | Nebius drops `tools` for Gemma; the text tool-call protocol was built before measuring |
+| X10 | F-G4Q-1: Gemma 4 QAT fabricates a pattern-plausible ticket instead of copying the opaque one (fresh-seed replicated), and the 6/6 restatement rescue | Protocol artefact. The v2 text protocol executed every call in a message, and Gemma wrote whole trajectories, tickets included, before any result (median 2 turns). Under protocol v3 (one call per turn): 33/33, 31/31 and 50/50, zero invalid tickets. Retracted as stated (2026-10-10); the surviving finding is blind-trajectory planning. `docs/reports/iii-v3-ticket-remeasure-2026-10-10.md` |
 
 ### 5.4 Totals
 - **Nemotron: 27 findings.**

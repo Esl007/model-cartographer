@@ -115,6 +115,7 @@ N = Nano 30B-A3B, S = Super 120B-A12B, U = Ultra 550B-A55B.
 | X6 | Nano trap-ray t* = 0.55 | Also cap-biased; re-run gives 0.675 |
 | X7 | Nano interactive "drop to 2/5" at its ceiling | 3 trials never ran (cost cap); caught before reporting, and the escalation code fixed |
 | X8 | (never claimed) Ultra interactive "0/10" | Every episode was cut off by the per-turn token cap; graded ERROR, reported as *no measurement*. The interactive loop now retries a truncated turn at 32k, matching single-shot |
+| X10 | F-G4Q-1 Gemma 4 ticket fabrication (+ the 6/6 restatement rescue) | v2 text protocol executed whole blind trajectories (median 2 turns); under protocol v3 33/33, 31/31, 50/50, zero invalid tickets. Retracted as stated 2026-10-10 |
 
 ### Totals
 - **27 findings**: **14 reproduced** (F1, F3, F4, F5, F8, F9, F12, F13, F14, F15, F20, F23, F24, F25), **1 partly** (F11), **12 not yet reproduced** (F2, F6, F7, F10, F16, F17, F18, F19, F21, F22, F26, F27). F17 was re-tested and did **not** replicate.
