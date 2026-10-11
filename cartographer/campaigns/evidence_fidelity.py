@@ -329,6 +329,13 @@ def summarize_family(store, run_id: str, family: str, prefix: str = "", gated: d
     arms = tuple(a for a in (arms or ARM_ORDER) if a in fam.arms and fam.arms[a] is not None)
     res = FamilyResult(fam.key, fam.province, fam.mechanism, fam.carriage, fam.signature_name, run_id + prefix)
     per: dict[str, dict[int, tuple]] = {}  # arm -> trial seed -> (passed, signature) for scored episodes
+    from ..interactive.episode import protocol_version_of
+
+    versions = {protocol_version_of(r) for arm in arms for r in store.by_run(f"{run_id}{prefix}/{arm}")
+                if fam.record_kind == "interactive" and r.verdict != Verdict.ERROR}
+    if len(versions) > 1:
+        raise ValueError(f"{run_id}{prefix}: mixes episode protocol versions {sorted(versions)}; v2 and v3 "
+                         "records are never pooled (docs/spec-iii-protocol-v3-and-belief-power.md)")
     for arm in arms:
         recs = {}
         for r in store.by_run(f"{run_id}{prefix}/{arm}"):

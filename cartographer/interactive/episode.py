@@ -31,6 +31,12 @@ INFRA_OUTCOMES = ("api_error", "cap_hit", "cost_capped")
 #      as text when the environment defines `render_result` (Province VI's RepoEnv only),
 #      otherwise JSON as before -- `result_rendering` records which.
 PROTOCOL_VERSION = 2
+#   v3 (opt-in, `run_episode(turn_discipline=True)`; docs/spec-iii-protocol-v3-and-belief-power.md):
+#      Province VI's turn discipline for ANY text-protocol environment -- generation stops where a
+#      second call or a self-written tool_output begins, one call executes per turn, and a capped turn
+#      whose first call block was complete executes that call. v2 and v3 records are NEVER pooled.
+PROTOCOL_VERSION_V3 = 3
+V3_TEXT_STOP = ("```tool_output", "\nthought\n```", "```\n```tool_code", "```\n\n```tool_code")
 
 # Context-window guard (only when `run_episode(context_window=...)` is given, e.g. a
 # self-hosted vLLM endpoint whose --max-model-len rejects prompt + max_tokens beyond it
@@ -41,6 +47,12 @@ PROTOCOL_VERSION = 2
 CHARS_PER_TOKEN = 3.0
 CONTEXT_MARGIN = 512
 MIN_TURN_TOKENS = 1536
+
+
+def _written_calls(text: str, param_orders) -> list:
+    """Every call a message wrote, closed fences or not (the measure, not what was executed)."""
+    t = text if text.count("```") % 2 == 0 else text + "\n```"
+    return parse_text_tool_calls(t, param_orders)
 
 
 _COMPLETE_BLOCK = None
@@ -96,6 +108,7 @@ class EpisodeResult:
     result_rendering: str = "json"  # json | text (the environment's own render_result)
     skipped_calls: int = 0  # calls beyond the environment's max_calls_per_turn (not executed)
     truncated_turns: int = 0  # capped turns accepted because their call was complete (env opt-in)
+    calls_written_first_turn: int = 0  # how many calls the FIRST message wrote (blind-trajectory measure)
     assistant_texts: tuple = ()  # each turn's text (clipped to `keep_texts` head + tail), when asked for
 
 
@@ -111,6 +124,7 @@ def run_episode(
     protocol: str = "native",
     context_window: int | None = None,
     keep_texts: int = 0,
+    turn_discipline: bool = False,
 ) -> EpisodeResult:
     """Run until the goal is reached, the model stops calling tools, the
     call budget is spent, or an infrastructure problem ends the episode.
@@ -138,6 +152,11 @@ def run_episode(
     stop = list(getattr(env, "text_stop", ()) or ()) if protocol == "text_fallback" else []
     per_turn = getattr(env, "max_calls_per_turn", None)
     accept_capped = bool(getattr(env, "accept_capped_complete_call", False))
+    if turn_discipline:  # protocol v3: the environment's own opt-ins, or VI's defaults
+        stop = (stop or list(V3_TEXT_STOP)) if protocol == "text_fallback" else []
+        per_turn = per_turn or 1
+        accept_capped = True
+    first_turn_calls = None  # calls WRITTEN in the first assistant message (before any per-turn cut)
     truncated = 0
     skipped = 0
     texts: list[str] = []
@@ -199,6 +218,9 @@ def run_episode(
             if stop and truncated_reply is None and reply.count("```") % 2 == 1:
                 reply += "\n```"  # a stop string cut the closing fence of the last block
             text_calls = parse_text_tool_calls(reply, param_orders) if protocol == "text_fallback" else []
+            if first_turn_calls is None:
+                first_turn_calls = len(_written_calls(r.text or "", param_orders)) if protocol == "text_fallback" \
+                    else 0
             if not text_calls:
                 outcome = "goal_reached" if env.goal_reached else "stopped_short"
                 break
@@ -228,6 +250,8 @@ def run_episode(
                 outcome = "budget_exhausted"
                 break
             continue
+        if first_turn_calls is None:
+            first_turn_calls = len(r.tool_calls)
         used.add("native")
         messages.append(
             {"role": "assistant", "content": r.text or "", "tool_calls": r.message.get("tool_calls")}
@@ -267,8 +291,9 @@ def run_episode(
         error=error,
         finish_reason=finish,
         protocol="mixed" if len(used) > 1 else (next(iter(used)) if used else "none"),
-        protocol_version=PROTOCOL_VERSION,
+        protocol_version=PROTOCOL_VERSION_V3 if turn_discipline else PROTOCOL_VERSION,
         result_rendering="text" if render is not None else "json",
+        calls_written_first_turn=first_turn_calls or 0,
         skipped_calls=skipped,
         truncated_turns=truncated,
         assistant_texts=tuple(texts),

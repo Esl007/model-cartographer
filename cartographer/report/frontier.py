@@ -221,6 +221,12 @@ def _flag(key: str, on: bool) -> Callable:
     return lambda r: (r.latent_params.get(key, 0.0) >= 0.5) == on
 
 
+def _episode_protocol(r) -> int:
+    from ..interactive.episode import protocol_version_of
+
+    return protocol_version_of(r)
+
+
 def _ef_conflict_arm(r) -> bool:
     return r.run_id.endswith("/B")
 
@@ -264,6 +270,16 @@ SPECS: tuple[Spec, ...] = (
     Spec("interactive_fault", "Recovers when a tool call fails mid-plan (transient error, retry works)",
          "recovering from a failed call", "III · Interactive execution", "interactive", "axis",
          runs=(r"^camp-interactive-fault-",), axis=_latent("plan_depth"), axis_label=_interactive_label),
+    # Province III under protocol v3 (turn discipline; docs/spec-iii-protocol-v3-and-belief-power.md).
+    # v2 and v3 interactive records are never pooled: v3 records feed only these rows (see `_matches`).
+    Spec("interactive_v3", "Executes a plan step by step, carrying values between calls (protocol v3)",
+         "step-by-step execution with values to carry (v3)", "III · Interactive execution", "interactive", "axis",
+         runs=(r"^camp-interactive-(?!lookalike-|fault-)[A-Za-z0-9]+-v3-\d+$",), axis=_latent("plan_depth"),
+         axis_label=_interactive_label),
+    Spec("interactive_fault_v3", "Recovers when a tool call fails mid-plan (protocol v3)",
+         "recovering from a failed call (v3)", "III · Interactive execution", "interactive", "axis",
+         runs=(r"^camp-interactive-fault-[A-Za-z0-9]+-v3-\d+$",), axis=_latent("plan_depth"),
+         axis_label=_interactive_label),
     Spec("code_lookalike", "Traces a program when variable names look alike",
          "code with look-alike variable names", "IV · Code tracing", "code_trace", "axis",
          runs=(r"^camp-code-lookalike-",),
@@ -319,6 +335,9 @@ SPECS: tuple[Spec, ...] = (
          "EF · Evidence fidelity", "tool_plan", "rate", runs=(r"^camp-ef-tools-[A-Za-z0-9_]+-\d+(/B)?$",), where=_ef_conflict_arm),
     Spec("ef_tickets", "Copies a carried opaque value instead of inventing one (paired, B arm)",
          "carried values", "EF · Evidence fidelity", "interactive", "rate",
+         runs=(r"^camp-ef-tickets-[A-Za-z0-9_]+-\d+(/B)?$",), where=_ef_conflict_arm),
+    Spec("ef_tickets_v3", "Copies a carried opaque value instead of inventing one (paired, B arm, protocol v3)",
+         "carried values (v3)", "EF · Evidence fidelity", "interactive", "rate",
          runs=(r"^camp-ef-tickets-[A-Za-z0-9_]+-\d+(/B)?$",), where=_ef_conflict_arm),
     Spec("ef_comments", "Traces code over a misleading comment (paired, B arm)", "code over comments",
          "EF · Evidence fidelity", "code_trace", "rate", runs=(r"^camp-ef-comments-[A-Za-z0-9_]+-\d+(/B)?$",), where=_ef_conflict_arm),
@@ -651,6 +670,8 @@ def _matches(spec: Spec, r) -> bool:
     # restated / emphasized): they feed only the `ef_*` rows, and those rows only them.
     if r.run_id.startswith("camp-ef-") != spec.key.startswith("ef_"):
         return False
+    if spec.kind == "interactive" and (_episode_protocol(r) >= 3) != spec.key.endswith("_v3"):
+        return False  # Province III protocol v2 and v3 are never pooled
     if spec.kind is not None and _query_kind_of(r) != spec.kind:
         return False
     if spec.runs and not any(re.search(p, r.run_id) for p in spec.runs):

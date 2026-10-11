@@ -68,8 +68,12 @@ class InteractiveEvaluator:
         cancel_event: threading.Event | None = None,
         protocol: str = "native",
         on_task=None,
+        protocol_version: int = 2,
     ) -> None:
         self.client, self.model, self.store, self.run_id = client, model, store, run_id
+        if protocol_version not in (2, 3):
+            raise ValueError("protocol_version must be 2 (legacy) or 3 (turn discipline)")
+        self.protocol_version = protocol_version
         self.on_task = on_task  # EF campaign zoo hook: on_task(env=, config=) before the episode
         self.protocol = protocol
         self.cost_cap_usd = cost_cap_usd
@@ -150,6 +154,9 @@ class InteractiveEvaluator:
             self.client, self.model, env, max_tokens=self.max_tokens, cost_fn=cost_usd,
             may_continue=lambda ep_cost: self.spent_usd + ep_cost < self.cost_cap_usd,
             protocol=self.protocol,
+            # v3: a capped turn executes its complete call instead of being retried at 2x the cap (a
+            # 32k retry also overflows a 32k-context endpoint); v2 keeps the legacy retry
+            **({"turn_discipline": True, "retry_max_tokens": None} if self.protocol_version == 3 else {}),
         )
         s = res.summary
         if res.outcome == "goal_reached":
@@ -165,6 +172,8 @@ class InteractiveEvaluator:
             f";first_deviation_step={s['first_deviation_step']};links={s['n_links']}"
             f";fault_step={int(latent['fault_step'])};turns={res.turns}"
             f";protocol_version={res.protocol_version};result_rendering={res.result_rendering}"
+            f";turns_total={res.turns};calls_written_first_turn={res.calls_written_first_turn}"
+            f";skipped_calls={res.skipped_calls};truncated_turns={res.truncated_turns}"
         )
         if s["ticket_errors"]:
             detail += ";ticket_errors=" + ",".join(f"{k}:{v}" for k, v in sorted(s["ticket_errors"].items()))
@@ -226,15 +235,24 @@ def run_interactive_breaking_point_campaign(
     cancel_event: threading.Event | None = None,
     protocol: str = "native",
     early_stop: bool = False,
+    resample_gate: bool = False,
+    resample_n: int = 3,
+    protocol_version: int = 2,
 ) -> BreakingPoint:
     """Escalation over interactive episodes (default ray: plan depth 4 -> 16
     with value passing 0 -> 1). Episodes cost several calls each, so the
-    defaults are smaller than Province II's: k_trials 5, budget 60."""
+    defaults are smaller than Province II's: k_trials 5, budget 60.
+    `protocol_version=3` runs every episode under turn discipline (v3); the
+    default 2 is the legacy protocol, byte-identical."""
     ev = InteractiveEvaluator(client, model, store, run_id, cost_cap, max_tokens=max_tokens,
-                              cancel_event=cancel_event, protocol=protocol)
-    bp = find_breaking_point(ev, ray if ray is not None else default_interactive_ray(),
+                              cancel_event=cancel_event, protocol=protocol, protocol_version=protocol_version)
+    gated = ResampleGatedEvaluator(ev, n=resample_n) if resample_gate else ev
+    bp = find_breaking_point(gated, ray if ray is not None else default_interactive_ray(),
                              budget=budget, k_trials=k_trials, parallelism=parallelism, early_stop=early_stop)
     note = f"spent=${ev.spent_usd:.4f}" + (";cost_cap_hit" if ev.capped else "")
+    if resample_gate:
+        note += gated.note_fields()
+        bp.certificate = certify(bp, gate_stable=gated.stable, gate_noise=gated.noise)
     bp.note = f"{bp.note}; {note}" if bp.note else note
     return bp
 
