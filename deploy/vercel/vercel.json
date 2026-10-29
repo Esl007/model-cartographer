@@ -3,7 +3,7 @@
   "functions": {
     "api/index.py": {
       "includeFiles": "{cartographer/**,results/campaign.sqlite,docs/capability-report.json}",
-      "maxDuration": 60
+      "maxDuration": 120
     }
   },
   "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }]

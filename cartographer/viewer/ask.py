@@ -43,7 +43,7 @@ KIND_LABEL = {"state": "State", "order": "Order", "belief": "Belief", "adversari
 DIM_LABEL = {"entity_state": "Entity state", "temporal": "Temporal", "coreference": "Coreference",
              "distractors": "Distractors", "context_length": "Context length", "witness_gap": "Witness gap"}
 
-MAX_FACTS = 80
+MAX_FACTS = 60
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ def _cost(model: str, tokens_in: int, tokens_out: int) -> float:
     return tokens_in / 1e6 * p_in + tokens_out / 1e6 * p_out
 
 
-def _call(model: str, prompt: str, max_tokens: int, thinking: bool, system: str | None = None) -> dict:
+def _call(model: str, prompt: str, max_tokens: int, thinking: bool, system: str | None = None, timeout: float = 50) -> dict:
     """One Token Factory chat call; returns text plus the numbers the UI shows."""
     c = _client()
     body = {
@@ -122,11 +122,13 @@ def _call(model: str, prompt: str, max_tokens: int, thinking: bool, system: str 
     t0 = time.time()
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=240) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         raise AskUnavailable(f"Token Factory returned HTTP {e.code} for {TIER_NAME.get(model, model)}.") from None
     except (urllib.error.URLError, TimeoutError) as e:
+        if isinstance(e, TimeoutError) or "timed out" in str(e):
+            raise AskUnavailable(f"{TIER_NAME.get(model, model)} took too long this time. Please ask again.") from None
         raise AskUnavailable(f"Could not reach Token Factory ({type(e).__name__}).") from None
     latency = time.time() - t0
     choice = payload["choices"][0]
@@ -272,16 +274,17 @@ def plan(store: ResultsStore, question: str) -> dict:
 
 
 def select(store: ResultsStore, models: list[str], topics: list[str]) -> list[Fact]:
+    """Topic-matched facts first, then each chosen model's overview, findings
+    and breaking points. The routing step is a hint, not a filter: a question
+    tagged only "overall" ("what is its biggest weakness?") still needs the
+    model's findings to be answerable."""
     all_facts, _, _ = facts(store)
-    pick = [f for f in all_facts if (not models or f.model in models) and (not topics or f.topics & set(topics))]
-    if not pick and models:  # topic too narrow for these models: keep the models' overview
-        pick = [f for f in all_facts if f.model in models and ("overall" in f.topics or "breaking" in f.topics)]
-    if not pick:
-        pick = [f for f in all_facts if "overall" in f.topics or "breaking" in f.topics]
-    # breaking points and overall first, then the rest, capped
-    order = {"overall": 0, "breaking": 1}
-    pick.sort(key=lambda f: min((order[t] for t in f.topics if t in order), default=2))
-    return pick[:MAX_FACTS]
+    scope = [f for f in all_facts if not models or f.model in models]
+    topical = [f for f in scope if topics and f.topics & set(topics) - {"overall", "findings", "breaking"}]
+    order = {"overall": 0, "findings": 1, "breaking": 2}
+    core = sorted((f for f in scope if f.topics & set(order) and f not in topical),
+                  key=lambda f: min(order[t] for t in f.topics if t in order))
+    return (topical + core)[:MAX_FACTS]
 
 
 # ---------------------------------------------------------------------------
@@ -296,10 +299,11 @@ def answer(store: ResultsStore, question: str, models: list[str], topics: list[s
         "generated from simulated worlds with deterministic ground truth (no LLM judge). "
         "Answer the question using ONLY the facts below. Cite the fact ids you use in square brackets, like [F3]. "
         "Use only numbers that appear in the facts; do not compute new ones. If the facts do not answer the question, say so. "
-        "Write at most 110 words, plain sentences, no headings, no bullet points.\n\n"
+        "Write at most 110 words, plain sentences, no headings, no bullet points. Keep your reasoning brief.\n\n"
         f"Facts:\n{evidence}\n\nQuestion: {question.strip()[:400]}"
     )
-    r = _call(SUPER, prompt, max_tokens=4000, thinking=True)
+    r = _call(SUPER, prompt, max_tokens=2500, thinking=True, timeout=50)
+    r["text"] = r["text"].replace("【", "[").replace("】", "]")
     if not r["text"]:
         raise AskUnavailable("Nemotron 3 Super did not return an answer in its token budget. Try a narrower question.")
     return {"answer": r["text"], "facts": [{"id": f.id, "text": f.text} for f in chosen], "audit": audit(r["text"], chosen),
@@ -368,7 +372,7 @@ def explain(store: ResultsStore, record_id: str) -> dict:
         "sentences in the prompt that decide it), and which difficulty setting most likely caused the mistake. "
         "Plain sentences, no headings."
     )
-    r = _call(ULTRA, prompt, max_tokens=12000, thinking=True)
+    r = _call(ULTRA, prompt, max_tokens=8000, thinking=True, timeout=50)
     if not r["text"]:
         raise AskUnavailable("Nemotron 3 Ultra ran out of its reasoning budget on this trial.")
     return {"record_id": record_id, "model": display_name(rec.model_name), "truth": truth, "trap": trap,

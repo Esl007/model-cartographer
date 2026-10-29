@@ -41,7 +41,7 @@ def test_audit_separates_cited_from_merely_present():
     assert a["checks"] == [{"value": "93%", "status": "in evidence"}]
 
 
-def test_select_filters_by_model_and_topic_and_falls_back(monkeypatch):
+def test_select_puts_topic_facts_first_and_always_keeps_the_models_core(monkeypatch):
     monkeypatch.setattr(ask, "facts", lambda store: (FACTS, [], {}))
     assert [f.id for f in ask.select(None, ["Nemotron 3 Nano 30B"], ["tool_plan"])] == ["F3"]
     # a topic none of the chosen models has: keep their overview/breaking facts
@@ -61,7 +61,7 @@ def test_answer_returns_text_evidence_and_audit(monkeypatch):
     monkeypatch.setattr(ask, "_call", lambda *a, **k: {"text": "Super breaks at 24-call plans [F2]."})
     out = ask.answer(None, "Where does Super break?", ["Nemotron 3 Super 120B"], ["breaking"])
     assert out["answer"].startswith("Super breaks") and out["audit"]["unsupported"] == []
-    assert [f["id"] for f in out["facts"]] == ["F2"]
+    assert [f["id"] for f in out["facts"]] == ["F1", "F2"]  # the model's overview and breaking points
 
 
 def test_limits_stop_a_visitor_after_the_per_ip_quota(monkeypatch):
