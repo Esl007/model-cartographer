@@ -1,0 +1,2208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Model Cartographer · Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@300..700&family=Google+Sans+Code:wght@400;500&display=swap">
+<style>
+/* Layout: instrument shell (sidebar + command bar + right rail) around a full-bleed capability map; model strip along the bottom.
+   Three layers: instrument (neutral UI), data (capability colour), environment (canvas sky). Dark by design. */
+:root{
+  color-scheme: dark;
+  --void-950:#070C10; --void-900:#091017;
+  --surface-900:#0B1218; --surface-800:#0F171E; --surface-700:#141E26;
+  --panel: rgba(11,18,24,.86);
+  --line-subtle: rgba(180,200,215,.10); --line-visible: rgba(180,200,215,.16);
+  --text-1:#E8EDF1; --text-2:#8B98A4; --text-3:#65727D;
+  --c-reasoning:#E8A35C; --c-coding:#7FB2E5; --c-vision:#8CCB7E; --c-tool:#C3D86C;
+  --c-long:#EC7F6D; --c-agents:#A7C95A; --c-multi:#A68AEE; --c-knowledge:#7CD3B4; --c-creative:#DD7DBE;
+  --lum:#F5B26B;
+  --f-ui:'Google Sans Flex', 'Google Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --f-display:'Google Sans Flex', 'Google Sans', ui-sans-serif, system-ui, sans-serif;
+  --f-mono:'Google Sans Code', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --track-label:.24em;
+}
+*{box-sizing:border-box}
+html,body{background:var(--void-950); color:var(--text-1)}
+body{font:400 13px/1.45 var(--f-ui); -webkit-font-smoothing:antialiased; overflow-x:hidden}
+button{font:inherit; color:inherit; background:none; border:0; cursor:pointer; padding:0}
+button:focus-visible, input:focus-visible, select:focus-visible{outline:1px solid rgba(245,178,107,.7); outline-offset:2px}
+.num{font-variant-numeric:tabular-nums}
+.eyebrow{font:500 10px/1 var(--f-ui); letter-spacing:var(--track-label); text-transform:uppercase; color:var(--text-2)}
+
+/* ---------- shell ---------- */
+.app{position:relative; display:grid; grid-template-columns:200px minmax(0,1fr); grid-template-rows:auto auto; min-height:100vh}
+#sky,#orb{position:absolute; left:0; top:0; z-index:0; display:block; pointer-events:none}
+#orb{mix-blend-mode:screen}
+.mapbox.grab{cursor:grab} .mapbox.dragging{cursor:grabbing}
+.side,.main,.explore{position:relative; z-index:1}
+
+.side{grid-row:1; grid-column:1; display:flex; flex-direction:column; padding:22px 0 18px;
+  background:linear-gradient(90deg, rgba(7,9,11,.94), rgba(7,9,11,.82)); border-right:1px solid var(--line-subtle)}
+.brand{display:flex; align-items:center; gap:14px; padding:0 20px 34px}
+.brand svg{flex:none}
+.brand-name{font:500 10.5px/1.75 var(--f-ui); letter-spacing:.42em; color:var(--text-1)}
+.nav{display:flex; flex-direction:column; gap:4px}
+.nav-item{position:relative; display:flex; align-items:center; gap:14px; height:44px; padding:0 22px; color:var(--text-2); font-size:12.5px; letter-spacing:.01em; text-align:left; transition:color .2s, background .2s}
+.nav-item svg{width:18px; height:18px; flex:none; stroke:currentColor; fill:none; stroke-width:1.25; opacity:.85}
+.nav-item:hover{color:var(--text-1); background:rgba(255,255,255,.025)}
+.nav-item.on{color:var(--text-1); background:linear-gradient(90deg, rgba(245,178,107,.10), rgba(255,255,255,.02) 70%, transparent)}
+.nav-item.on::before{content:''; position:absolute; left:0; top:10px; bottom:10px; width:2px; border-radius:2px; background:var(--lum); box-shadow:0 0 10px 1px rgba(245,178,107,.6)}
+.nav-item.on svg{color:var(--lum); opacity:1}
+.nav-bottom{margin-top:auto; padding-top:24px}
+
+.main{grid-row:1; grid-column:2; display:flex; flex-direction:column; min-width:0; min-height:max(660px, calc(100vh - 192px))}
+.topbar{display:flex; align-items:center; gap:14px; height:76px; padding:0 18px 0 40px}
+.search{position:relative; flex:1 1 auto; max-width:650px; min-width:0}
+.search-field{display:flex; align-items:center; gap:12px; height:40px; padding:0 8px 0 14px; border:1px solid var(--line-visible); border-radius:8px; background:rgba(11,14,17,.78)}
+.search-field svg{flex:none; display:block; width:16px; height:16px; min-width:16px; stroke:var(--text-2); fill:none; stroke-width:1.4}
+.search-field input{flex:1; min-width:0; text-overflow:ellipsis; background:none; border:0; outline:0; color:var(--text-1); font:400 13px var(--f-ui)}
+.search-field input::placeholder{color:var(--text-3)}
+.search-field:focus-within{border-color:rgba(255,255,255,.24)}
+kbd{font:500 10.5px var(--f-ui); color:var(--text-2); padding:3px 6px; border:1px solid var(--line-subtle); border-radius:4px; background:var(--surface-800); white-space:nowrap}
+.suggest{position:absolute; left:0; right:0; top:46px; z-index:20; padding:6px; border:1px solid var(--line-visible); border-radius:8px; background:var(--surface-900); box-shadow:0 18px 40px rgba(0,0,0,.5)}
+.suggest button{display:flex; width:100%; align-items:center; gap:10px; padding:8px 10px; border-radius:5px; text-align:left; color:var(--text-2); font-size:12.5px}
+.suggest button:hover,.suggest button.kb{background:var(--surface-700); color:var(--text-1)}
+.suggest .kind{margin-left:auto; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--text-3)}
+.dot{width:7px; height:7px; border-radius:50%; flex:none; background:var(--c)}
+.icon-btn{display:grid; place-items:center; width:34px; height:34px; border-radius:7px; color:var(--text-2)}
+.icon-btn:hover{color:var(--text-1); background:rgba(255,255,255,.04)}
+.icon-btn svg{width:17px; height:17px; stroke:currentColor; fill:none; stroke-width:1.3}
+.seg{display:flex; padding:3px; border:1px solid var(--line-subtle); border-radius:8px; background:rgba(11,14,17,.7); margin-left:auto}
+.seg button{position:relative; height:32px; padding:0 15px; border-radius:5px; color:var(--text-2); font-size:12px}
+.seg button:hover{color:var(--text-1)}
+.seg button.on{color:var(--text-1); background:var(--surface-800)}
+.seg button.on::after{content:''; position:absolute; left:14px; right:14px; bottom:-1px; height:1px; background:var(--lum); box-shadow:0 0 8px 1px rgba(245,178,107,.75)}
+.top-right{display:flex; align-items:center; gap:10px; margin-left:18px}
+.chip{font:500 9.5px var(--f-ui); letter-spacing:.2em; text-transform:uppercase; color:var(--text-3); padding:6px 8px; border:1px dashed var(--line-visible); border-radius:5px; white-space:nowrap}
+.epoch{display:flex; align-items:center; height:38px; border:1px solid var(--line-subtle); border-radius:8px; background:rgba(11,14,17,.7)}
+.epoch .ep{display:flex; align-items:center; gap:8px; height:100%; padding:0 12px; font-size:12px; color:var(--text-1); white-space:nowrap; text-decoration:none}
+.epoch .ep+.ep{border-left:1px solid var(--line-subtle)}
+a.ep:hover{color:#fff}
+.epoch svg{width:14px; height:14px; stroke:var(--text-2); fill:none; stroke-width:1.4}
+
+.body{flex:1; display:grid; grid-template-columns:minmax(0,1fr) 336px; min-height:0}
+
+/* ---------- stage ---------- */
+.stage{position:relative; min-height:620px; container-type:inline-size}
+.mapbox{position:absolute; inset:0; cursor:default; touch-action:pan-y; -webkit-user-select:none; user-select:none}
+.mapbox.hot{cursor:pointer}
+.hero{position:absolute; left:52px; top:20px; pointer-events:none}
+.hero .eyebrow{color:var(--text-2); letter-spacing:.34em; font-size:9.5px}
+.hero h1{margin:16px 0 0; font:300 clamp(24px, 3.25cqi, 42px)/1 var(--f-display); letter-spacing:.44em; color:var(--text-1); white-space:nowrap}
+.hero .sub{margin-top:18px; font:400 12px/1 var(--f-ui); letter-spacing:.52em; color:var(--text-2); white-space:nowrap}
+.boot{position:absolute; left:50%; top:52%; transform:translate(-30%,-50%); z-index:3; display:flex; flex-direction:column; gap:6px; align-items:center; text-align:center; font-size:12px; color:var(--text-2)}
+.boot b{font:500 10px var(--f-ui); letter-spacing:.32em; text-transform:uppercase; color:var(--text-1)}
+.boot a{color:var(--lum)}
+.lede{position:absolute; left:57.5%; top:42px; width:300px; margin:0; font-size:12.5px; line-height:1.45; color:var(--text-2); pointer-events:none}
+
+.panel{background:var(--panel); border:1px solid var(--line-subtle); border-radius:10px}
+.stage .panel{position:absolute; left:14px; backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px)}
+.panel-h{display:flex; align-items:center; gap:10px; padding:16px 16px 0}
+.panel-h .eyebrow{flex:1}
+.ph-note{font-size:10.5px; color:var(--text-3)}
+.sel{top:142px; width:226px; padding-bottom:14px}
+.ring{width:11px; height:11px; border-radius:50%; border:2px solid var(--c); box-shadow:0 0 8px color-mix(in srgb, var(--c) 55%, transparent); flex:none; position:relative}
+.ring::after{content:''; position:absolute; inset:2px; border-radius:50%; background:var(--c)}
+.mm-model{display:flex; align-items:center; gap:12px; width:100%; margin-top:12px; padding:10px 16px; text-align:left; background:rgba(255,255,255,.035); border-block:1px solid var(--line-subtle)}
+.mm-model:hover{background:rgba(255,255,255,.055)}
+.mm-model b{display:block; font-weight:500; font-size:13.5px; color:var(--text-1)}
+.mm-model small{display:block; margin-top:2px; font-size:11px; color:var(--text-3)}
+.mm-model svg{margin-left:auto; flex:none; stroke:var(--text-2); fill:none; stroke-width:1.4}
+.mm-stats{display:grid; grid-template-columns:auto 1fr; align-items:end; gap:4px 12px; padding:14px 16px 0}
+.mm-stats .v{font:300 30px/1 var(--f-ui); color:var(--text-1)}
+.mm-stats .k{font-size:10.5px; line-height:1.35; color:var(--text-2); padding-bottom:3px}
+.mm-stats .scale{grid-column:1 / -1; height:3px; margin-top:8px; border-radius:2px; background:rgba(255,255,255,.07); overflow:hidden}
+.mm-stats .scale i{display:block; height:100%; background:linear-gradient(90deg, color-mix(in srgb, var(--c) 20%, transparent), var(--c)); transition:width .6s}
+.mm-key{display:flex; align-items:center; gap:10px; margin:12px 16px 0; font-size:10.5px; line-height:1.35; color:var(--text-3)}
+.mm-key svg{flex:none}
+.mini-btn{display:grid; place-items:center; width:22px; height:22px; border:1px solid var(--line-visible); border-radius:5px; color:var(--text-2)}
+.mini-btn:hover{color:var(--text-1); border-color:rgba(255,255,255,.26)}
+.mini-btn svg{width:11px; height:11px; stroke:currentColor; stroke-width:1.5; fill:none}
+.pop{position:absolute; z-index:15; left:calc(100% + 8px); top:8px; width:220px; padding:6px; border:1px solid var(--line-visible); border-radius:8px; background:var(--surface-900); box-shadow:0 18px 40px rgba(0,0,0,.55)}
+.pop .eyebrow{display:block; padding:8px 8px 6px; color:var(--text-3); font-size:9px}
+.pop button{display:flex; align-items:center; gap:10px; width:100%; padding:8px; border-radius:5px; font-size:12.5px; color:var(--text-2); text-align:left}
+.pop button:hover{background:var(--surface-700); color:var(--text-1)}
+.pop .chk{margin-left:auto; width:14px; height:14px; stroke:var(--lum); fill:none; stroke-width:1.6; opacity:0}
+.pop button.in .chk{opacity:1}
+.pop button.in{color:var(--text-1)}
+
+.focus{bottom:14px; width:226px; padding-bottom:12px}
+.focus-rows{display:flex; flex-direction:column; gap:2px; padding:10px 10px 0}
+.f-row{display:grid; grid-template-columns:minmax(0,1fr) 58px 22px; align-items:center; gap:10px; width:100%; padding:5px 6px; border-radius:5px; text-align:left; font-size:11.5px; color:var(--text-2); transition:opacity .25s}
+.f-row:hover{background:rgba(255,255,255,.035); color:var(--text-1)}
+.f-row .n{display:flex; align-items:center; gap:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.f-row .n i{width:6px; height:6px; border-radius:50%; flex:none; background:var(--c); box-shadow:0 0 6px var(--c)}
+.f-row .track{height:3px; border-radius:2px; background:rgba(255,255,255,.07); overflow:hidden}
+.f-row .track i{display:block; height:100%; background:linear-gradient(90deg, color-mix(in srgb, var(--c) 20%, transparent), var(--c)); transition:width .6s}
+.f-row .v{text-align:right; color:var(--text-1); font-variant-numeric:tabular-nums}
+.f-row.on{background:rgba(255,255,255,.05); color:var(--text-1)}
+.focus-rows.has-focus .f-row:not(.on){opacity:.4}
+
+/* map labels */
+#labels{position:absolute; inset:0; pointer-events:none}
+#labels:not(.ready) .cap-label{opacity:0; transition:none}  /* no slide-in from a pre-font, pre-layout position */
+.cap-label{position:absolute; pointer-events:auto; display:flex; align-items:flex-start; gap:10px; padding:2px 4px; text-align:left; font:500 12px/1.42 var(--f-ui); letter-spacing:.15em; text-transform:uppercase; color:var(--text-1); white-space:nowrap; text-shadow:0 0 14px rgba(0,0,0,.95), 0 0 3px rgba(0,0,0,.9); transition:opacity .35s, color .2s, left .6s, top .6s}
+.cap-label.rev{flex-direction:row-reverse; text-align:right}
+.cap-label .cl-dot{width:6px; height:6px; margin-top:6px; border-radius:50%; flex:none; background:var(--c); box-shadow:0 0 8px 1px var(--c)}
+.cap-label .cl-score{font:300 22px/1 var(--f-ui); letter-spacing:0; color:var(--c); font-variant-numeric:tabular-nums; margin-top:1px}
+.cap-label small{display:block; font-size:10.5px; letter-spacing:.1em; color:var(--text-2)}
+.cap-label.dim{opacity:.32}
+.cap-label.nodata{opacity:.45}
+.cap-label.nodata .cl-dot{box-shadow:none; background:transparent; border:1px solid var(--c)}
+.cap-label.nodata .cl-score{color:var(--text-3)}
+.cap-label.on{color:#fff}
+.cap-label.on .cl-dot{box-shadow:0 0 12px 3px var(--c)}
+#tip{position:absolute; z-index:5; pointer-events:none; min-width:150px; padding:9px 11px; border:1px solid var(--line-visible); border-radius:7px; background:rgba(11,14,17,.94); font-size:12px; transform:translate(14px,-50%)}
+#tip .t-name{display:flex; align-items:center; gap:8px; color:var(--text-1); font-weight:500}
+#tip .t-meta{margin-top:3px; color:var(--text-3); font-size:11px}
+
+/* ---------- right rail ---------- */
+.rail{display:flex; flex-direction:column; gap:14px; padding:22px 0 16px; min-width:0}
+.insights{padding-bottom:16px}
+.ins-model{display:flex; align-items:center; gap:14px; padding:18px 16px 0}
+.ins-model canvas{width:42px; height:42px; border-radius:50%; flex:none; box-shadow:0 0 0 1px var(--line-subtle)}
+.ins-name{font:500 15px/1.2 var(--f-ui)}
+.ins-meta{margin-top:4px; font-size:11.5px; color:var(--text-3)}
+.tabs{display:flex; justify-content:space-between; gap:4px; margin:16px 16px 0; border-bottom:1px solid var(--line-subtle); overflow-x:auto; scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{position:relative; padding:0 6px 10px; font-size:11.5px; color:var(--text-2); white-space:nowrap}
+.tabs button:first-child{padding-left:2px}
+.tabs button:hover{color:var(--text-1)}
+.tabs button.on{color:var(--text-1)}
+.tabs button.on::after{content:''; position:absolute; left:0; right:0; bottom:-1px; height:1px; background:var(--text-1)}
+.tab-body{position:relative; padding:14px 16px 0; min-height:282px}
+.desc{margin:0 0 14px; font-size:12.5px; line-height:1.55; color:var(--text-2)}
+.tiles{display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px}
+.tile{padding:9px 10px 8px; border:1px solid var(--line-subtle); border-radius:6px; background:rgba(16,20,24,.85)}
+.tile .v{font:300 20px/1.1 var(--f-ui); font-variant-numeric:tabular-nums}
+.tile .k{display:flex; align-items:center; gap:6px; margin-top:5px; font-size:10.5px; color:var(--text-2); white-space:nowrap}
+.tile .k i{width:5px; height:5px; border-radius:50%; background:var(--c); flex:none}
+.tile.nodata .v, .cap-row.nodata .v, .f-row.nodata .v{color:var(--text-3)}
+.tile.nodata .k i{background:transparent; border:1px solid var(--c)}
+.f-row.nodata .n i{box-shadow:none; background:transparent; border:1px solid var(--c)}
+.run-link{display:block; color:var(--text-1); font-size:11px; overflow-wrap:anywhere; text-decoration:none}
+.run-link:hover{color:var(--lum)}
+.note a{color:var(--text-2)} .note a:hover{color:var(--text-1)}
+.sub-h{margin:16px 0 6px; font-size:11.5px; color:var(--text-2)}
+#profile{display:block; width:100%; height:78px; overflow:visible}
+.calib{position:absolute; inset:14px 16px 0; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:12px; background:var(--panel); font:500 10px var(--f-ui); letter-spacing:.32em; color:var(--text-2)}
+.calib .bar{width:140px; height:1px; background:var(--line-visible); overflow:hidden}
+.calib .bar i{display:block; height:100%; width:40%; background:var(--lum); box-shadow:0 0 8px var(--lum); animation:scan .5s linear infinite}
+@keyframes scan{from{transform:translateX(-100%)} to{transform:translateX(250%)}}
+.cap-rows{display:flex; flex-direction:column; gap:9px}
+.cap-row{display:grid; grid-template-columns:92px 1fr 26px; align-items:center; gap:10px; font-size:11.5px; color:var(--text-2)}
+.cap-row .track{height:3px; border-radius:2px; background:rgba(255,255,255,.07); overflow:hidden}
+.cap-row .track i{display:block; height:100%; background:linear-gradient(90deg, color-mix(in srgb, var(--c) 25%, transparent), var(--c))}
+.cap-row .v{text-align:right; color:var(--text-1); font-variant-numeric:tabular-nums}
+.ev-table{width:100%; border-collapse:collapse; font-size:11.5px}
+.ev-table th{padding:0 0 8px; text-align:left; font-weight:500; font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; color:var(--text-3)}
+.ev-table td{padding:8px 0; border-top:1px solid var(--line-subtle); color:var(--text-2); vertical-align:middle}
+.ev-table td:first-child{color:var(--text-1)}
+.ev-table .r{text-align:right; font-variant-numeric:tabular-nums}
+.ev-table .s{display:block; font-size:10.5px; color:var(--text-3)}
+.sim-row{display:grid; grid-template-columns:34px 1fr auto; align-items:center; gap:12px; padding:9px 0; border-top:1px solid var(--line-subtle); font-size:12.5px; text-align:left; width:100%}
+.sim-row:first-child{border-top:0}
+.sim-row canvas{width:34px; height:34px; border-radius:50%}
+.sim-row .m{display:block; font-size:11px; color:var(--text-3)}
+.sim-row .p{font-variant-numeric:tabular-nums; color:var(--text-1)}
+.sim-row:hover .n{color:#fff}
+.note{margin:12px 0 0; font-size:11px; color:var(--text-3)}
+
+.trajectory{padding-bottom:10px}
+#traj{display:block; width:100%; height:196px}
+
+/* ---------- explore strip ---------- */
+.explore{grid-row:2; grid-column:1 / -1; padding:16px 20px 22px; border-top:1px solid var(--line-subtle); background:var(--void-950)}
+.ex-head{display:flex; align-items:center; gap:22px; margin-bottom:14px}
+.ex-head .eyebrow{font-size:10.5px; color:var(--text-1); letter-spacing:.3em; white-space:nowrap}
+.ex-tabs{display:flex; gap:2px; overflow-x:auto; scrollbar-width:none; min-width:0}
+.ex-tabs::-webkit-scrollbar{display:none}
+.ex-tabs button{position:relative; height:30px; padding:0 13px; border-radius:6px; font-size:12px; color:var(--text-2); white-space:nowrap}
+.ex-tabs button:hover{color:var(--text-1)}
+.ex-tabs button.on{color:var(--text-1); background:var(--surface-800)}
+.ex-tabs button.on::after{content:''; position:absolute; left:12px; right:12px; bottom:-1px; height:1px; background:var(--lum); box-shadow:0 0 8px 1px rgba(245,178,107,.7)}
+.sort{display:flex; align-items:center; gap:12px; margin-left:auto; font-size:12px; color:var(--text-2); white-space:nowrap}
+.sort select{appearance:none; -webkit-appearance:none; height:36px; padding:0 36px 0 14px; border:1px solid var(--line-subtle); border-radius:7px; color:var(--text-1); font:400 12px var(--f-ui); cursor:pointer;
+  background:var(--void-900) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239B9FA5' stroke-width='1.3'/%3E%3C/svg%3E") no-repeat right 14px center}
+.cards-scroll{overflow-x:auto; padding-bottom:2px}
+.cards{display:grid; grid-template-columns:repeat(5, minmax(262px, 1fr)); gap:12px}
+.mcard{position:relative; display:grid; grid-template-columns:86px minmax(0,1fr); height:108px; border:1px solid var(--line-subtle); border-radius:9px; background:linear-gradient(180deg, var(--surface-900), #091016); overflow:hidden; text-align:left; transition:border-color .2s}
+.mcard:hover{border-color:var(--line-visible)}
+.mcard.on{border-color:color-mix(in srgb, var(--c) 45%, transparent)}
+.mcard canvas{width:86px; height:108px; display:block; border-right:1px solid var(--line-subtle)}
+.mc-info{display:flex; flex-direction:column; padding:14px 14px 11px 16px; min-width:0}
+.mc-name{display:flex; align-items:center; gap:8px; font-size:13px; font-weight:500; color:var(--text-1); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.mcard.on .mc-name{color:#fff}
+.mc-org{margin-top:4px; font-size:11.5px; color:var(--text-2)}
+.mc-more{position:absolute; top:10px; right:8px; width:22px; height:22px; display:grid; place-items:center; color:var(--text-2); border-radius:4px}
+.mc-more:hover{color:var(--text-1); background:rgba(255,255,255,.05)}
+.mc-scores{display:grid; grid-template-columns:repeat(6, minmax(0,1fr)); gap:6px; margin-top:auto}
+.mc-scores div{display:flex; flex-direction:column; gap:7px; font-size:11px; color:var(--text-2); font-variant-numeric:tabular-nums; transition:opacity .25s}
+.mc-scores i{display:block; height:2px; width:70%; border-radius:2px; background:var(--c); opacity:.85}
+.mc-scores.focus div{opacity:.35}
+.mc-scores.focus div.hl{opacity:1; color:var(--text-1)}
+.mc-scores div.nodata{color:var(--text-3)}
+.mc-scores div.nodata i{background:transparent; outline:1px solid var(--c); outline-offset:-1px; opacity:.4}
+
+.toast{position:fixed; right:20px; bottom:calc(20px + env(safe-area-inset-bottom, 0px)); z-index:50; display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid var(--line-visible); border-radius:8px; background:var(--surface-900); font-size:12px; color:var(--text-2); box-shadow:0 14px 40px rgba(0,0,0,.5); transform:translateY(8px); opacity:0; transition:opacity .25s, transform .25s; pointer-events:none}
+.toast.show{opacity:1; transform:none}
+.toast b{font-weight:500; letter-spacing:.24em; font-size:9.5px; color:var(--lum)}
+
+/* ---------- responsive ---------- */
+@media (max-width:1320px){
+  .body{grid-template-columns:minmax(0,1fr) 304px}
+  .lede{display:none}
+  .top-right .chip{display:none}
+  .topbar{padding-left:24px; gap:10px}
+  .top-right{margin-left:8px}
+}
+@media (max-width:1180px){
+  .seg button{padding:0 10px}
+  .tabs button{padding:0 3px 10px; font-size:11px}
+}
+@media (max-width:1100px){
+  .body{grid-template-columns:minmax(0,1fr)}
+  .rail{display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); align-items:start; padding:0 18px 18px}
+  .main{min-height:0}
+  .stage{min-height:660px}
+}
+@media (max-width:860px){
+  .app{grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto auto}
+  .side{grid-row:1; flex-direction:row; align-items:center; gap:8px; padding:12px 0 0; border-right:0; border-bottom:1px solid var(--line-subtle); flex-wrap:wrap; background:rgba(7,9,11,.86)}
+  .brand{padding:0 16px 10px; width:100%}
+  .nav{flex-direction:row; overflow-x:auto; scrollbar-width:none; padding:0 8px; width:100%}
+  .nav::-webkit-scrollbar{display:none}
+  .nav-bottom{display:none}
+  .nav-item{height:40px; padding:0 12px; gap:8px; white-space:nowrap}
+  .nav-item.on::before{left:12px; right:12px; top:auto; bottom:0; width:auto; height:2px}
+  .main{grid-row:2; grid-column:1}
+  .explore{grid-row:3}
+  .topbar{flex-wrap:wrap; height:auto; gap:10px; padding:14px 16px}
+  .search{flex-basis:100%; max-width:none}
+  .seg{margin-left:0}
+  .top-right{margin-left:auto}
+  .top-right .chip{display:none}
+  .stage{display:flex; flex-direction:column; min-height:0; padding:4px 16px 16px; gap:14px}
+  .hero{position:static}
+  .hero .sub{letter-spacing:.34em; font-size:11px}
+  .hero h1{font-size:clamp(18px, 6.2cqi, 34px); letter-spacing:.26em}
+  .lede{position:static; display:block; width:auto}
+  .mapbox{position:relative; inset:auto; height:440px; margin:0 -16px; overflow:hidden}
+  .stage .panel{position:static; width:auto}
+  .pop{left:8px; right:8px; top:44px; width:auto}
+  .cap-label{font-size:9.5px; letter-spacing:.08em; gap:6px}
+  .cap-label small{display:none}
+  .cap-label .cl-score{font-size:16px}
+  .cap-label .cl-dot{margin-top:4px}
+  .rail{grid-template-columns:1fr; padding:0 16px 16px}
+  .explore{padding-inline:16px}
+  .ex-head{flex-wrap:wrap; gap:12px}
+  .ex-tabs{order:3; width:100%}
+  .cards{grid-template-columns:repeat(5, 262px)}
+}
+
+/* ---------- views ---------- */
+[hidden]{display:none !important}
+.topbar{position:relative; z-index:2}
+body[data-view]:not([data-view="map"]) #sky, body[data-view]:not([data-view="map"]) #orb, body[data-view]:not([data-view="map"]) .explore, body[data-view]:not([data-view="map"]) .body, body[data-view]:not([data-view="map"]) .seg{display:none}
+body:not([data-view="findings"]) #fview, body:not([data-view="model"]) #mview, body:not([data-view="ask"]) #aview{display:none}
+.live-dot{width:7px; height:7px; border-radius:50%; background:#76B900; box-shadow:0 0 0 3px rgba(118,185,0,.18), 0 0 10px rgba(118,185,0,.7)}
+.ask-box{display:flex; gap:10px; max-width:860px}
+.ask-box input{flex:1; min-width:0; height:46px; padding:0 16px; border:1px solid var(--line-visible); border-radius:8px; background:var(--void-900); color:var(--text-1); font:400 14.5px var(--f-ui); outline:0}
+.ask-box input:focus{border-color:rgba(245,178,107,.55)}
+.ask-box .btn{height:46px; padding:0 20px; font-size:13px}
+.ask-chips{display:flex; flex-wrap:wrap; gap:8px; max-width:980px}
+.ask-run{max-width:980px; padding:6px 0}
+.astep{display:grid; grid-template-columns:22px 1fr; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line-subtle)}
+.astep > i{width:10px; height:10px; margin:4px 0 0 4px; border-radius:50%; border:1.5px solid var(--text-3)}
+.astep.run > i{border-color:var(--lum); box-shadow:0 0 0 3px rgba(245,178,107,.18); animation:apulse 1s ease-in-out infinite}
+.astep.done > i{background:#68B98F; border-color:#68B98F}
+.astep.err > i{background:#D95563; border-color:#D95563}
+@keyframes apulse{50%{box-shadow:0 0 0 6px rgba(245,178,107,.05)}}
+.astep b{font-weight:500; font-size:13px; color:var(--text-1)}
+.ameta{display:block; margin-top:3px; font:400 11px var(--f-mono); color:var(--text-3)}
+.abody{margin-top:8px; font-size:13px; line-height:1.6; color:var(--text-2)}
+.abody:empty{display:none}
+.abody .tag{display:inline-flex; align-items:center; height:22px; padding:0 9px; margin:0 6px 6px 0; border:1px solid var(--line-visible); border-radius:11px; font-size:11.5px; color:var(--text-1)}
+.ans{font-size:14.5px; line-height:1.7; color:var(--text-1); max-width:75ch}
+.cite{display:inline-flex; align-items:center; height:18px; padding:0 6px; margin:0 1px; border-radius:4px; background:rgba(245,178,107,.12); color:var(--lum); font:500 10.5px var(--f-mono); vertical-align:1px; cursor:help}
+.ans mark{background:rgba(217,85,99,.22); color:#F2A0A8; border-radius:3px; padding:0 2px}
+.facts{margin:8px 0 0; padding:0; list-style:none; max-height:220px; overflow:auto; font-size:12px}
+.facts li{padding:4px 0; border-bottom:1px dashed var(--line-subtle)}
+.facts li.hit{color:var(--text-1)}
+.facts code{color:var(--lum); margin-right:6px}
+.aud{display:flex; flex-wrap:wrap; gap:6px}
+.aud span{height:22px; display:inline-flex; align-items:center; padding:0 8px; border-radius:4px; font:400 11.5px var(--f-mono); background:rgba(104,185,143,.12); color:#8FD3AE}
+.aud span.ev{background:rgba(211,169,87,.12); color:#E5C27F}
+.aud span.no{background:rgba(217,85,99,.16); color:#F2A0A8}
+.ask-foot{padding:12px 18px; font:400 11.5px var(--f-mono); color:var(--text-2)}
+.ask-err{color:#F2A0A8}
+.sr-only{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap}
+.vlogo{display:inline-grid; place-items:center; flex:none}
+.vlogo svg{display:block}
+.mono-mark{display:inline-grid; place-items:center; border-radius:50%; border:1px solid var(--line-visible); color:var(--text-2); font-weight:600; line-height:1; box-sizing:border-box}
+.mono{font-family:var(--f-mono)}
+
+/* ---------- shared page shell for Findings + Model ---------- */
+.page{position:relative; display:flex; flex-direction:column; gap:20px; min-width:0; padding:0 18px 36px 40px; transition:padding-right .2s ease}
+body.inspecting .page{padding-right:calc(18px + var(--insp-w))}
+.p-hero{position:relative; display:flex; align-items:flex-end; justify-content:space-between; gap:24px 40px; flex-wrap:wrap; padding:26px 0 26px; min-height:176px}
+.p-sky{position:absolute; left:-40px; right:-18px; top:-76px; bottom:0; width:calc(100% + 58px); height:calc(100% + 76px); z-index:0; pointer-events:none}
+.p-hero > :not(canvas){position:relative; z-index:1}
+.p-hero .eyebrow{display:flex; align-items:center; gap:10px; letter-spacing:.42em; font-size:10px}
+.p-hero h1{margin:16px 0 0; font:300 clamp(24px, 2.9vw, 40px)/1 var(--f-display); letter-spacing:.4em; white-space:nowrap}
+.p-hero p{margin:14px 0 0; max-width:60ch; font-size:13px; color:var(--text-2)}
+.readouts{display:flex; flex-wrap:wrap; row-gap:14px}
+.ro{min-width:96px; padding:2px 22px; border-left:1px solid var(--line-subtle)}
+.ro:first-child{border-left:0; padding-left:0}
+.ro b{display:block; font:300 26px/1 var(--f-ui); font-variant-numeric:tabular-nums; color:var(--text-1)}
+.ro span{display:block; margin-top:9px; font:500 9px var(--f-ui); letter-spacing:.24em; text-transform:uppercase; color:var(--text-3)}
+.ro i{display:block; height:1px; margin-top:10px; background:var(--line-visible)}
+.ro i em{display:block; height:1px; background:var(--hc, var(--lum))}
+
+.bar-row{display:flex; flex-wrap:wrap; align-items:center; gap:10px 12px}
+.vseg{display:flex; padding:3px; border:1px solid var(--line-subtle); border-radius:7px; background:var(--void-900)}
+.vseg button{position:relative; display:flex; align-items:center; gap:8px; height:30px; padding:0 12px; border-radius:4px; font-size:12px; color:var(--text-2); white-space:nowrap; transition:color .12s}
+.vseg button svg{stroke:currentColor; fill:none; stroke-width:1.3}
+.vseg button:hover{color:var(--text-1)}
+.vseg button.on{color:var(--text-1); background:var(--surface-800)}
+.vseg button.on::after{content:''; position:absolute; left:12px; right:12px; bottom:-1px; height:1px; background:var(--lum)}
+.ctl{appearance:none; -webkit-appearance:none; height:34px; width:160px; max-width:100%; padding:0 32px 0 11px; border:1px solid var(--line-subtle); border-radius:6px; color:var(--text-1); font:400 12px var(--f-ui); cursor:pointer;
+  background:var(--void-900) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238B98A4' stroke-width='1.3'/%3E%3C/svg%3E") no-repeat right 11px center; transition:border-color .12s}
+.ctl:hover{border-color:var(--line-visible)}
+.ctl.wide{width:210px}
+.f-search{display:flex; align-items:center; gap:9px; height:34px; padding:0 11px; flex:0 1 240px; min-width:0; border:1px solid var(--line-subtle); border-radius:6px; background:var(--void-900)}
+.f-search svg{flex:none; stroke:var(--text-2); fill:none; stroke-width:1.4}
+.f-search input{flex:1; min-width:0; background:none; border:0; outline:0; color:var(--text-1); font:400 12.5px var(--f-ui); text-overflow:ellipsis}
+.f-search input::placeholder{color:var(--text-3)}
+.btn{display:inline-flex; align-items:center; justify-content:center; gap:8px; height:34px; padding:0 13px; border:1px solid var(--line-visible); border-radius:6px; background:var(--surface-900); font-size:12px; color:var(--text-1); white-space:nowrap; transition:border-color .12s, background .12s}
+.btn:hover{border-color:rgba(180,200,215,.28); background:var(--surface-800)}
+.btn svg{stroke:currentColor; fill:none; stroke-width:1.4}
+.btn.ghost{background:transparent}
+.spacer{flex:1}
+
+.card{min-width:0; border:1px solid var(--line-subtle); border-radius:8px; background:var(--surface-900)}
+.card-h{display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line-subtle)}
+.card-h .eyebrow{font-size:9.5px; color:var(--text-2)}
+.card-h .aside{margin-left:auto; font-size:11.5px; color:var(--text-2)}
+.card-h .aside:hover{color:var(--text-1)}
+.tbl-wrap{position:relative; overflow-x:auto}
+
+/* matrix */
+table.mx{width:100%; min-width:980px; border-collapse:separate; border-spacing:0; font-size:12.5px}
+.mx th{padding:10px 4px; text-align:center; font-weight:400; font-size:11px; line-height:1.3; color:var(--text-2); border-bottom:1px solid var(--line-subtle); vertical-align:bottom}
+.mx thead tr:first-child th{padding-top:14px; font:500 9px var(--f-ui); letter-spacing:.26em; text-transform:uppercase; color:var(--text-3); border-bottom:0; vertical-align:middle}
+.mx thead tr:first-child th.gq span, .mx thead tr:first-child th.gd span{display:block; padding-bottom:8px; border-bottom:1px solid var(--line-visible); margin:0 6px}
+.mx .sep{border-left:1px solid var(--line-subtle)}
+.mx th .up{color:var(--text-3); margin-left:2px}
+.mx td{padding:4px 3px; border-bottom:1px solid var(--line-subtle)}
+.mx tbody tr:last-child td{border-bottom:0}
+.mx .mcol{position:sticky; left:0; z-index:1; width:250px; min-width:210px; padding:12px 14px; text-align:left; background:var(--surface-900); border-right:1px solid var(--line-subtle)}
+.mx th.mcol{font:500 9px var(--f-ui); letter-spacing:.26em; text-transform:uppercase; color:var(--text-3); vertical-align:bottom}
+.mlink{display:flex; align-items:center; gap:11px; text-align:left; width:100%}
+.mlink .who{min-width:0}
+.mlink .org{display:block; font-size:10.5px; color:var(--text-3)}
+.mlink .id{display:block; font:500 12.5px/1.35 var(--f-ui); color:var(--text-1); overflow-wrap:anywhere}
+.mlink .n{display:block; margin-top:2px; font-size:10.5px; color:var(--text-3); font-variant-numeric:tabular-nums}
+.mlink:hover .id{color:#fff; text-decoration:underline; text-decoration-color:var(--line-visible); text-underline-offset:3px}
+.mxc{display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; width:100%; min-width:56px; height:54px; border:1px solid transparent; border-radius:4px; background:color-mix(in srgb, var(--hc) 6%, transparent); transition:border-color .12s, background .12s}
+.mxc:hover{background:color-mix(in srgb, var(--hc) 11%, transparent); border-color:color-mix(in srgb, var(--hc) 30%, transparent)}
+.mxc b{font:500 14px/1 var(--f-ui); color:var(--hc); font-variant-numeric:tabular-nums}
+.mxc i{display:block; width:22px; height:2px; border-radius:1px; background:rgba(180,200,215,.12); overflow:hidden}
+.mxc i em{display:block; height:100%; background:var(--hc)}
+.mxc.on{border-color:var(--lum); box-shadow:0 0 0 1px rgba(245,178,107,.35), 0 0 14px rgba(245,178,107,.18)}
+.mxc.none{background:transparent; cursor:default}
+.mxc.none b{color:var(--text-3); font-weight:400}
+.legend{display:flex; flex-wrap:wrap; align-items:center; gap:8px 20px; padding:12px 16px; border-top:1px solid var(--line-subtle); font-size:11px; color:var(--text-2)}
+.legend .eyebrow{font-size:9px; color:var(--text-3); margin-right:4px}
+.legend span{display:inline-flex; align-items:center; gap:7px}
+.legend i{width:7px; height:7px; border-radius:50%; background:var(--hc)}
+
+/* tables */
+table.dt{width:100%; min-width:900px; border-collapse:collapse; font-size:12.5px}
+.dt th{padding:12px 12px 10px; text-align:left; font:500 9px var(--f-ui); letter-spacing:.22em; text-transform:uppercase; color:var(--text-3); border-bottom:1px solid var(--line-subtle); white-space:nowrap}
+.dt td{padding:11px 12px; border-bottom:1px solid var(--line-subtle); vertical-align:middle}
+.dt tbody tr{cursor:pointer; transition:background .12s}
+.dt tbody tr:hover{background:rgba(180,200,215,.03)}
+.dt tbody tr.on{background:rgba(245,178,107,.05); box-shadow:inset 2px 0 0 var(--lum)}
+.dt tbody tr:last-child td{border-bottom:0}
+.dt .tt b{display:block; font-weight:500; font-size:13px; color:var(--text-1)}
+.dt .tt small{display:block; margin-top:3px; font-size:11px; color:var(--text-3)}
+.dt .num{font-variant-numeric:tabular-nums; white-space:nowrap; color:var(--text-2)}
+.dt .ins{max-width:280px; font-size:12px; color:var(--text-2)}
+.dt .go{width:36px; text-align:right; color:var(--text-3)}
+.dt tbody tr:hover .go{color:var(--lum)}
+.mmini{display:flex; align-items:center; gap:9px; white-space:nowrap}
+.mmini .id{font:500 12px var(--f-ui); color:var(--text-1)}
+.mmini:hover .id{text-decoration:underline; text-underline-offset:3px; text-decoration-color:var(--line-visible)}
+.type{display:inline-block; font:500 9px var(--f-ui); letter-spacing:.2em; text-transform:uppercase; white-space:nowrap}
+.type.weakness{color:#D87861}
+.type.strength{color:#4FAF82}
+.type.none{color:var(--text-3)}
+.pr{display:flex; flex-direction:column; gap:6px; min-width:76px}
+.pr b{font-weight:500; font-variant-numeric:tabular-nums; color:var(--hc)}
+.pr i{display:block; width:72px; height:2px; background:rgba(180,200,215,.1)}
+.pr i em{display:block; height:100%; background:var(--hc)}
+.st{display:inline-flex; align-items:center; gap:7px; font-size:11.5px; white-space:nowrap; color:var(--text-2)}
+.st i{width:7px; height:7px; border-radius:50%; flex:none; border:1.3px solid currentColor}
+.st.unverified i{color:#D3A957}
+.st.no-failures i{color:#4FAF82; background:currentColor}
+.st.verified-stable i{color:#D87861; background:currentColor}
+.st.contains-noise i{color:var(--text-3)}
+.foot{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:12px 16px; border-top:1px solid var(--line-subtle); font-size:12px; color:var(--text-2)}
+.pager{display:flex; gap:4px}
+.tsent{height:1px}
+.tmore{display:flex; align-items:center; gap:10px; color:var(--text-3)}
+.tmore .btn{height:28px; font-size:11.5px}
+.pager button{min-width:30px; height:30px; padding:0 8px; border-radius:5px; font-size:12px; color:var(--text-2); font-variant-numeric:tabular-nums}
+.pager button:hover:not(:disabled){color:var(--text-1); background:rgba(180,200,215,.05)}
+.pager button.on{color:var(--text-1); border:1px solid var(--line-visible); background:var(--surface-800)}
+.pager button:disabled{opacity:.35; cursor:default}
+.empty{padding:44px 20px; text-align:center; color:var(--text-2); font-size:12.5px}
+.empty b{display:block; margin-bottom:6px; font-weight:500; color:var(--text-1)}
+.note{margin:0; font-size:11px; line-height:1.5; color:var(--text-3)}
+
+/* model page */
+.crumb{display:flex; align-items:center; gap:10px; padding-top:22px; font-size:12px; color:var(--text-3)}
+.crumb a, .crumb button{color:var(--text-2)}
+.crumb a:hover, .crumb button:hover{color:var(--text-1)}
+.m-head{display:flex; align-items:flex-start; justify-content:space-between; gap:20px 32px; flex-wrap:wrap; padding:18px 0 4px}
+.m-id{display:flex; align-items:center; gap:16px; min-width:0}
+.m-id .org{font-size:12px; color:var(--text-2)}
+.m-id h1{margin:4px 0 0; font:400 clamp(20px, 2.2vw, 28px)/1.2 var(--f-ui); letter-spacing:.01em; overflow-wrap:anywhere}
+.m-id .meta .mono{font-family:var(--f-mono); font-size:11px; color:var(--text-3)}
+.m-id .meta{margin-top:7px; font-size:12px; color:var(--text-2); font-variant-numeric:tabular-nums}
+.m-logo{display:grid; place-items:center; width:52px; height:52px; flex:none; border:1px solid var(--line-subtle); border-radius:50%; background:var(--surface-900)}
+.m-tabs{display:flex; gap:4px; border-bottom:1px solid var(--line-subtle); overflow-x:auto; scrollbar-width:none}
+.m-tabs::-webkit-scrollbar{display:none}
+.m-tabs button{position:relative; padding:0 12px 12px; font-size:13px; color:var(--text-2); white-space:nowrap; transition:color .12s}
+.m-tabs button:hover{color:var(--text-1)}
+.m-tabs button.on{color:var(--text-1)}
+.m-tabs button.on::after{content:''; position:absolute; left:8px; right:8px; bottom:-1px; height:1px; background:var(--lum)}
+.m-tabs .count{margin-left:6px; font-size:11px; color:var(--text-3)}
+.m-readouts{display:flex; flex-wrap:wrap; gap:0; padding:18px 20px; border:1px solid var(--line-subtle); border-radius:8px; background:var(--surface-900)}
+.m-readouts .ro{flex:1 1 140px; padding:0 22px}
+.m-readouts .ro:first-child{padding-left:0}
+.m-grid{display:grid; grid-template-columns:minmax(300px, 380px) minmax(0,1fr); gap:16px; align-items:start}
+.prof{padding:6px 16px 14px}
+.prof .grp{display:flex; align-items:center; gap:7px; margin:12px 0 4px; font:500 9px var(--f-ui); letter-spacing:.24em; text-transform:uppercase; color:var(--text-3)}
+.gdot{width:6px; height:6px; border-radius:50%; background:var(--c); flex:none}
+.cap-grp{display:flex; justify-content:space-between; align-items:center; margin:10px 0 2px; font:500 9px var(--f-ui); letter-spacing:.2em; text-transform:uppercase; color:var(--text-2)}
+.cap-grp:first-child{margin-top:0}
+.cap-grp i{display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--c); margin-right:7px}
+.cap-grp .v{letter-spacing:0; font-size:11px; color:var(--text-1)}
+.mi-row{cursor:pointer}
+.mi-tbl{min-width:760px; table-layout:auto}
+.mi-tbl th{white-space:normal; line-height:1.3; vertical-align:bottom}
+.mi-tbl th:nth-child(n+5), .mi-tbl td:nth-child(n+5){width:7%; text-align:right}
+.mi-n{display:block; font-size:10px; color:var(--text-3); margin-top:2px}
+.mi-row:hover td{background:rgba(255,255,255,.025)}
+.prow{display:grid; grid-template-columns:minmax(0,1fr) 40px minmax(60px, 1.2fr); align-items:center; gap:12px; width:100%; padding:6px 6px; margin:0 -6px; border-radius:4px; text-align:left; font-size:12.5px; color:var(--text-2); transition:background .12s, color .12s}
+.prow:hover{background:rgba(180,200,215,.04); color:var(--text-1)}
+.prow.on{color:var(--text-1); background:rgba(245,178,107,.06)}
+.prow .v{text-align:right; color:var(--hc); font-variant-numeric:tabular-nums; font-weight:500}
+.prow .track{height:2px; background:rgba(180,200,215,.1)}
+.prow .track em{display:block; height:100%; background:var(--hc)}
+.prow.nodata .v{color:var(--text-3); font-weight:400}
+.prof.big .prow{grid-template-columns:minmax(0,180px) 48px minmax(0,1fr) 110px; padding:10px 6px}
+.prow .n{font-size:11px; color:var(--text-3); text-align:right; font-variant-numeric:tabular-nums}
+.chips{display:flex; flex-wrap:wrap; gap:6px}
+.chip2{height:28px; padding:0 11px; border:1px solid var(--line-subtle); border-radius:14px; font-size:11.5px; color:var(--text-2); white-space:nowrap; transition:color .12s, border-color .12s}
+.chip2:hover{color:var(--text-1)}
+.chip2.on{color:var(--text-1); border-color:rgba(245,178,107,.5); background:rgba(245,178,107,.07)}
+.tv{display:inline-flex; align-items:center; gap:6px; font-size:11.5px}
+.tv i{width:7px; height:7px; border-radius:50%}
+.tv.P i{background:#4FAF82} .tv.F i{background:#D95563} .tv.E i{background:var(--text-3)}
+.trow-ex td{background:var(--void-900); cursor:default}
+.tev{display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:14px 26px; padding:8px 4px 6px}
+.tev dl{margin:0; display:grid; grid-template-columns:auto minmax(0,1fr); gap:6px 12px; font-size:11.5px}
+.tev dt{color:var(--text-3)}
+.tev dd{margin:0; color:var(--text-1); word-break:break-word}
+.tev .ans{grid-column:1/-1; padding:10px 12px; border:1px solid var(--line-subtle); border-radius:5px; font:400 12px/1.5 var(--f-mono); color:var(--text-1); background:var(--surface-900)}
+
+/* ---------- FindingInspector (one drawer for every page) ---------- */
+:root{--insp-w:400px}
+.insp{position:fixed; top:0; right:0; bottom:0; z-index:40; width:var(--insp-w); display:flex; flex-direction:column; background:var(--surface-900); border-left:1px solid var(--line-visible); box-shadow:-24px 0 48px rgba(0,0,0,.35); transform:translateX(100%); visibility:hidden; transition:transform .2s ease, visibility 0s linear .2s}
+.insp.open{transform:none; visibility:visible; transition:transform .2s ease, visibility 0s}
+.insp-scroll{flex:1; overflow-y:auto; padding:calc(20px + env(safe-area-inset-top, 0px)) 22px 22px}
+.insp-top{display:flex; align-items:flex-start; gap:12px}
+.insp-top h2{margin:0; font:400 22px/1.2 var(--f-display); letter-spacing:.01em; color:var(--text-1)}
+.insp-top .x{margin-left:auto; margin-top:-4px}
+.insp-model{display:flex; align-items:center; gap:9px; margin-top:8px; font:500 12px var(--f-mono); color:var(--text-2); text-align:left}
+.insp-model:hover{color:var(--text-1)}
+.insp-tags{display:flex; align-items:center; gap:14px; margin-top:16px}
+.insp-rate{display:flex; align-items:baseline; gap:12px; margin-top:14px}
+.insp-rate b{font:300 40px/1 var(--f-ui); color:var(--hc); font-variant-numeric:tabular-nums}
+.insp-rate span{font-size:12px; color:var(--text-2); font-variant-numeric:tabular-nums}
+.insp-bar{height:2px; margin-top:12px; background:rgba(180,200,215,.1)}
+.insp-bar em{display:block; height:100%; background:var(--hc)}
+.insp-sec{margin-top:20px; padding-top:16px; border-top:1px solid var(--line-subtle)}
+.insp-sec > .eyebrow{display:block; margin-bottom:10px; font-size:9px; color:var(--text-3)}
+.insp-sec p{margin:0; font-size:13px; line-height:1.55; color:var(--text-1)}
+.insp-sec p.dim{font-size:12px; color:var(--text-2)}
+.kvr{display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding:5px 0; font-size:12.5px; color:var(--text-1)}
+.kvr span:first-child{font-family:var(--f-mono); font-size:12px}
+.kvr em{font-style:normal; color:var(--hc); font-variant-numeric:tabular-nums; white-space:nowrap}
+.kvr small{color:var(--text-3); margin-left:6px}
+.exr{display:block; width:100%; padding:8px 0; text-align:left; border-top:1px solid var(--line-subtle); font-size:11.5px; line-height:1.45; color:var(--text-2)}
+.exr:first-of-type{border-top:0}
+.exr code{display:block; margin-bottom:2px; font:500 11px var(--f-mono); color:var(--text-1)}
+.exr:hover code{color:var(--lum)}
+.insp-actions{display:flex; flex-direction:column; gap:8px; padding:14px 22px calc(16px + env(safe-area-inset-bottom, 0px)); border-top:1px solid var(--line-subtle); background:var(--surface-900)}
+.insp-actions .btn{height:40px}
+.insp-actions .btn.primary{border-color:rgba(245,178,107,.45)}
+.insp-sec a, .rec-link{color:var(--text-2)} .insp-sec a:hover, .rec-link:hover{color:var(--lum)}
+.insp-form details{margin-top:12px; padding:12px; border:1px solid var(--line-subtle); border-radius:6px; background:var(--void-900)}
+.insp-form summary{cursor:pointer; font-size:12.5px; color:var(--text-1)}
+.insp-form summary .meta{color:var(--text-3)}
+.insp-form .meta{font-size:11.5px; line-height:1.5; color:var(--text-2)}
+.insp-form .mono{font-family:var(--f-mono); font-size:11px}
+.insp-form form p{margin:10px 0 0; font-size:12px; color:var(--text-2)}
+.insp-form label{display:flex; flex-direction:column; gap:5px}
+.insp-form input, .insp-form select{height:32px; padding:0 10px; border:1px solid var(--line-visible); border-radius:5px; background:var(--surface-900); color:var(--text-1); font:400 12px var(--f-ui)}
+.insp-form button[type=submit]{height:36px; width:100%; border:1px solid rgba(245,178,107,.5); border-radius:6px; color:var(--text-1); background:rgba(245,178,107,.08)}
+.insp-form button[type=submit]:hover{background:rgba(245,178,107,.16)}
+
+@media (max-width:1279px){
+  :root{--insp-w:440px}
+  body.inspecting .page{padding-right:18px}
+}
+@media (max-width:1024px){
+  :root{--insp-w:65vw}
+}
+@media (max-width:1100px){
+  .page{padding:0 18px 30px 24px}
+  .p-sky{left:-24px; width:calc(100% + 42px)}
+  .m-grid{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:860px){
+  .page{padding:0 16px 26px}
+  .p-sky{left:-16px; right:-16px; width:calc(100% + 32px)}
+  .p-hero{min-height:0; padding-top:12px}
+  .p-hero h1{font-size:clamp(19px, 6.6vw, 30px); letter-spacing:.28em; white-space:normal}
+  .ro{padding:2px 14px}
+  .ro b{font-size:21px}
+  .m-readouts .ro{flex:1 1 40%; padding:8px 12px 8px 0; border-left:0}
+  .ctl, .ctl.wide{width:100%}
+  .bar-row > label, .bar-row .f-search{flex:1 1 100%}
+  .prof.big .prow{grid-template-columns:minmax(0,1fr) 44px 70px}
+  .prof.big .prow .n{display:none}
+}
+@media (max-width:640px){
+  :root{--insp-w:100vw}
+  .insp{border-left:0}
+}
+
+@media (prefers-reduced-motion: reduce){
+  *{transition:none !important; animation:none !important}
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <canvas id="sky" aria-hidden="true"></canvas>
+
+  <aside class="side">
+    <div class="brand">
+      <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F5B26B"/><stop offset="1" stop-color="#8a5a2c"/></linearGradient></defs>
+        <circle cx="17" cy="17" r="10.5" fill="none" stroke="url(#lg)" stroke-width="1.3"/>
+        <ellipse cx="17" cy="17" rx="15.5" ry="5" fill="none" stroke="rgba(241,242,243,.55)" stroke-width=".9" transform="rotate(-18 17 17)"/>
+        <circle cx="29.2" cy="13.1" r="1.4" fill="#F5B26B"/>
+      </svg>
+      <div class="brand-name">MODEL<br>CARTOGRAPHER</div>
+    </div>
+    <nav class="nav" aria-label="Primary">
+      <button class="nav-item on" data-nav="map"><svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"/><ellipse cx="10" cy="10" rx="9" ry="3" transform="rotate(-20 10 10)"/></svg>Map</button>
+      <button class="nav-item" data-nav="ask"><svg width="18" height="18" viewBox="0 0 20 20"><path d="M3.5 4.5h13v8.5h-7l-4 3.2V13h-2z"/><path d="M7 8.2h6M7 10.6h4"/></svg>Ask</button>
+      <button class="nav-item" data-nav="findings"><svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"/><circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v2.3M10 15.2v2.3M2.5 10h2.3M15.2 10h2.3"/></svg>Findings</button>
+      <button class="nav-item" data-nav="models"><svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"/><path d="M6 12.5c1-3 3-5 7-6M7.5 7.2l1.2 1.2M12.2 11.6l1 1"/></svg>Models</button>
+      <button class="nav-item" data-nav="breaks"><svg width="18" height="18" viewBox="0 0 20 20"><path d="M3 15l4-5 3 3 3-6 4 8"/><path d="M13 7l1.6-2.6M14.6 4.4l1.4 1"/></svg>Breaking points</button>
+      <button class="nav-item" data-nav="compare"><svg width="18" height="18" viewBox="0 0 20 20"><path d="M3 7h13M13 4l3 3-3 3M17 13H4M7 10l-3 3 3 3"/></svg>Atlas</button>
+      <button class="nav-item" data-nav="runs"><svg width="18" height="18" viewBox="0 0 20 20"><path d="M3 5h4M11 5h6M3 10h9M16 10h1M3 15h2M9 15h8"/><circle cx="9" cy="5" r="1.6"/><circle cx="14" cy="10" r="1.6"/><circle cx="7" cy="15" r="1.6"/></svg>Runs</button>
+      <button class="nav-item" data-nav="report"><svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"/><path d="M7 12.5V9.5M10 12.5V7M13 12.5v-2"/></svg>Report</button>
+      <button class="nav-item" data-nav="coverage"><svg width="18" height="18" viewBox="0 0 20 20"><ellipse cx="10" cy="5" rx="6.5" ry="2.5"/><path d="M3.5 5v10c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5V5M3.5 10c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5"/></svg>Coverage</button>
+    </nav>
+    <div class="nav nav-bottom">
+      <button class="nav-item" data-nav="launch"><svg width="18" height="18" viewBox="0 0 20 20"><path d="M10 2.5l3 6.5h-6z"/><path d="M7.5 9v5.5h5V9M10 14.5v3"/></svg>Launch</button>
+      <button class="nav-item" data-nav="live"><svg width="18" height="18" viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.2"/><path d="M5.5 5.5a6.4 6.4 0 0 0 0 9M14.5 5.5a6.4 6.4 0 0 1 0 9M3.2 3.2a9.6 9.6 0 0 0 0 13.6M16.8 3.2a9.6 9.6 0 0 1 0 13.6"/></svg>Live</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="search" id="search">
+        <label class="search-field">
+          <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>
+          <input id="q" type="text" autocomplete="off" placeholder="Search models, provinces, or a trial id…" aria-label="Search models, provinces, or a trial id">
+          <kbd id="kbd">⌘ K</kbd>
+        </label>
+        <div class="suggest" id="suggest" hidden></div>
+      </div>
+      <div class="top-right">
+        <div class="epoch">
+          <span class="ep"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5"/><path d="M7 4v3l2 1.4"/></svg><span id="epochTxt">Loading…</span></span>
+          <a class="ep" href="/runs" id="ver"><span id="verTxt">…</span></a>
+        </div>
+      </div>
+    </header>
+
+    <div class="body">
+      <section class="stage" id="stage" aria-label="Capability map">
+        <div class="mapbox" id="mapbox">
+          <div id="labels"></div>
+          <div id="tip" hidden></div>
+        </div>
+        <div class="hero">
+          <div class="eyebrow">AI Capability Intelligence</div>
+          <h1>CAPABILITY MAP</h1>
+          <div class="sub">EXPLORE. COMPARE. UNDERSTAND.</div>
+        </div>
+        <p class="lede">One globe per model. Its size is the mean pass rate across the provinces it was measured in, and each flame is its pass rate in one province. Ground truth comes from simulation, never from another model.</p>
+        <div class="boot" id="boot" role="status"><b>Mapping capability…</b>Reading the results store</div>
+
+        <div class="panel sel" id="selPanel">
+          <div class="panel-h"><span class="eyebrow">Mapped Model</span></div>
+          <button class="mm-model" id="mmSwitch" aria-haspopup="true" aria-expanded="false"></button>
+          <div class="mm-stats" id="mmStats"></div>
+          <div class="mm-key"><svg width="22" height="14" viewBox="0 0 22 14"><circle cx="7" cy="7" r="4.5" fill="none" stroke="#9B9FA5" stroke-width="1"/><path d="M12 7c3-1 4-3.5 8-4M12 7.5c3 .5 5 2 9 2.5" fill="none" stroke="#E8A35C" stroke-width="1.2" stroke-linecap="round"/></svg><span>Globe size is the overall pass rate. Flame length is the pass rate in that province.</span></div>
+          <div class="pop" id="pop" hidden></div>
+        </div>
+
+        <div class="panel focus">
+          <div class="panel-h"><span class="eyebrow">Provinces</span>
+            <span title="Each flame's length is this model's scored pass rate in that province. Click a row or a flame to focus it." style="display:grid;place-items:center;color:var(--text-2)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1"><circle cx="7" cy="7" r="6"/><path d="M7 6.2v3.6M7 4.2v.1"/></svg></span>
+          </div>
+          <div class="focus-rows" id="focusRows"></div>
+        </div>
+      </section>
+
+      <aside class="rail">
+        <section class="panel insights" aria-label="Model insights">
+          <div class="panel-h"><span class="eyebrow">Model Insights</span>
+            <button class="icon-btn" id="expand" style="width:26px;height:26px" aria-label="Open this model's findings" title="Open findings"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9"/></svg></button>
+          </div>
+          <div class="ins-model">
+            <canvas id="insAvatar" width="84" height="84"></canvas>
+            <div><div class="ins-name" id="insName"></div><div class="ins-meta" id="insMeta"></div></div>
+          </div>
+          <div class="tabs" role="tablist">
+            <button class="on" data-itab="overview">Overview</button>
+            <button data-itab="capabilities">Query kinds</button>
+            <button data-itab="evaluations">Runs</button>
+            <button data-itab="similar">Similar</button>
+          </div>
+          <div class="tab-body" id="tabBody"></div>
+        </section>
+
+        <section class="panel trajectory" aria-label="Model trajectory">
+          <div class="panel-h"><span class="eyebrow">Model Trajectory</span><span class="ph-note">pass rate per day of runs</span></div>
+          <svg id="traj" role="img" aria-label="Scored pass rate on each day this model was run"></svg>
+        </section>
+      </aside>
+    </div>
+    <section class="page" id="aview" aria-label="Ask the Cartographer">
+      <header class="p-hero">
+        <canvas class="p-sky" id="asky" aria-hidden="true"></canvas>
+        <div>
+          <div class="eyebrow"><span class="live-dot"></span>Live · Nebius Token Factory</div>
+          <h1>ASK THE CARTOGRAPHER</h1>
+          <p>Ask about any model on the map. Nemotron 3 Nano reads your question, the app pulls the matching facts from the results store, Nemotron 3 Super answers from those facts only, and every number it uses is checked against them.</p>
+        </div>
+      </header>
+      <form class="ask-box" id="askForm" autocomplete="off">
+        <input id="askQ" type="text" maxlength="400" placeholder="e.g. Where does Nemotron 3 Super break, and how does Nano compare?" aria-label="Your question">
+        <button class="btn primary" id="askGo" type="submit">Ask Nemotron</button>
+      </form>
+      <div class="chips ask-chips" id="askChips"></div>
+      <section class="card ask-run" id="askRun" hidden>
+        <div class="astep" id="as1"><i></i><div><b>Nemotron 3 Nano · understand the question</b><span class="ameta"></span><div class="abody"></div></div></div>
+        <div class="astep" id="as2"><i></i><div><b>Results store · gather the evidence</b><span class="ameta"></span><div class="abody"></div></div></div>
+        <div class="astep" id="as3"><i></i><div><b>Nemotron 3 Super · answer from the evidence</b><span class="ameta"></span><div class="abody"></div></div></div>
+        <div class="astep" id="as4"><i></i><div><b>Audit · check every number</b><span class="ameta"></span><div class="abody"></div></div></div>
+        <div class="ask-foot" id="askFoot"></div>
+      </section>
+      <p class="note">Nano runs with thinking off for speed; Super thinks before answering. On any failed trial, the record page can also ask Nemotron 3 Ultra why the model got it wrong.</p>
+    </section>
+
+    <section class="page" id="fview" aria-label="Capability findings">
+      <header class="p-hero">
+        <canvas class="p-sky" id="fsky" aria-hidden="true"></canvas>
+        <div>
+          <div class="eyebrow"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M5 1v8M1 5h8"/></svg>Findings</div>
+          <h1>CAPABILITY FINDINGS</h1>
+          <p>Model performance across query kinds and difficulty regions. Select a result to inspect its evidence.</p>
+        </div>
+        <div class="readouts" id="fReadouts"></div>
+      </header>
+      <div class="bar-row" id="fBar">
+        <div class="vseg" role="tablist" aria-label="Findings view">
+          <button data-fv="matrix" role="tab"><svg width="14" height="14" viewBox="0 0 14 14"><rect x="2" y="2" width="4" height="4"/><rect x="8" y="2" width="4" height="4"/><rect x="2" y="8" width="4" height="4"/><rect x="8" y="8" width="4" height="4"/></svg>Matrix view</button>
+          <button data-fv="table" role="tab"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 3.5h10M2 7h10M2 10.5h10"/></svg>Table view</button>
+        </div>
+        <label><span class="sr-only">Model</span><select class="ctl wide" id="fModel"></select></label>
+        <label data-only="table"><span class="sr-only">Capability</span><select class="ctl" id="fCap"></select></label>
+        <label data-only="table"><span class="sr-only">Result</span><select class="ctl" id="fResult"><option value="all">All results</option><option value="weakness">Weaknesses</option><option value="strength">Strengths</option></select></label>
+        <label data-only="table"><span class="sr-only">Status</span><select class="ctl" id="fStatus"><option value="all">Any status</option><option value="unverified">Unverified</option><option value="verified-stable">Resample-stable</option><option value="contains-noise">Includes noise</option><option value="no-failures">No failures</option></select></label>
+        <label class="f-search" data-only="table"><svg width="14" height="14" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg><input id="fQ" type="text" autocomplete="off" placeholder="Search findings" aria-label="Search findings"></label>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="fCopy" data-only="table"><svg width="13" height="13" viewBox="0 0 14 14"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M10 4V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h1"/></svg>Copy CSV</button>
+      </div>
+      <div class="card" id="fMain"></div>
+      <p class="note" id="fNote"></p>
+    </section>
+
+    <section class="page" id="mview" aria-label="Model findings">
+      <nav class="crumb" aria-label="Breadcrumb"><button data-go="models">Models</button><span>/</span><span id="mCrumb"></span><span class="spacer"></span><label><span class="sr-only">Switch model</span><select class="ctl wide" id="mSwitch"></select></label></nav>
+      <header class="m-head" id="mHead"></header>
+      <div class="m-tabs" role="tablist" id="mTabs"></div>
+      <div id="mBody"></div>
+    </section>
+  </div>
+
+  <section class="explore" aria-label="Explore models">
+    <div class="ex-head">
+      <span class="eyebrow">Explore Models</span>
+      <div class="ex-tabs" id="exTabs"></div>
+      <label class="sort">Sort by
+        <select id="sortSel">
+          <option value="score">Province average</option>
+          <option value="trials">Trials recorded</option>
+          <option value="date">Latest run</option>
+          <option value="name">Name</option>
+        </select>
+      </label>
+    </div>
+    <div class="cards-scroll"><div class="cards" id="cards"></div></div>
+  </section>
+</div>
+<aside class="insp" id="insp" aria-label="Finding inspector" aria-hidden="true"></aside>
+<div class="toast" id="toast"><b>INSTRUMENT</b><span id="toastMsg"></span></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/MaskPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+<script>
+(async () => {
+/* ================= helpers ================= */
+const $ = s => document.querySelector(s);
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+function rng(seed){ return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function hash(s){ let h = 2166136261; for (const ch of s) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+function gauss(r){ let u = 0, v = 0; while (!u) u = r(); while (!v) v = r(); return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v); }
+function hexRgb(h){ const n = parseInt(h.slice(1), 16); return [n>>16 & 255, n>>8 & 255, n & 255]; }
+function rgba(h, a){ const [r,g,b] = hexRgb(h); return `rgba(${r},${g},${b},${a})`; }
+function mix(h1, h2, t){ const a = hexRgb(h1), b = hexRgb(h2); return '#' + a.map((v,i) => Math.round(v + (b[i]-v)*t).toString(16).padStart(2,'0')).join(''); }
+
+/* ================= live data: /api/map.json (cartographer/viewer/globe_data.py) =================
+   Every number below comes from the results store through the same rules as /findings:
+   primary records, scored trials only (PASS + FAIL), errors and resample-noise failures excluded. */
+const bootEl = document.getElementById('boot');
+let DATA;
+try {
+  const res = await fetch('/api/map.json', {cache: 'no-store'});
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  DATA = await res.json();
+} catch (err) {
+  if (bootEl) bootEl.innerHTML = `<b>Could not load the results store</b>${String(err.message || err)}. Is the viewer still running?`;
+  return;
+}
+if (!DATA.models || !DATA.models.length){
+  if (bootEl) bootEl.innerHTML = '<b>No trials recorded yet</b>Launch a campaign to map your first model. <a href="/launch">Launch →</a>';
+  return;
+}
+if (bootEl) bootEl.remove();
+
+const KIND_NAMES = {state:'State', order:'Order', belief:'Belief', adversarial_belief:'Adversarial belief', tool_plan:'Tool plan', interactive:'Interactive', code_trace:'Code trace', code_repair:'Code repair', code_write:'Code writing', repo_fix:'Repository fix'};
+const PROV = DATA.provinces;
+const PROV_OF_KIND = {};
+PROV.forEach(p => p.kinds.forEach(k => { PROV_OF_KIND[k] = p; }));
+const CAPS = DATA.kinds.map(k => ({id:k, name:KIND_NAMES[k] || k, color:(PROV_OF_KIND[k] || {color:'#9B9FA5'}).color}));
+const CAP = Object.fromEntries(CAPS.map(c => [c.id, c]));
+const CARD_CAPS = PROV.map(p => p.id);           // explore-card score columns are the six provinces
+const fmtDay = d => d ? new Date(d + 'T00:00:00Z').toLocaleDateString('en-US', {month:'short', day:'numeric', timeZone:'UTC'}) : '';
+const MODELS = DATA.models.map((d, i) => {
+  const s = {}, p = {};
+  DATA.kinds.forEach(k => { const c = d.cells[k]; s[k] = c && c[1] ? c[0]/c[1]*100 : null; });
+  PROV.forEach(pr => { const v = d.prov[pr.id]; p[pr.id] = v && v[1] ? v[0]/v[1]*100 : null; });
+  return {id:d.id, vendor:d.vendor, name:d.display, org:d.org, color:d.color, s, p, prov:d.prov,
+          trials:d.trials, scored:d.scored, pass:d.pass, cost:d.cost, first:d.first, last:d.last,
+          runs:d.runs, daily:d.daily, ord:-i, date:d.first ? `${fmtDay(d.first)} – ${fmtDay(d.last)}` : 'no dated trials'};
+});
+const M = Object.fromEntries(MODELS.map(m => [m.id, m]));
+/* Provinces are the globe's flames; anchors are in sphere-radius units from the map centre. */
+const REGIONS = PROV.map(p => ({id:p.id, l1:p.l1, l2:p.l2, name:p.name, short:p.short || p.name, caps:p.kinds, color:p.color, a:p.anchor, tab:p.id}));
+const regionScore = (m, r) => m.p[r.id];                       // null when the province was never measured
+const measured = m => REGIONS.filter(r => m.p[r.id] != null);
+/* overall = plain average of the measured province pass rates; it sets the globe's size */
+const composite = m => { const ms = measured(m); return ms.length ? ms.reduce((s, r) => s + m.p[r.id], 0)/ms.length : null; };
+const globeScale = m => .6 + .4*clamp(((composite(m) ?? 55) - 55)/35, 0, 1);
+const flameReach = v => v == null ? 0 : .03 + .6*Math.pow(clamp((v - 50)/45, 0, 1), 1.6);
+const fmtN = n => Number(n).toLocaleString('en-US');
+function describe(m){
+  const ms = measured(m);
+  if (!ms.length) return 'No scored trials yet.';
+  const best = ms.reduce((a, b) => m.p[b.id] > m.p[a.id] ? b : a), worst = ms.reduce((a, b) => m.p[b.id] < m.p[a.id] ? b : a);
+  const span = ms.length === 1 ? `Measured in one province, ${best.name.toLowerCase()}` : `Measured in ${ms.length} of ${REGIONS.length} provinces. Strongest in ${best.name.toLowerCase()} (${Math.round(m.p[best.id])}%), weakest in ${worst.name.toLowerCase()} (${Math.round(m.p[worst.id])}%)`;
+  return `${span}, over ${fmtN(m.scored)} scored trials.`;
+}
+MODELS.forEach(m => { m.desc = describe(m); });
+
+/* the Findings / Model / trial views share the same payload */
+let FDATA = {generated:DATA.generated, trials:DATA.trials_total, kinds:DATA.kinds, dims:DATA.dims, dimHigh:DATA.dimHigh, thr:DATA.thr,
+  models:DATA.models.map(d => ({id:d.id, name:d.display || d.name, display:d.display, vendor:d.vendor, org:d.org, trials:d.trials, scored:d.scored, pass:d.pass, cost:d.cost, cells:d.cells})),
+  findings:DATA.findings};
+let EV = {models:DATA.models.map(d => d.id), runs:DATA.ev.runs, cells:DATA.ev.cells, trials:DATA.ev.trials};
+
+const state = {
+  active:MODELS[0].id,
+  focus:null, exTab:'all', sort:'score', itab:'overview', view:'map',
+  hoverRegion:null,
+};
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+let toastT;
+function toast(msg, tag='INSTRUMENT'){ const t = $('#toast'); t.querySelector('b').textContent = tag; $('#toastMsg').textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600); }
+
+/* ================= glow sprites ================= */
+const spriteCache = {};
+function sprite(color){
+  if (spriteCache[color]) return spriteCache[color];
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(32,32,0,32,32,32);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(.12, rgba(color, .95)); gr.addColorStop(.4, rgba(color, .28)); gr.addColorStop(1, rgba(color, 0));
+  g.fillStyle = gr; g.fillRect(0,0,64,64);
+  return spriteCache[color] = c;
+}
+
+/* ================= model fingerprint ================= */
+function drawFingerprint(cv, m, {round=false}={}){
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const w = cv.clientWidth || cv.width, h = cv.clientHeight || cv.height;
+  cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+  const g = cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
+  const r = rng(hash(m.id));
+  g.fillStyle = '#0a0c0f'; g.fillRect(0,0,w,h);
+  let gr = g.createRadialGradient(w*.5, h*.52, 0, w*.5, h*.52, Math.max(w,h)*.7);
+  gr.addColorStop(0, rgba(m.color, .30)); gr.addColorStop(.55, rgba(m.color, .07)); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr; g.fillRect(0,0,w,h);
+  for (let i = 0; i < w*h/60; i++){ g.globalAlpha = .1 + r()*.5; g.fillStyle = r() < .3 ? m.color : '#fff'; const s = r() < .9 ? .6 : 1.1; g.fillRect(r()*w, r()*h, s, s); }
+  g.globalAlpha = 1;
+  const cx = w/2, cy = h/2, rad = Math.min(w,h) * (round ? .36 : .38);
+  // one spoke per measured query kind; its length is the pass rate there (unmeasured kinds have no spoke)
+  const shown = CAPS.filter(c => m.s[c.id] != null);
+  const pts = shown.map((c,i) => {
+    const ang = -Math.PI/2 + i * 2*Math.PI/Math.max(shown.length, 1) + (r()-.5)*.35;
+    const k = clamp(.28 + .72 * (m.s[c.id]-50)/40, .2, 1.05);
+    return [cx + Math.cos(ang)*rad*k, cy + Math.sin(ang)*rad*k, m.s[c.id]];
+  });
+  if (!pts.length){ g.drawImage(sprite(m.color), cx-9, cy-9, 18, 18); return; }
+  g.lineWidth = .7;
+  g.strokeStyle = rgba(m.color, .22);
+  pts.forEach(p => { g.beginPath(); g.moveTo(cx, cy); g.lineTo(p[0], p[1]); g.stroke(); });
+  g.strokeStyle = rgba(m.color, .14);
+  for (let i = 0; i < pts.length; i++) for (let j = i+2; j < pts.length; j++){
+    if ((pts[i][2] + pts[j][2]) / 2 > 75 && r() < .55){ g.beginPath(); g.moveTo(pts[i][0], pts[i][1]); g.lineTo(pts[j][0], pts[j][1]); g.stroke(); }
+  }
+  g.strokeStyle = rgba(m.color, .6); g.beginPath();
+  pts.forEach((p,i) => i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.closePath(); g.stroke();
+  g.globalCompositeOperation = 'lighter';
+  const sp = sprite(m.color);
+  pts.forEach(p => { const s = 5 + (p[2]-55)/5; g.drawImage(sp, p[0]-s, p[1]-s, s*2, s*2); });
+  for (let i = 0; i < 26; i++){ const p = pts[Math.floor(r()*pts.length)]; g.globalAlpha = .3 + r()*.5; g.fillStyle = m.color; g.fillRect(p[0] + gauss(r)*4, p[1] + gauss(r)*4, .8, .8); }
+  g.globalAlpha = 1; g.drawImage(sp, cx-9, cy-9, 18, 18);
+  g.globalCompositeOperation = 'source-over';
+}
+
+/* ================= sky / capability map ================= */
+const app = $('#app'), sky = $('#sky'), ctx = sky.getContext('2d'), mapbox = $('#mapbox'), stage = $('#stage');
+const staticCv = document.createElement('canvas'), sctx = staticCv.getContext('2d');
+let W = 0, H = 0, dpr = 1;
+const geo = {cx:0, cy:0, R:200, mx:0, my:0};
+const view = {scale:1, reach:null, tint:[1, 1, 1]};  // animated toward the active model
+
+/* particles per region (R units) */
+const R0 = rng(7);
+for (const reg of REGIONS){
+  const [ax, ay] = reg.a, len = Math.hypot(ax, ay);
+  const rx = ax/len, ry = ay/len, tx = -ry, ty = rx;
+  reg.I = 1; reg.parts = []; reg.hubs = [];
+  const n = 360;
+  for (let i = 0; i < n; i++){
+    const streamer = R0() < .2;
+    const sT = streamer ? .55 : .30, sR = streamer ? .32 : .12;
+    const g1 = gauss(R0)*sT, g2 = gauss(R0)*sR;
+    reg.parts.push({x: ax + tx*g1 + rx*g2, y: ay + ty*g1 + ry*g2, a: streamer ? .12 + R0()*.3 : .25 + R0()*.7,
+      s: .5 + Math.pow(R0(), 3)*2.4, white: R0() < .22, ph: R0()*6.28, f: .3 + R0()*.6});
+  }
+  for (let i = 0; i < 9; i++) reg.hubs.push({x: ax + tx*gauss(R0)*.2 + rx*gauss(R0)*.07, y: ay + ty*gauss(R0)*.2 + ry*gauss(R0)*.07, ph: R0()*6.28});
+  reg.links = [];
+  reg.hubs.forEach((h, i) => {
+    const near = reg.hubs.map((o, j) => [j, Math.hypot(o.x-h.x, o.y-h.y)]).filter(d => d[0] !== i).sort((a,b) => a[1]-b[1]).slice(0,2);
+    near.forEach(([j]) => { if (!reg.links.some(l => l[0] === j && l[1] === i)) reg.links.push([i, j]); });
+  });
+}
+const SURF = Array.from({length:1700}, () => ({lon: R0()*Math.PI*2, lat: Math.asin(2*R0()-1), s: R0() < .9 ? .7 : 1.3, a: .3 + R0()*.7}));
+const pulses = []; let nextPulse = 1.2;
+
+function valueNoise(seed){
+  const r = rng(seed), N = 128, g = new Float32Array(N*N);
+  for (let i = 0; i < g.length; i++) g[i] = r();
+  const f = (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x-xi, yf = y-yi;
+    const u = xf*xf*(3-2*xf), v = yf*yf*(3-2*yf);
+    const a = g[(yi&127)*N + (xi&127)], b = g[(yi&127)*N + ((xi+1)&127)], c = g[((yi+1)&127)*N + (xi&127)], d = g[((yi+1)&127)*N + ((xi+1)&127)];
+    return a + (b-a)*u + (c-a)*v + (a-b-c+d)*u*v;
+  };
+  return (x, y) => { let s = 0, amp = .5, fr = 1; for (let o = 0; o < 5; o++){ s += amp*f(x*fr, y*fr); amp *= .5; fr *= 2.03; } return s; };
+}
+const fbm = valueNoise(11);
+const smooth = (a, b, x) => { const t = clamp((x-a)/(b-a), 0, 1); return t*t*(3-2*t); };
+
+function buildStatic(){
+  if (!(W > 0 && H > 0)) return;  // hidden or collapsed stage (e.g. opened on #models): nothing to paint yet
+  staticCv.width = Math.round(W*dpr); staticCv.height = Math.round(H*dpr);
+  sctx.setTransform(dpr,0,0,dpr,0,0);
+  const bg = sctx.createRadialGradient(geo.cx, geo.cy, 0, geo.cx, geo.cy, Math.max(W, H)*.85);
+  bg.addColorStop(0, '#0e1013'); bg.addColorStop(.5, '#090b0d'); bg.addColorStop(1, '#07090B');
+  sctx.fillStyle = bg; sctx.fillRect(0,0,W,H);
+  // nebula, low-res then upscaled
+  const k = 3, lw = Math.ceil(W/k), lh = Math.ceil(H/k);
+  const lc = document.createElement('canvas'); lc.width = lw; lc.height = lh;
+  const lx = lc.getContext('2d'), img = lx.createImageData(lw, lh), d = img.data;
+  const wx = W > 900 ? .115 : .06, sc = Math.max(110, W*.09);
+  for (let y = 0; y < lh; y++) for (let x = 0; x < lw; x++){
+    const X = x*k, Y = y*k;
+    const n = fbm(X/sc, Y/sc), n2 = fbm(X/(sc*.3) + 40, Y/(sc*.3));
+    const m1 = Math.exp(-(((X - wx*W)/(.15*W))**2 + ((Y - .56*H)/(.24*H))**2));
+    const m2 = .85*Math.exp(-(((X + .02*W)/(.12*W))**2 + ((Y - .84*H)/(.16*H))**2));
+    const warm = smooth(.36, .78, n) * Math.min(1, m1 + m2) * (.55 + .7*n2);
+    const mc = Math.exp(-(((X - .78*W)/(.055*W))**2 + ((Y - .42*H)/(.12*H))**2)) * smooth(.3, .8, n) * .45;
+    const i = (y*lw + x)*4;
+    const wa = clamp(warm*.85, 0, 1), ca = clamp(mc, 0, 1), fa = .05*n2;
+    const A = clamp(wa + ca + fa, 0, 1) || 1e-6;
+    d[i]   = (wa*(80 + 160*n) + ca*130 + fa*120) / A;
+    d[i+1] = (wa*(40 + 90*n)  + ca*132 + fa*120) / A;
+    d[i+2] = (wa*(20 + 40*n)  + ca*140 + fa*130) / A;
+    d[i+3] = clamp(wa + ca + fa, 0, 1) * 255;
+  }
+  lx.putImageData(img, 0, 0);
+  sctx.imageSmoothingQuality = 'high';
+  sctx.drawImage(lc, 0, 0, W, H);
+  // stars
+  const r = rng(3), count = Math.round(W*H/2300);
+  for (let i = 0; i < count; i++){
+    const big = r() < .06, s = big ? 1 + r()*.9 : .45 + r()*.6;
+    sctx.globalAlpha = big ? .5 + r()*.4 : .1 + r()*.45;
+    sctx.fillStyle = r() < .15 ? '#f3d2a8' : r() < .2 ? '#c9daf0' : '#ffffff';
+    sctx.beginPath(); sctx.arc(r()*W, r()*H, s/2, 0, 6.283); sctx.fill();
+  }
+  sctx.globalAlpha = 1;
+}
+const TWINKLE = Array.from({length:70}, () => ({x:R0(), y:R0(), ph:R0()*6.28, f:.4 + R0()*1.2}));
+
+function project(x, y){ return [geo.cx + x*geo.R*view.scale, geo.cy + y*geo.R*view.scale]; }
+
+function drawSphere(t){
+  const {cx, cy, R} = geo;
+  let g = ctx.createRadialGradient(cx, cy, R*.95, cx, cy, R*1.55);
+  g.addColorStop(0, 'rgba(170,150,190,.10)'); g.addColorStop(1, 'rgba(170,150,190,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R*1.55, 0, 6.283); ctx.fill();
+  ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, R, 0, 6.283);
+  g = ctx.createRadialGradient(cx - R*.35, cy - R*.42, R*.05, cx, cy, R);
+  g.addColorStop(0, 'rgba(36,32,36,.94)'); g.addColorStop(.6, 'rgba(14,15,18,.93)'); g.addColorStop(1, 'rgba(8,9,11,.92)');
+  ctx.fillStyle = g; ctx.fill(); ctx.clip();
+  const glows = [[-1.0,-0.05,1.0,'rgba(165,125,230,.26)'], [-0.62,-0.82,.95,'rgba(232,150,80,.22)'], [1.0,0,.85,'rgba(110,170,240,.17)'], [0.72,0.72,.7,'rgba(232,110,92,.14)'], [-0.35,0.75,.6,'rgba(124,211,180,.08)']];
+  for (const [gx, gy, gr, col] of glows){
+    const q = ctx.createRadialGradient(cx + gx*R, cy + gy*R, 0, cx + gx*R, cy + gy*R, gr*R);
+    q.addColorStop(0, col); q.addColorStop(1, 'rgba(0,0,0,0)'); ctx.fillStyle = q; ctx.fillRect(cx - R, cy - R, R*2, R*2);
+  }
+  // rotating graticule
+  const rot = t*.03, tilt = .38, ct = Math.cos(tilt), st = Math.sin(tilt);
+  const tf = (lon, lat) => { const x = Math.cos(lat)*Math.sin(lon + rot), y = -Math.sin(lat), z = Math.cos(lat)*Math.cos(lon + rot); return [x, y*ct - z*st, y*st + z*ct]; };
+  ctx.lineWidth = .7; ctx.strokeStyle = 'rgba(235,228,218,.085)'; ctx.beginPath();
+  const line = fn => { let pen = false; for (let i = 0; i <= 72; i++){ const p = fn(i/72); if (p[2] > 0){ const sx = cx + p[0]*R, sy = cy + p[1]*R; pen ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); pen = true; } else pen = false; } };
+  for (let k = 0; k < 12; k++){ const lon = k*Math.PI/6; line(u => tf(lon, -Math.PI/2 + u*Math.PI)); }
+  for (let k = -2; k <= 2; k++){ const lat = k*Math.PI/7; line(u => tf(u*Math.PI*2, lat)); }
+  ctx.stroke();
+  // surface specks, tinted by nearby regions
+  ctx.globalCompositeOperation = 'lighter';
+  for (const p of SURF){
+    const [x, y, z] = tf(p.lon, p.lat); if (z < .05) continue;
+    let col = '#ffffff', a = .22*z*p.a, best = .42;
+    for (const reg of REGIONS){ const d = Math.hypot(x - reg.a[0], y - reg.a[1]); if (d < best){ best = d; col = reg.color; a = (.35 + .5*(1 - d/.42))*z*p.a*reg.I; } }
+    ctx.globalAlpha = clamp(a, 0, 1); ctx.fillStyle = col; ctx.fillRect(cx + x*R - p.s/2, cy + y*R - p.s/2, p.s, p.s);
+  }
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  ctx.restore();
+  // rim light
+  g = ctx.createLinearGradient(cx - R, cy - R, cx + R, cy + R*.4);
+  g.addColorStop(0, 'rgba(245,178,107,.65)'); g.addColorStop(.35, 'rgba(180,140,230,.35)'); g.addColorStop(.6, 'rgba(255,255,255,.07)'); g.addColorStop(1, 'rgba(130,185,250,.5)');
+  ctx.save(); ctx.lineWidth = 1.3; ctx.strokeStyle = g; ctx.shadowColor = 'rgba(255,220,190,.35)'; ctx.shadowBlur = 14;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, 6.283); ctx.stroke(); ctx.restore();
+}
+
+function regionTarget(reg){
+  const v = regionScore(M[state.active], reg);
+  if (v == null) return state.hoverRegion === reg.id ? .12 : .05;   // never measured: the province stays dark
+  let I = .4 + .8*clamp((v - 50)/45, 0, 1);
+  if (state.focus) I *= state.focus === reg.id ? 1.45 : .26;
+  if (state.hoverRegion === reg.id) I *= 1.3;
+  return I;
+}
+
+function drawRegions(t){
+  const {R} = geo, sc = clamp(R/215, .6, 1.2);
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (const reg of REGIONS){
+    const I = reg.I, sp = sprite(reg.color);
+    const [ax, ay] = project(reg.a[0], reg.a[1]);
+    ctx.globalAlpha = .42*I; const gs = R*.6; ctx.drawImage(sp, ax - gs, ay - gs, gs*2, gs*2);
+    ctx.fillStyle = reg.color;
+    const white = mix(reg.color, '#ffffff', .6);
+    for (const p of reg.parts){
+      const wob = reduced ? 0 : Math.sin(t*p.f + p.ph)*.008;
+      const x = geo.cx + (p.x + wob)*R, y = geo.cy + (p.y - wob*.6)*R, s = p.s*sc;
+      ctx.globalAlpha = clamp(p.a*I, 0, 1);
+      if (s > 1.6){ ctx.drawImage(sp, x - s*1.6, y - s*1.6, s*3.2, s*3.2); }
+      else { ctx.fillStyle = p.white ? white : reg.color; ctx.fillRect(x - s/2, y - s/2, s, s); }
+    }
+    ctx.lineWidth = .6; ctx.strokeStyle = rgba(reg.color, .35*clamp(I,0,1.2));
+    ctx.beginPath();
+    for (const [i, j] of reg.links){ const a = reg.hubs[i], b = reg.hubs[j]; ctx.moveTo(geo.cx + a.x*R, geo.cy + a.y*R); ctx.lineTo(geo.cx + b.x*R, geo.cy + b.y*R); }
+    ctx.globalAlpha = 1; ctx.stroke();
+    for (const h of reg.hubs){
+      const x = geo.cx + h.x*R, y = geo.cy + h.y*R, pulse = reduced ? 1 : .8 + .2*Math.sin(t*1.3 + h.ph);
+      ctx.globalAlpha = clamp(.85*I*pulse, 0, 1); ctx.drawImage(sp, x - 6*sc, y - 6*sc, 12*sc, 12*sc);
+    }
+  }
+  ctx.restore();
+  ctx.save();
+  for (const reg of REGIONS){
+    for (const h of reg.hubs.slice(0, 3)){
+      const x = geo.cx + h.x*R, y = geo.cy + h.y*R;
+      ctx.globalAlpha = clamp(.55*reg.I, 0, 1); ctx.lineWidth = .8; ctx.strokeStyle = reg.color;
+      ctx.beginPath(); ctx.arc(x, y, 4.2*sc, 0, 6.283); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawPulses(t){
+  if (!reduced && t > nextPulse){
+    const pool = REGIONS.filter(r => !state.focus || r.id === state.focus), reg = pool[Math.floor(Math.random()*pool.length)];
+    const p = reg.parts[Math.floor(Math.random()*reg.parts.length)];
+    pulses.push({x: p.x, y: p.y, c: reg.color, born: t}); nextPulse = t + 1.6 + Math.random()*1.6;
+  }
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = pulses.length - 1; i >= 0; i--){
+    const q = pulses[i], age = t - q.born; if (age > 5){ pulses.splice(i, 1); continue; }
+    const [x, y] = project(q.x, q.y);
+    ctx.globalAlpha = clamp(1 - age/5, 0, 1); ctx.drawImage(sprite(q.c), x - 7, y - 7, 14, 14);
+  }
+  ctx.restore();
+}
+
+/* ================= WebGL globe (three.js r147 + bloom). One model at a time: globe size = overall score, flame length = capability score. Falls back to 2D if unavailable. ================= */
+function initGL(){
+  const T = window.THREE;
+  if (!T || !T.EffectComposer || !T.UnrealBloomPass || !T.RenderPass) return null;
+  const canvas = document.createElement('canvas'); canvas.id = 'orb'; canvas.setAttribute('aria-hidden', 'true');
+  sky.after(canvas);
+  let renderer;
+  try { renderer = new T.WebGLRenderer({canvas, antialias:true, alpha:false, powerPreference:'high-performance'}); }
+  catch (e) { canvas.remove(); return null; }
+  renderer.setClearColor(0x000000, 1);
+  const scene = new T.Scene();
+  const cam = new T.OrthographicCamera(-2, 2, 1, -1, -20, 20); cam.position.set(0, 0, 10); cam.lookAt(0, 0, 0);
+  const N = REGIONS.length;
+  const U = {
+    uDir:{value: REGIONS.map(r => new T.Vector3(r.a[0], -r.a[1], .55).normalize())},
+    uCol:{value: REGIONS.map(r => new T.Color(r.color))},
+    uI:{value: new Array(N).fill(1)}, uReach:{value: new Array(N).fill(.05)},
+    uTime:{value:0}, uPR:{value:1}, uScale:{value:1}, uTint:{value:new T.Color(1, 1, 1)},
+  };
+  const REG_UNI = `uniform vec3 uDir[${N}]; uniform vec3 uCol[${N}]; uniform float uI[${N}]; uniform float uReach[${N}]; uniform float uTime; uniform float uPR; uniform float uScale; uniform vec3 uTint;`;
+  const globe = new T.Group(); scene.add(globe);
+
+  // ---- rotating body: sphere + graticule + surface specks
+  const spin = new T.Group(); globe.add(spin);
+  const sphere = new T.Mesh(new T.SphereGeometry(1, 128, 96), new T.ShaderMaterial({
+    uniforms:U, transparent:true, depthWrite:true, extensions:{derivatives:true},
+    vertexShader:`varying vec3 vN; varying vec3 vO;
+      void main(){ vO = position; vN = normalize(normalMatrix*normal); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+    fragmentShader:`${REG_UNI} varying vec3 vN; varying vec3 vO;
+      float ln(float x, float f){ return 1. - smoothstep(0., 1.05*f, abs(fract(x + .5) - .5)); }
+      void main(){
+        vec3 n = normalize(vN);
+        float fr = pow(1. - clamp(n.z, 0., 1.), 2.2);
+        vec3 col = vec3(.010,.011,.015) + uTint*.022 + mix(vec3(.035,.031,.036), uTint*.07, .5)*pow(max(dot(n, normalize(vec3(-.55,.65,.55))), 0.), 2.);
+        col += uTint*pow(fr, 1.8)*.07;
+        vec3 gc = vec3(0.); float gw = 0., gm = 0.;
+        for (int i = 0; i < ${N}; i++){ float g = smoothstep(.12, 1., dot(n, uDir[i])); g = g*g*uI[i]; gc += uCol[i]*g; gw += g; gm = max(gm, g); }
+        vec3 glow = gw > 0. ? gc/gw*gm : vec3(0.);
+        col += glow*(.045 + .55*pow(fr, 1.2));
+        vec3 o = normalize(vO);
+        float lon = atan(o.z, o.x)*1.27324, lonB = atan(-o.z, -o.x)*1.27324;
+        float lat = asin(clamp(o.y, -1., 1.))*1.90986;
+        float lonL = ln(lon, min(fwidth(lon), fwidth(lonB))) * (1. - smoothstep(.82, .97, abs(o.y)));
+        float g = max(lonL, ln(lat, fwidth(lat))) * smoothstep(0., .3, n.z);
+        col += (mix(vec3(.85,.82,.78), uTint, .55)*.026 + glow*.14)*g;
+        col += mix(vec3(1.,.86,.72), uTint, .6)*pow(fr, 6.)*.08;
+        gl_FragColor = vec4(col, .93);
+      }`,
+  }));
+  sphere.renderOrder = 2; spin.add(sphere);
+
+  const r3 = rng(99), SN = 7500, sp = new Float32Array(SN*3), ss = new Float32Array(SN), sd = new Float32Array(SN);
+  for (let i = 0; i < SN; i++){
+    const u = r3()*2 - 1, th = r3()*Math.PI*2, s = Math.sqrt(1 - u*u);
+    sp.set([s*Math.cos(th)*1.004, u*1.004, s*Math.sin(th)*1.004], i*3); ss[i] = .8 + Math.pow(r3(), 5)*2.8; sd[i] = r3();
+  }
+  const sg = new T.BufferGeometry();
+  sg.setAttribute('position', new T.BufferAttribute(sp, 3)); sg.setAttribute('aSize', new T.BufferAttribute(ss, 1)); sg.setAttribute('aSeed', new T.BufferAttribute(sd, 1));
+  const surf = new T.Points(sg, new T.ShaderMaterial({
+    uniforms:U, transparent:true, depthWrite:false, blending:T.AdditiveBlending,
+    vertexShader:`${REG_UNI} attribute float aSize; attribute float aSeed; varying vec3 vC; varying float vA;
+      void main(){
+        vec4 mv = modelViewMatrix*vec4(position,1.);
+        vec3 n = normalize((modelMatrix*vec4(position,0.)).xyz);
+        vec3 tint = vec3(0.); float w = 0.;
+        for (int i = 0; i < ${N}; i++){ float g = smoothstep(.62, .97, dot(n, uDir[i]))*uI[i]; tint += uCol[i]*g; w += g; }
+        vC = mix(mix(vec3(.82,.8,.78), uTint, .45), tint/max(w, 1e-3), clamp(w*1.6, 0., 1.));
+        vA = (.04 + .6*clamp(w, 0., 1.2))*(.65 + .35*sin(uTime*1.6 + aSeed*50.))*smoothstep(-.05, .3, n.z);
+        gl_PointSize = aSize*uPR*uScale*(1. + .5*clamp(w, 0., 1.));
+        gl_Position = projectionMatrix*mv;
+      }`,
+    fragmentShader:`varying vec3 vC; varying float vA;
+      void main(){ float d = length(gl_PointCoord - .5); gl_FragColor = vec4(vC, vA*smoothstep(.5, .08, d)); }`,
+  }));
+  surf.renderOrder = 3; spin.add(surf);
+
+  // ---- capability flames: one tongue of fire per capability, length = score
+  const corona = new T.Mesh(new T.PlaneGeometry(4, 4), new T.ShaderMaterial({
+    uniforms:U, transparent:true, depthTest:false, depthWrite:false, blending:T.AdditiveBlending,
+    vertexShader:`varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+    fragmentShader:`${REG_UNI} varying vec2 vP;
+      float h3(vec3 p){ p = fract(p*.3183099 + .1); p *= 17.; return fract(p.x*p.y*p.z*(p.x + p.y + p.z)); }
+      float n3(vec3 x){ vec3 i = floor(x), f = fract(x); f = f*f*(3. - 2.*f);
+        return mix(mix(mix(h3(i), h3(i + vec3(1,0,0)), f.x), mix(h3(i + vec3(0,1,0)), h3(i + vec3(1,1,0)), f.x), f.y),
+                   mix(mix(h3(i + vec3(0,0,1)), h3(i + vec3(1,0,1)), f.x), mix(h3(i + vec3(0,1,1)), h3(i + vec3(1,1,1)), f.x), f.y), f.z); }
+      float fbm3(vec3 p){ float s = 0., a = .5; for (int i = 0; i < 5; i++){ s += a*n3(p); p = p*2.02 + 13.7; a *= .5; } return s; }
+      void main(){
+        float r = length(vP); vec2 d = vP/max(r, 1e-4); float dr = r - 1.;
+        vec3 cc = vec3(0.); float cw = 0., rr = 0., ii = 0.;
+        for (int i = 0; i < ${N}; i++){
+          float k = pow(max(dot(d, normalize(uDir[i].xy)), 0.), 16.);
+          cc += uCol[i]*k; cw += k; rr += uReach[i]*k; ii += uI[i]*k;
+        }
+        float pres = clamp(cw*1.15, 0., 1.);
+        vec3 col = cw > 1e-4 ? cc/cw : vec3(.6);
+        float reachC = cw > 1e-4 ? rr/cw : 0.;
+        float inten = cw > 1e-4 ? ii/cw : 0.;
+        float big = fbm3(vec3(d*2.6, dr*2.4 - uTime*.2));
+        float fine = fbm3(vec3(d*10., dr*7.5 - uTime*.62));
+        float reach = reachC*pres*(.6 + .65*smoothstep(.3, .78, big));
+        float tongue = smoothstep(.32, .78, fine);
+        float flame = dr > 0. ? pow(smoothstep(reach, 0., dr), 1.3)*(.18 + .82*tongue) : 0.;
+        float core = dr > 0. ? exp(-dr*26.)*.5 : pow(r, 40.)*.35;
+        vec3 hot = mix(col, vec3(1., .93, .84), .35*smoothstep(reach*.6, 0., dr));
+        float tintRim = (dr > 0. ? exp(-dr*16.) : pow(r, 30.))*.22;
+        gl_FragColor = vec4(hot*(flame*pres*1.15 + core*(.25 + .75*pres))*inten*.55 + uTint*tintRim, 1.);
+      }`,
+  }));
+  corona.renderOrder = 7; globe.add(corona);
+
+  // ---- capability fields (fixed in capability space) + embers that fly out to the flame tip
+  const fp = [], fs = [], fa = [], fr = [], fsd = [], fring = [], rf = rng(17), lineSets = [];
+  REGIONS.forEach((reg, ri) => {
+    const ax = reg.a[0]*.9, ay = reg.a[1]*.9, len = Math.hypot(ax, ay), rx = ax/len, ry = ay/len, tx = -ry, ty = rx;
+    const put = (x, y, z, s, a, ring = 0) => { fp.push(x, -y, z); fs.push(s); fa.push(a); fr.push(ri); fsd.push(rf()); fring.push(ring); };
+    const shellZ = (x, y, spread) => { const q = 1 - x*x - y*y; return q > 0 ? Math.sqrt(q)*(1 + Math.abs(gauss(rf))*.03) + .006 : gauss(rf)*spread; };
+    for (let i = 0; i < 1300; i++){
+      const st = rf() < .25, g1 = gauss(rf)*(st ? .5 : .27), g2 = gauss(rf)*(st ? .34 : .15);
+      const x = ax + tx*g1 + rx*g2, y = ay + ty*g1 + ry*g2;
+      put(x, y, shellZ(x, y, .25), .7 + Math.pow(rf(), 3)*3.4, st ? .12 + rf()*.3 : .28 + rf()*.72);
+    }
+    for (let i = 0; i < 18; i++){
+      const g1 = gauss(rf)*.28, g2 = gauss(rf)*.14, x = ax*.95 + tx*g1 + rx*g2, y = ay*.95 + ty*g1 + ry*g2;
+      put(x, y, shellZ(x, y, .2) + .02, 70 + rf()*90, .05 + rf()*.07, 2);
+    }
+    const ang = Math.atan2(ay, ax);
+    for (let i = 0; i < 70; i++){ const a = ang + gauss(rf)*.2; put(Math.cos(a), Math.sin(a), .3, 1.2 + rf()*2.2, .5 + rf()*.5, 3); }
+    const hubs = [];
+    for (let i = 0; i < 11; i++){
+      const g1 = gauss(rf)*.21, g2 = gauss(rf)*.07, x = ax + tx*g1 + rx*g2, y = ay + ty*g1 + ry*g2, z = shellZ(x, y, .15) + .004;
+      put(x, y, z, i < 3 ? 6.5 : 4.5 + rf()*2.5, .95, 0); hubs.push(new T.Vector3(x, -y, z));
+    }
+    const seg = [];
+    hubs.forEach((h, i) => hubs.map((o, j) => [j, h.distanceTo(o)]).filter(d => d[0] > i).sort((a, b) => a[1] - b[1]).slice(0, 2).forEach(([j]) => seg.push(h, hubs[j])));
+    const lm = new T.LineBasicMaterial({color: reg.color, transparent:true, opacity:.25, blending:T.AdditiveBlending, depthWrite:false});
+    const ls = new T.LineSegments(new T.BufferGeometry().setFromPoints(seg), lm); ls.renderOrder = 4; globe.add(ls); lineSets.push(lm);
+  });
+  const fg = new T.BufferGeometry();
+  fg.setAttribute('position', new T.Float32BufferAttribute(fp, 3));
+  [['aSize', fs], ['aAlpha', fa], ['aReg', fr], ['aSeed', fsd], ['aRing', fring]].forEach(([k, v]) => fg.setAttribute(k, new T.Float32BufferAttribute(v, 1)));
+  const field = new T.Points(fg, new T.ShaderMaterial({
+    uniforms:U, transparent:true, depthWrite:false, blending:T.AdditiveBlending,
+    vertexShader:`${REG_UNI} attribute float aSize; attribute float aAlpha; attribute float aReg; attribute float aSeed; attribute float aRing;
+      varying vec3 vC; varying float vA; varying float vRing;
+      void main(){
+        int ri = int(aReg + .5); float I = 0., R = 0.; vec3 col = vec3(1.);
+        for (int i = 0; i < ${N}; i++){ if (i == ri){ I = uI[i]; col = uCol[i]; R = uReach[i]; } }
+        float tw = .72 + .28*sin(uTime*(.8 + aSeed*1.6) + aSeed*60.);
+        vec3 p = position + vec3(sin(uTime*.5 + aSeed*30.), cos(uTime*.4 + aSeed*20.), 0.)*.004;
+        vA = aAlpha*I*(aRing > 1.5 ? 1. : tw*(aSize > 4. ? .95 : .62));
+        if (aRing > 2.5){
+          float tt = fract(uTime*(.12 + aSeed*.22) + aSeed*7.31);
+          p = vec3(position.xy*(1. + tt*R*1.15), .3);
+          vA = aAlpha*I*(1. - tt)*smoothstep(0., .08, tt);
+        }
+        vC = mix(col, vec3(1.), aRing > 2.5 ? .45 : aRing > 1.5 ? 0. : step(.86, aSeed)*.4);
+        vRing = aRing;
+        gl_PointSize = aSize*uPR*uScale;
+        gl_Position = projectionMatrix*modelViewMatrix*vec4(p, 1.);
+      }`,
+    fragmentShader:`varying vec3 vC; varying float vA; varying float vRing;
+      void main(){
+        float d = length(gl_PointCoord - .5), core = smoothstep(.5, 0., d); core *= core;
+        float m = (vRing > 1.5 && vRing < 2.5) ? exp(-d*d*18.) : core;
+        gl_FragColor = vec4(vC, vA*m);
+      }`,
+  }));
+  field.renderOrder = 4; globe.add(field);
+
+  // ---- post: bloom
+  const composer = new T.EffectComposer(renderer);
+  composer.addPass(new T.RenderPass(scene, cam));
+  composer.addPass(new T.UnrealBloomPass(new T.Vector2(512, 512), .85, .55, .26));
+
+  let rotY = .6, tilt = .38, vel = reduced ? 0 : .06, last = null;
+  const base = reduced ? 0 : .06;
+  return {
+    canvas,
+    resize(){
+      const pr = Math.min(1.5, devicePixelRatio || 1);
+      renderer.setPixelRatio(pr); renderer.setSize(W, H, false);
+      canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+      composer.setPixelRatio(pr); composer.setSize(W, H);
+      cam.left = -geo.cx/geo.R; cam.right = (W - geo.cx)/geo.R; cam.top = geo.cy/geo.R; cam.bottom = -(H - geo.cy)/geo.R; cam.updateProjectionMatrix();
+      U.uPR.value = pr; U.uScale.value = clamp(geo.R/215, .6, 1.2);
+    },
+    drag(dx, dy){ rotY += dx*.006; tilt = clamp(tilt + dy*.004, -.25, .95); vel = clamp(dx*.35, -2.5, 2.5); },
+    render(t){
+      const dt = last === null ? 0 : Math.min(.05, Math.max(0, t - last)); last = t;
+      vel += (base - vel)*Math.min(1, dt*1.4); rotY += vel*dt;
+      spin.rotation.set(tilt, rotY, 0);
+      globe.scale.setScalar(view.scale);
+      U.uTint.value.setRGB(view.tint[0], view.tint[1], view.tint[2]);
+      U.uTime.value = t;
+      REGIONS.forEach((r, i) => { U.uI.value[i] = clamp(r.I, 0, 1.6); U.uReach.value[i] = view.reach[i]; lineSets[i].opacity = .26*clamp(r.I, 0, 1.3); });
+      composer.render();
+    },
+  };
+}
+let GL = null;
+function drawOccluder(){
+  const {cx, cy} = geo, R = geo.R*view.scale;
+  const g = ctx.createRadialGradient(cx, cy, R*.9, cx, cy, R*1.5);
+  g.addColorStop(0, 'rgba(0,0,0,.55)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R*1.5, 0, 6.283); ctx.fill();
+  ctx.fillStyle = 'rgba(5,6,8,.97)'; ctx.beginPath(); ctx.arc(cx, cy, R, 0, 6.283); ctx.fill();
+}
+function stepView(){
+  const m = M[state.active], ts = globeScale(m);
+  if (!view.reach) view.reach = REGIONS.map(() => .03);
+  view.scale += (ts - view.scale)*.06;
+  const tc = hexRgb(m.color).map(v => v/255); view.tint = view.tint.map((v, i) => v + (tc[i] - v)*.05);
+  REGIONS.forEach((r, i) => { view.reach[i] += (flameReach(regionScore(m, r)) - view.reach[i])*.045; });
+}
+
+let t0 = performance.now();
+function frame(now){
+  if (state.view !== 'map') return requestAnimationFrame(frame);
+  const t = reduced ? 8 : (now - t0)/1000;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.drawImage(staticCv, 0, 0, W, H);
+  if (!reduced){
+    ctx.save(); ctx.fillStyle = '#fff';
+    for (const s of TWINKLE){ ctx.globalAlpha = .15 + .45*(.5 + .5*Math.sin(t*s.f + s.ph)); ctx.fillRect(s.x*W, s.y*H, 1.1, 1.1); }
+    ctx.restore();
+  }
+  stepView();
+  for (const reg of REGIONS) reg.I += (regionTarget(reg) - reg.I) * .08;
+  if (GL){
+    drawOccluder(); drawPulses(t);
+    GL.render(t);
+    return requestAnimationFrame(frame);
+  }
+  const R0g = geo.R, vs = view.scale; geo.R = R0g*vs; view.scale = 1;
+  drawSphere(t); drawRegions(t); drawPulses(t);
+  geo.R = R0g; view.scale = vs;
+  requestAnimationFrame(frame);
+}
+
+function layout(){
+  if (state.view && state.view !== 'map') return;   // map is hidden; it lays out again when shown
+  const a = app.getBoundingClientRect(), mb = mapbox.getBoundingClientRect(), st = stage.getBoundingClientRect();
+  if (!mb.width || !mb.height) return;
+  const mobile = innerWidth <= 860;
+  dpr = Math.min(2, devicePixelRatio || 1);
+  W = Math.round(a.width); H = Math.round(Math.max(mb.bottom, st.bottom) - a.top);
+  sky.width = Math.round(W*dpr); sky.height = Math.round(H*dpr); sky.style.width = W + 'px'; sky.style.height = H + 'px';
+  geo.mx = mb.left - a.left; geo.my = mb.top - a.top;
+  const fx = mobile ? .47 : .575, fy = mobile ? .52 : .553;
+  geo.R = mobile ? Math.min(mb.width*.22, mb.height*.3) : Math.min(mb.width*.207, mb.height*.30);
+  geo.cx = geo.mx + mb.width*fx; geo.cy = geo.my + mb.height*fy;
+  geo.lx = mb.width*fx; geo.ly = mb.height*fy; geo.mw = mb.width; geo.mh = mb.height;
+  placeLabels();
+  buildStatic();
+  if (GL) GL.resize();
+  drawTrajectory(); drawProfile();
+}
+
+/* labels: one per capability, placed radially just beyond the longest possible flame, showing the score */
+function buildLabels(){
+  const box = $('#labels');
+  box.innerHTML = REGIONS.map(r => {
+    const len = Math.hypot(r.a[0], r.a[1]), ux = r.a[0]/len;
+    return `<button class="cap-label ${ux < -.35 ? 'rev' : ''}" data-region="${r.id}" style="--c:${r.color}" aria-pressed="false"><span class="cl-dot"></span><span class="cl-text">${r.l1}<br>${r.small ? `<small>${r.l2}</small>` : r.l2}</span><span class="cl-score" data-score></span></button>`;
+  }).join('');
+  box.querySelectorAll('.cap-label').forEach(el => {
+    el.addEventListener('click', () => setFocus(el.dataset.region));
+    el.addEventListener('mouseenter', () => { state.hoverRegion = el.dataset.region; });
+    el.addEventListener('mouseleave', () => { state.hoverRegion = null; });
+  });
+  updateLabels();
+}
+function updateLabels(){
+  const m = M[state.active];
+  document.querySelectorAll('.cap-label').forEach(el => {
+    const r = REGIONS.find(q => q.id === el.dataset.region);
+    const v = regionScore(m, r);
+    el.querySelector('[data-score]').textContent = v == null ? '–' : Math.round(v);
+    el.classList.toggle('nodata', v == null);
+    el.title = v == null ? `${m.name} has no scored trials in ${r.name.toLowerCase()}` : `${r.name}: ${m.prov[r.id][0]} of ${m.prov[r.id][1]} scored trials passed`;
+    el.setAttribute('aria-label', v == null ? `${r.name}: not measured` : `${r.name}: ${Math.round(v)} percent`);
+  });
+  placeLabels();
+}
+let labelsShown = false;
+function revealLabels(){   // once fonts and panels have settled: lay out again, then show labels in place
+  if (labelsShown) return; labelsShown = true;
+  const show = () => requestAnimationFrame(() => { layout(); requestAnimationFrame(() => $('#labels').classList.add('ready')); });
+  (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(show, show);
+}
+function placeLabels(){
+  if (!geo.mw) return;
+  revealLabels();
+  const m = M[state.active], sc = globeScale(m), mb = mapbox.getBoundingClientRect();
+  // panels and the title float over the map on wide layouts: labels must not land under them
+  const obs = innerWidth > 860 ? [...document.querySelectorAll('.stage .panel, .hero')].map(e => { const r = e.getBoundingClientRect(); return {l: r.left - mb.left, t: r.top - mb.top, r: r.right - mb.left, b: r.bottom - mb.top, hero: e.classList.contains('hero')}; }) : [];
+  const placed = [];
+  document.querySelectorAll('.cap-label').forEach(el => {
+    const r = REGIONS.find(q => q.id === el.dataset.region), len = Math.hypot(r.a[0], r.a[1]), ux = r.a[0]/len, uy = r.a[1]/len;
+    const D = clamp((1 + flameReach(regionScore(m, r)))*sc + .16, 1.12, 1.62);   // just beyond this flame's tip
+    const px = geo.lx + ux*D*geo.R, py = geo.ly + uy*D*geo.R, w = el.offsetWidth, h = el.offsetHeight;
+    const fx = Math.abs(uy) > .55 ? .5 : (ux < 0 ? 1 : 0), fy = uy < -.35 ? 1 : uy > .35 ? 0 : .5;
+    let L = clamp(px - w*fx, 8, Math.max(8, geo.mw - w - 8)), T = clamp(py - h*fy, 4, Math.max(4, geo.mh - h - 4));
+    for (const o of obs){
+      if (L < o.r && L + w > o.l && T < o.b && T + h > o.t){ if (o.hero) T = o.b + 6; else L = o.r + 10; }
+    }
+    for (const q of placed){   // keep labels apart: step away vertically from any label already placed
+      if (L < q.r && L + w > q.l && T < q.b && T + h > q.t){ const down = q.b + 4, up = q.t - h - 4; T = (uy >= 0 && down + h < geo.mh) || up < 0 ? down : up; }
+    }
+    placed.push({l: L, t: T, r: L + w, b: T + h});
+    el.style.left = L + 'px'; el.style.top = T + 'px';
+  });
+}
+function syncLabels(){
+  document.querySelectorAll('.cap-label').forEach(el => {
+    const on = state.focus === el.dataset.region;
+    el.classList.toggle('on', on); el.classList.toggle('dim', !!state.focus && !on); el.setAttribute('aria-pressed', on);
+  });
+}
+function setFocus(id){
+  state.focus = state.focus === id ? null : id;
+  syncLabels(); renderFocus();
+  const reg = REGIONS.find(r => r.id === id);
+  state.exTab = state.focus ? reg.tab : 'all';
+  renderExTabs(); renderCards();
+  if (state.focus) toast(`Focusing ${reg.l1} ${reg.l2.replace(/[()]/g,'')}`.trim(), 'MAPPING CAPABILITY');
+}
+
+/* map hover / click */
+function hitTest(e){
+  const a = app.getBoundingClientRect(), x = e.clientX - a.left, y = e.clientY - a.top, Rs = geo.R*view.scale;
+  const dx = x - geo.cx, dy = y - geo.cy, dist = Math.hypot(dx, dy);
+  let region = null;
+  if (dist > Rs*.45 && dist < Rs*1.75){
+    let best = .82;
+    for (const r of REGIONS){ const len = Math.hypot(r.a[0], r.a[1]), c = (dx*r.a[0] + dy*r.a[1])/(dist*len); if (c > best){ best = c; region = r.id; } }
+  }
+  return {x, y, region, onGlobe: dist < Rs*1.1};
+}
+mapbox.addEventListener('mousemove', e => {
+  if (e.target.closest('.cap-label')) return;
+  const h = hitTest(e), tip = $('#tip');
+  state.hoverRegion = h.region;
+  mapbox.classList.toggle('hot', !!h.region);
+  mapbox.classList.toggle('grab', !!GL && !h.region && h.onGlobe);
+  if (h.region){
+    const r = REGIONS.find(q => q.id === h.region), m = M[state.active], mb = mapbox.getBoundingClientRect(), a = app.getBoundingClientRect();
+    const v = regionScore(m, r);
+    tip.innerHTML = `<div class="t-name"><span class="dot" style="--c:${r.color}"></span>${r.name}</div><div class="t-meta">${m.name} · ${v == null ? 'not measured' : `<span class="num">${Math.round(v)}%</span> · ${fmtN(m.prov[r.id][0])} / ${fmtN(m.prov[r.id][1])} scored`}</div>`;
+    tip.style.left = (h.x - (mb.left - a.left)) + 'px'; tip.style.top = (h.y - (mb.top - a.top)) + 'px'; tip.hidden = false;
+  } else tip.hidden = true;
+});
+mapbox.addEventListener('mouseleave', () => { state.hoverRegion = null; $('#tip').hidden = true; });
+let drag = null, dragged = false;
+mapbox.addEventListener('pointerdown', e => {
+  if (!GL || e.target.closest('.cap-label') || e.button) return;
+  drag = {x: e.clientX, y: e.clientY, moved: 0}; dragged = false; e.preventDefault();
+});
+addEventListener('pointermove', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
+  if (drag.moved > 4){ dragged = true; mapbox.classList.add('dragging'); GL.drag(dx, dy); }
+});
+addEventListener('pointerup', () => { drag = null; mapbox.classList.remove('dragging'); });
+mapbox.addEventListener('click', e => {
+  if (dragged){ dragged = false; return; }
+  if (e.target.closest('.cap-label')) return;
+  const h = hitTest(e);
+  if (h.region) setFocus(h.region);
+});
+
+/* ================= mapped model ================= */
+function renderSel(){
+  const m = M[state.active], ov = composite(m), nMeas = measured(m).length;
+  const maxScale = Math.max(...MODELS.map(globeScale));
+  $('#mmSwitch').innerHTML = `${logo(m.vendor, 20)}<span><b>${m.name}</b><small>${m.org} · ${m.date}</small></span><svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg>`;
+  $('#mmStats').style.setProperty('--c', m.color);
+  $('#mmStats').innerHTML = `<span class="v num">${ov == null ? '–' : ov.toFixed(1)}</span><span class="k">Province average<br>mean of ${nMeas} measured ${nMeas === 1 ? 'province' : 'provinces'} · ${m.scored ? Math.round(m.pass/m.scored*100) : '–'}% of scored trials</span><span class="scale" title="Globe size relative to the strongest model in the atlas"><i style="width:${(globeScale(m)/maxScale*100).toFixed(1)}%"></i></span>`;
+  $('#pop').innerHTML = `<span class="eyebrow">Map one model</span>` + MODELS.map(x => `<button data-id="${x.id}" class="${x.id === state.active ? 'in' : ''}">${logo(x.vendor, 15)}${x.name}<svg width="14" height="14" class="chk" viewBox="0 0 14 14"><path d="M3 7.5l2.5 2.5L11 4.5"/></svg></button>`).join('');
+  $('#pop').querySelectorAll('button').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); closePop(); selectModel(b.dataset.id); }));
+}
+function closePop(){ $('#pop').hidden = true; $('#mmSwitch').setAttribute('aria-expanded', 'false'); }
+$('#mmSwitch').addEventListener('click', e => { e.stopPropagation(); const p = $('#pop'); p.hidden = !p.hidden; $('#mmSwitch').setAttribute('aria-expanded', !p.hidden); });
+document.addEventListener('click', e => { if (!e.target.closest('#selPanel')) closePop(); if (!e.target.closest('#search')) $('#suggest').hidden = true; });
+
+function selectModel(id){
+  if (state.active === id) return;
+  state.active = id;
+  if (view.reach) view.reach = view.reach.map(() => .02);   // flames re-ignite for the new model
+  renderSel(); renderFocus(); updateLabels(); renderCards(); drawTrajectory(); renderInsights(true);
+}
+
+/* ================= capability focus: this model's score per flame ================= */
+function renderFocus(){
+  const m = M[state.active];
+  $('#focusRows').classList.toggle('has-focus', !!state.focus);
+  $('#focusRows').innerHTML = REGIONS.map(r => { const v = regionScore(m, r);
+    return `<button class="f-row ${state.focus === r.id ? 'on' : ''} ${v == null ? 'nodata' : ''}" data-region="${r.id}" style="--c:${r.color}" aria-pressed="${state.focus === r.id}" title="${v == null ? 'Not measured' : `${fmtN(m.prov[r.id][0])} / ${fmtN(m.prov[r.id][1])} scored trials passed`}"><span class="n"><i></i>${r.short}</span><span class="track"><i style="width:${v == null ? 0 : clamp((v - 40)/60*100, 4, 100).toFixed(0)}%"></i></span><span class="v">${v == null ? '–' : Math.round(v)}</span></button>`; }).join('');
+  $('#focusRows').querySelectorAll('.f-row').forEach(b => {
+    b.addEventListener('click', () => setFocus(b.dataset.region));
+    b.addEventListener('mouseenter', () => { state.hoverRegion = b.dataset.region; });
+    b.addEventListener('mouseleave', () => { state.hoverRegion = null; });
+  });
+}
+
+/* ================= insights ================= */
+const pctTxt = v => v == null ? '–' : Math.round(v);
+function renderInsights(calibrate){
+  const m = M[state.active];
+  $('#insName').innerHTML = `<span style="display:inline-flex; align-items:center; gap:8px">${logo(m.vendor, 15)}${m.name}</span>`; $('#insMeta').textContent = `${m.org} · ${m.date}`;
+  drawFingerprint($('#insAvatar'), m, {round:true});
+  const body = $('#tabBody');
+  if (state.itab === 'overview'){
+    body.innerHTML = `<p class="desc">${m.desc}</p><div class="tiles">${REGIONS.map(r => `<div class="tile ${m.p[r.id] == null ? 'nodata' : ''}" title="${m.p[r.id] == null ? 'Not measured' : `${fmtN(m.prov[r.id][0])} / ${fmtN(m.prov[r.id][1])} scored`}"><div class="v">${pctTxt(m.p[r.id])}</div><div class="k"><i style="--c:${r.color}"></i>${r.short}</div></div>`).join('')}</div>
+      <div class="sub-h">Pass rate by query kind</div><svg id="profile" role="img" aria-label="Pass rate across the query kinds this model was measured on"></svg>`;
+    drawProfile();
+  } else if (state.itab === 'capabilities'){
+    const capRow = c => { const v = m.s[c.id], cell = FDATA.models[MODELS.indexOf(m)].cells[c.id];
+      return `<div class="cap-row ${v == null ? 'nodata' : ''}" style="--c:${c.color}" title="${cell ? `${fmtN(cell[0])} / ${fmtN(cell[1])} scored` : 'Not measured'}"><span>${c.name}</span><span class="track"><i style="width:${v ?? 0}%"></i></span><span class="v">${pctTxt(v)}</span></div>`; };
+    body.innerHTML = `<div class="cap-rows">${REGIONS.map(r => { const ks = CAPS.filter(c => r.caps.includes(c.id)); return ks.length ? `<div class="cap-grp"><span><i style="--c:${r.color}"></i>${r.name}</span><span class="v">${pctTxt(m.p[r.id])}</span></div>${ks.map(capRow).join('')}` : ''; }).join('')}</div>
+      <p class="note">Province average (the mean of the measured provinces): <span class="num" style="color:var(--text-1)">${composite(m) == null ? '–' : composite(m).toFixed(1)}</span>. It sets the size of the globe. Counted trial by trial instead, ${m.scored ? Math.round(m.pass/m.scored*100) : '–'}% of ${fmtN(m.scored)} scored trials passed.</p>`;
+  } else if (state.itab === 'evaluations'){
+    const rows = m.runs.slice(0, 7);
+    body.innerHTML = rows.length ? `<table class="ev-table"><thead><tr><th>Run</th><th class="r">Pass</th></tr></thead><tbody>${rows.map(([rid, p, n, total, when]) => `<tr><td><a class="run-link mono" href="/run/${encodeURIComponent(rid)}">${rid}</a><span class="s">${when} UTC · ${fmtN(total)} trials</span></td><td class="r">${n ? Math.round(p/n*100) + '%' : '–'}<span class="s">${fmtN(p)} / ${fmtN(n)}</span></td></tr>`).join('')}</tbody></table>
+      <p class="note">${m.runs.length > rows.length ? `Latest ${rows.length} of ${m.runs.length} runs. ` : ''}<a href="/runs">All runs →</a></p>` : '<p class="desc">No runs recorded yet.</p>';
+  } else {
+    const sims = MODELS.filter(o => o.id !== m.id).map(o => {
+      const shared = CAPS.filter(c => o.s[c.id] != null && m.s[c.id] != null);
+      if (!shared.length) return [o, null, 0];
+      const d = Math.sqrt(shared.reduce((s, c) => s + (o.s[c.id] - m.s[c.id])**2, 0) / shared.length);
+      return [o, clamp(100 - d*2.4, 0, 99), shared.length];
+    }).filter(x => x[1] != null).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    body.innerHTML = sims.length ? sims.map(([o, p, k]) => `<button class="sim-row" data-id="${o.id}"><canvas width="34" height="34"></canvas><span><span class="n">${o.name}</span><span class="m">${o.org} · ${k} shared ${k === 1 ? 'kind' : 'kinds'}</span></span><span class="p">${p.toFixed(0)}% similar</span></button>`).join('')
+      + `<p class="note">Similarity compares pass rates on the query kinds both models were measured on.</p>` : '<p class="desc">No other model shares a measured query kind with this one yet.</p>';
+    body.querySelectorAll('.sim-row').forEach(b => { drawFingerprint(b.querySelector('canvas'), M[b.dataset.id], {round:true}); b.addEventListener('click', () => selectModel(b.dataset.id)); });
+  }
+  if (calibrate && !reduced){
+    const c = document.createElement('div'); c.className = 'calib'; c.innerHTML = 'CALIBRATING MODEL<div class="bar"><i></i></div>';
+    body.appendChild(c); setTimeout(() => c.remove(), 520);
+  }
+}
+document.querySelectorAll('[data-itab]').forEach(b => b.addEventListener('click', () => {
+  state.itab = b.dataset.itab; document.querySelectorAll('[data-itab]').forEach(x => x.classList.toggle('on', x === b)); renderInsights(false);
+}));
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+function smoothPath(pts){
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 0; i < pts.length - 1; i++){
+    const p0 = pts[i-1] || pts[i], p1 = pts[i], p2 = pts[i+1], p3 = pts[i+2] || p2;
+    d += ` C${p1[0] + (p2[0]-p0[0])/6},${p1[1] + (p2[1]-p0[1])/6} ${p2[0] - (p3[0]-p1[0])/6},${p2[1] - (p3[1]-p1[1])/6} ${p2[0]},${p2[1]}`;
+  }
+  return d;
+}
+function drawProfile(){
+  const svg = document.getElementById('profile'); if (!svg) return;
+  const m = M[state.active], w = svg.clientWidth || 300, h = 78, top = 6, bot = 14;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  const shown = CAPS.filter(c => m.s[c.id] != null);
+  if (shown.length < 2){
+    svg.innerHTML = shown.length ? `<text x="4" y="${h/2}" fill="#8B98A4" font-size="11" font-family="Google Sans Flex, sans-serif">${shown[0].name}: ${Math.round(m.s[shown[0].id])}% (one kind measured)</text>` : '';
+    return;
+  }
+  const lo = Math.min(40, ...shown.map(c => m.s[c.id])), span = 100 - lo;
+  const pts = shown.map((c, i) => [4 + i*(w - 8)/(shown.length - 1), top + (1 - (m.s[c.id] - lo)/span)*(h - top - bot)]);
+  const line = smoothPath(pts), area = `${line} L${pts.at(-1)[0]},${h - bot} L${pts[0][0]},${h - bot} Z`;
+  svg.innerHTML = `<defs><linearGradient id="pf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${m.color}" stop-opacity=".38"/><stop offset="1" stop-color="${m.color}" stop-opacity="0"/></linearGradient></defs>
+    <line x1="0" x2="${w}" y1="${h - bot}" y2="${h - bot}" stroke="rgba(255,255,255,.08)"/>
+    <path d="${area}" fill="url(#pf)"/><path d="${line}" fill="none" stroke="${m.color}" stroke-width="1.2" stroke-opacity=".9"/>
+    ${pts.map((p, i) => `<g><title>${shown[i].name}: ${Math.round(m.s[shown[i].id])}%</title><circle cx="${p[0]}" cy="${p[1]}" r="6" fill="transparent"/><circle cx="${p[0]}" cy="${p[1]}" r="2.2" fill="${shown[i].color}" fill-opacity=".9"/><rect x="${p[0] - 5}" y="${h - 6}" width="10" height="1.6" rx=".8" fill="${shown[i].color}" fill-opacity=".75"/></g>`).join('')}`;
+}
+
+/* Trajectory: this model's scored pass rate on each day it ran (real dates from the store). */
+function drawTrajectory(){
+  const svg = $('#traj'), w = svg.clientWidth || 300, h = 196;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  const m = M[state.active], days = m.daily.filter(d => d[2] > 0);
+  const L = 40, Rp = 16, T = 30, B = 26, Y = v => T + (1 - v/100)*(h - T - B);
+  let s = '';
+  for (const v of [0, 25, 50, 75, 100]) s += `<line x1="${L}" x2="${w - Rp}" y1="${Y(v)}" y2="${Y(v)}" stroke="rgba(255,255,255,${v % 50 ? .03 : .06})"/>` + (v % 50 ? '' : `<text x="${L - 8}" y="${Y(v) + 3.5}" fill="#65727D" font-size="10" text-anchor="end" font-family="Google Sans Flex, sans-serif">${v}</text>`);
+  s += `<text transform="translate(11 ${T + (h - T - B)/2}) rotate(-90)" fill="#65727D" font-size="9.5" text-anchor="middle" font-family="Google Sans Flex, sans-serif">Pass rate %</text>`;
+  if (!days.length){ svg.innerHTML = s + `<text x="${w/2}" y="${h/2}" fill="#8B98A4" font-size="11" text-anchor="middle" font-family="Google Sans Flex, sans-serif">No dated trials</text>`; return; }
+  const t = d => Date.parse(d + 'T00:00:00Z'), t0 = t(days[0][0]), t1 = Math.max(t(days.at(-1)[0]), t0 + 864e5);
+  const X = d => L + 8 + (t(d) - t0)/(t1 - t0)*(w - L - Rp - 16);
+  const ticks = days.length <= 6 ? days.map(d => d[0]) : [days[0][0], days[Math.floor(days.length/2)][0], days.at(-1)[0]];
+  ticks.forEach(d => { s += `<line x1="${X(d)}" x2="${X(d)}" y1="${T}" y2="${h - B}" stroke="rgba(255,255,255,.04)"/><text x="${X(d)}" y="${h - 8}" fill="#8B98A4" font-size="10" text-anchor="middle" font-family="Google Sans Flex, sans-serif">${fmtDay(d)}</text>`; });
+  const pts = days.map(([d, p, n]) => [X(d), Y(p/n*100), d, p, n]);
+  if (pts.length > 1) s += `<path d="${pts.map((q, i) => (i ? 'L' : 'M') + q[0] + ',' + q[1]).join(' ')}" fill="none" stroke="${m.color}" stroke-width="1.4" stroke-opacity=".95"/>`;
+  s += pts.map(q => `<circle cx="${q[0]}" cy="${q[1]}" r="${clamp(1.8 + Math.sqrt(q[4])/6, 2, 6)}" fill="${m.color}" fill-opacity=".85"><title>${fmtDay(q[2])}: ${Math.round(q[3]/q[4]*100)}% (${fmtN(q[3])} / ${fmtN(q[4])} scored)</title></circle>`).join('');
+  const e = pts.at(-1), label = `${Math.round(e[3]/e[4]*100)}% on ${fmtDay(e[2])}`, tw = label.length*5.9 + 14;
+  const tx = clamp(e[0] - tw/2, L, w - Rp - tw);
+  s += `<rect x="${tx}" y="${Math.max(2, e[1] - 30)}" width="${tw}" height="18" rx="3" fill="${m.color}" fill-opacity=".14" stroke="${m.color}" stroke-opacity=".55"/><text x="${tx + tw/2}" y="${Math.max(2, e[1] - 30) + 12.5}" fill="${mix(m.color, '#ffffff', .35)}" font-size="10.5" text-anchor="middle" font-family="Google Sans Flex, sans-serif">${label}</text>`;
+  svg.innerHTML = s;
+}
+
+/* ================= explore strip ================= */
+const EX_TABS = [['all','All'], ...REGIONS.map(r => [r.id, r.short])];
+const nz = v => v == null ? -1 : v;
+function renderExTabs(){
+  $('#exTabs').innerHTML = EX_TABS.map(([k, n]) => `<button class="${state.exTab === k ? 'on' : ''}" data-k="${k}">${n}</button>`).join('');
+  $('#exTabs').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { state.exTab = b.dataset.k; renderExTabs(); renderCards(); }));
+}
+function renderCards(){
+  let list = MODELS.slice();
+  const tab = state.exTab, capTab = REGIONS.some(r => r.id === tab) ? tab : null;
+  if (capTab) list.sort((a, b) => nz(b.p[capTab]) - nz(a.p[capTab]));
+  else if (state.sort === 'date') list.sort((a, b) => (b.last || '').localeCompare(a.last || ''));
+  else if (state.sort === 'name') list.sort((a, b) => a.name.localeCompare(b.name));
+  else if (state.sort === 'trials') list.sort((a, b) => b.trials - a.trials);
+  else list.sort((a, b) => nz(composite(b)) - nz(composite(a)));
+  $('#cards').innerHTML = list.map(m => `<div class="mcard ${m.id === state.active ? 'on' : ''}" style="--c:${m.color}" data-id="${m.id}" role="button" tabindex="0" aria-label="Map ${m.name}">
+      <canvas data-fp="${m.id}"></canvas>
+      <div class="mc-info"><div class="mc-name">${logo(m.vendor, 14)}${m.name}</div><div class="mc-org">${m.org} · ${fmtN(m.trials)} trials</div>
+        <div class="mc-scores ${capTab ? 'focus' : ''}">${REGIONS.map(r => `<div class="${r.id === capTab ? 'hl' : ''} ${m.p[r.id] == null ? 'nodata' : ''}" title="${r.name}: ${m.p[r.id] == null ? 'not measured' : Math.round(m.p[r.id]) + '%'}">${pctTxt(m.p[r.id])}<i style="--c:${r.color}"></i></div>`).join('')}</div>
+      </div>
+      <button class="mc-more" aria-label="Open ${m.name} findings" title="Open findings" data-more="${m.id}"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7h8M8 4l3 3-3 3"/></svg></button>
+    </div>`).join('');
+  $('#cards').querySelectorAll('canvas[data-fp]').forEach(cv => drawFingerprint(cv, M[cv.dataset.fp]));
+  $('#cards').querySelectorAll('.mcard').forEach(c => {
+    c.addEventListener('click', e => { if (e.target.closest('[data-more]')) return go({view:'model', model:MODELS.findIndex(x => x.id === c.dataset.id), tab:'overview', key:null, trial:null}); selectModel(c.dataset.id); });
+    c.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectModel(c.dataset.id); } });
+  });
+}
+$('#sortSel').addEventListener('change', e => { state.sort = e.target.value; if (state.exTab !== 'all') { state.exTab = 'all'; renderExTabs(); } renderCards(); });
+
+/* ================= search ================= */
+const q = $('#q'), sug = $('#suggest');
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+if (!isMac) $('#kbd').textContent = 'Ctrl K';
+let sugIdx = 0, sugItems = [];
+function renderSuggest(){
+  const v = q.value.trim().toLowerCase();
+  sugItems = state.view !== 'map' ? realSuggest(v) : [
+    ...MODELS.filter(m => !v || m.name.toLowerCase().includes(v) || m.org.toLowerCase().includes(v)).map(m => ({k:'Model', label:m.name, vendor:m.vendor, color:m.color, run:() => { if (state.view !== 'map') go({view:'map', model:null, key:null, trial:null}); selectModel(m.id); }})),
+    ...REGIONS.filter(r => !v || r.name.toLowerCase().includes(v) || r.caps.some(k => k.includes(v))).map(r => ({k:'Province', label:r.name, color:r.color, run:() => { if (state.focus !== r.id) setFocus(r.id); }})),
+  ].slice(0, 8);
+  if (v && /^[0-9a-f]{6,}$/.test(v)){ const t = EV.trials.find(x => x[0].startsWith(v)); if (t) sugItems.unshift({k:'Trial', label:`Trial ${t[0].slice(0, 12)}`, color:'#9B9FA5', run:() => { location.href = '/record/' + t[0]; }}); }
+  sugIdx = clamp(sugIdx, 0, sugItems.length - 1);
+  sug.innerHTML = sugItems.map((s, i) => `<button data-i="${i}" class="${i === sugIdx ? 'kb' : ''}">${s.vendor ? logo(s.vendor, 14) : `<span class="dot" style="--c:${s.color}"></span>`}${s.label}<span class="kind">${s.k}</span></button>`).join('');
+  sug.querySelectorAll('button').forEach(b => b.addEventListener('click', () => pick(+b.dataset.i)));
+  sug.hidden = !sugItems.length;
+}
+function pick(i){ const s = sugItems[i]; if (!s) return; s.run(); sug.hidden = true; q.value = ''; q.blur(); }
+q.addEventListener('focus', () => { sugIdx = 0; renderSuggest(); });
+q.addEventListener('input', () => { sugIdx = 0; renderSuggest(); });
+q.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown'){ e.preventDefault(); sugIdx = Math.min(sugIdx + 1, sugItems.length - 1); renderSuggest(); }
+  else if (e.key === 'ArrowUp'){ e.preventDefault(); sugIdx = Math.max(sugIdx - 1, 0); renderSuggest(); }
+  else if (e.key === 'Enter'){ e.preventDefault(); pick(sugIdx); }
+  else if (e.key === 'Escape'){ sug.hidden = true; q.blur(); }
+});
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'){ e.preventDefault(); q.focus(); }
+  if (e.key === 'Escape'){ closePop(); if (state.view === 'map' && state.focus) setFocus(state.focus); }
+});
+
+/* ================= chrome: every control goes somewhere real ================= */
+const NAV_HREF = {compare:'/atlas', runs:'/runs', report:'/report', coverage:'/coverage', launch:'/launch', live:'/live', breaks:'/capability-map', console:'/overview'};
+document.querySelectorAll('[data-nav]').forEach(b => b.addEventListener('click', () => { const v = b.dataset.nav;
+  if (v === 'map') go({view:'map', model:null, key:null, trial:null});
+  else if (v === 'findings') go({view:'findings', fv:'matrix', model:null, key:null, trial:null});
+  else if (v === 'ask') go({view:'ask', model:null, key:null, trial:null});
+  else if (v === 'models') go({view:'model', model:null, tab:'overview', key:null, trial:null});
+  else if (NAV_HREF[v]) location.href = NAV_HREF[v]; }));
+$('#epochTxt').textContent = DATA.generated ? `Data to ${fmtDay(DATA.generated.slice(0, 10))}` : 'No data';
+$('#verTxt').textContent = `${fmtN(DATA.trials_total)} trials`;
+$('#expand').addEventListener('click', () => go({view:'model', model:MODELS.findIndex(m => m.id === state.active), tab:'overview', key:null, trial:null}));
+
+/* vendor marks: Google's four-colour G; others from Simple Icons (CC0) */
+const LOGOS = {
+  nvidia: {c:"#76B900", d:"M8.948 8.798v-1.43a6.7 6.7 0 0 1 .424-.018c3.922-.124 6.493 3.374 6.493 3.374s-2.774 3.851-5.75 3.851c-.398 0-.787-.062-1.158-.185v-4.346c1.528.185 1.837.857 2.747 2.385l2.04-1.714s-1.492-1.952-4-1.952a6.016 6.016 0 0 0-.796.035m0-4.735v2.138l.424-.027c5.45-.185 9.01 4.47 9.01 4.47s-4.08 4.964-8.33 4.964c-.37 0-.733-.035-1.095-.097v1.325c.3.035.61.062.91.062 3.957 0 6.82-2.023 9.593-4.408.459.371 2.34 1.263 2.73 1.652-2.633 2.208-8.772 3.984-12.253 3.984-.335 0-.653-.018-.971-.053v1.864H24V4.063zm0 10.326v1.131c-3.657-.654-4.673-4.46-4.673-4.46s1.758-1.944 4.673-2.262v1.237H8.94c-1.528-.186-2.73 1.245-2.73 1.245s.68 2.412 2.739 3.11M2.456 10.9s2.164-3.197 6.5-3.533V6.201C4.153 6.59 0 10.653 0 10.653s2.35 6.802 8.948 7.42v-1.237c-4.84-.6-6.492-5.936-6.492-5.936z"},
+  openai: {c:"#E8EDF1", d:"M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"},
+  anthropic: {c:"#D4A27F", d:"M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z"},
+  meta: {c:"#3B8DFF", d:"M6.915 4.03c-1.968 0-3.683 1.28-4.871 3.113C.704 9.208 0 11.883 0 14.449c0 .706.07 1.369.21 1.973a6.624 6.624 0 0 0 .265.86 5.297 5.297 0 0 0 .371.761c.696 1.159 1.818 1.927 3.593 1.927 1.497 0 2.633-.671 3.965-2.444.76-1.012 1.144-1.626 2.663-4.32l.756-1.339.186-.325c.061.1.121.196.183.3l2.152 3.595c.724 1.21 1.665 2.556 2.47 3.314 1.046.987 1.992 1.22 3.06 1.22 1.075 0 1.876-.355 2.455-.843a3.743 3.743 0 0 0 .81-.973c.542-.939.861-2.127.861-3.745 0-2.72-.681-5.357-2.084-7.45-1.282-1.912-2.957-2.93-4.716-2.93-1.047 0-2.088.467-3.053 1.308-.652.57-1.257 1.29-1.82 2.05-.69-.875-1.335-1.547-1.958-2.056-1.182-.966-2.315-1.303-3.454-1.303zm10.16 2.053c1.147 0 2.188.758 2.992 1.999 1.132 1.748 1.647 4.195 1.647 6.4 0 1.548-.368 2.9-1.839 2.9-.58 0-1.027-.23-1.664-1.004-.496-.601-1.343-1.878-2.832-4.358l-.617-1.028a44.908 44.908 0 0 0-1.255-1.98c.07-.109.141-.224.211-.327 1.12-1.667 2.118-2.602 3.358-2.602zm-10.201.553c1.265 0 2.058.791 2.675 1.446.307.327.737.871 1.234 1.579l-1.02 1.566c-.757 1.163-1.882 3.017-2.837 4.338-1.191 1.649-1.81 1.817-2.486 1.817-.524 0-1.038-.237-1.383-.794-.263-.426-.464-1.13-.464-2.046 0-2.221.63-4.535 1.66-6.088.454-.687.964-1.226 1.533-1.533a2.264 2.264 0 0 1 1.088-.285z"},
+  mistralai: {c:"#FA6B2A", d:"M17.143 3.429v3.428h-3.429v3.429h-3.428V6.857H6.857V3.43H3.43v13.714H0v3.428h10.286v-3.428H6.857v-3.429h3.429v3.429h3.429v-3.429h3.428v3.429h-3.428v3.428H24v-3.428h-3.43V3.429z"}
+};
+const GOOGLE_G = '<path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/><path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"/><path fill="#FBBC05" d="M11.69 28.18A13.2 13.2 0 0 1 11 24c0-1.45.25-2.86.69-4.18v-5.7H4.34A21.99 21.99 0 0 0 2 24c0 3.55.85 6.91 2.34 9.88l7.35-5.7z"/><path fill="#EA4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"/>';
+/* Only the sponsor's mark is drawn; every other vendor gets a neutral monogram
+   (the hackathon video rules exclude third-party trademarks). */
+const MONO = {google:'G', openai:'O', meta:'M', mistralai:'M', anthropic:'A'};
+function logo(vendor, size = 16){
+  if (vendor !== 'nvidia'){
+    const ch = MONO[vendor]; if (!ch) return '';
+    return `<span class="vlogo mono-mark" aria-hidden="true" style="width:${size}px; height:${size}px; font-size:${Math.round(size*.58)}px">${ch}</span>`;
+  }
+  const L = LOGOS[vendor]; if (!L) return '';
+  return `<span class="vlogo" aria-hidden="true"><svg width="${size}" height="${size}" viewBox="0 0 24 24"><path fill="${L.c}" d="${L.d}"/></svg></span>`;
+}
+
+
+/* FDATA / EV are assigned from /api/map.json above */
+
+
+/* ================= Findings + Model Findings (real data from results/campaign.sqlite via cartographer.viewer.findings) ================= */
+const KIND_LABEL = {state:'State', order:'Order', belief:'Belief', adversarial_belief:'Adversarial belief', tool_plan:'Tool plan', interactive:'Interactive', code_trace:'Code trace', code_repair:'Code repair', code_write:'Code writing', repo_fix:'Repository fix'};
+const DIM_LABEL = {entity_state:'Entity state', temporal:'Temporal', coreference:'Coreference', distractors:'Distractors', context_length:'Context length', witness_gap:'Witness gap'};
+const HEAT = [[.97,'#4FAF82','≥ 97%','Exceptional'],[.90,'#68B98F','90–97%','Strong'],[.75,'#D3A957','75–90%','Solid'],[.50,'#D87861','50–75%','Weak'],[0,'#D95563','< 50%','Challenging']];
+const NODATA = '#65727D';
+const heat = r => r == null ? NODATA : HEAT.find(h => r >= h[0])[1];
+const fmt = n => Number(n).toLocaleString('en-US');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pct = (a, b) => b ? Math.round(a/b*100) : null;
+const num = v => v == null ? '–' : String(Math.round(v*100)/100);
+const STATUS_LABEL = {'unverified':'Unverified', 'verified-stable':'Resample-stable', 'contains-noise':'Includes noise', 'no-failures':'No failures'};
+const STATUS_HELP = {'unverified':'Failures not yet re-run, so some could be sampling noise', 'verified-stable':'Failures were re-run 3 times and failed again', 'contains-noise':'Some failures passed when re-run; those are not counted', 'no-failures':'No failures, nothing to verify'};
+const statusPill = v => `<span class="st ${v}" title="${STATUS_HELP[v] || ''}"><i></i>${STATUS_LABEL[v] || v}</span>`;
+const COLS = [...FDATA.kinds.map(key => ({axis:'kind', key})), ...FDATA.dims.map(key => ({axis:'dim', key}))];
+const colOf = key => COLS.find(c => c.key === key);
+const capName = key => KIND_LABEL[key] || DIM_LABEL[key];
+const capTitle = key => DIM_LABEL[key] ? `${DIM_LABEL[key]} (high)` : KIND_LABEL[key];
+const dimMin = k => num(FDATA.dimHigh[k]);
+const regionText = key => DIM_LABEL[key] ? `High region · ${key} ≥ ${dimMin(key)}` : 'All difficulty levels';
+const slugify = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+FDATA.models.forEach((m, i) => { m.i = i; m.slug = slugify(m.id); });
+const modelBySlug = s => FDATA.models.find(m => m.slug === s);
+const EVM = EV.models.map(id => FDATA.models.findIndex(m => m.id === id));
+EV.trials.forEach(t => { t[1] = EVM[t[1]]; });
+FDATA.findings.forEach((f, i) => { f.i = i; f.model = FDATA.models[f.m]; });
+const findingOf = (m, key) => FDATA.findings.find(f => f.m === m && f.key === key);
+const concLabel = c => `${c[0]} ${c[2] === c[3] ? '= ' + num(c[2]) : num(c[2]) + '–' + num(c[3])}`;
+function cellObj(m, key){
+  const mm = FDATA.models[m], c = mm && mm.cells[key], col = colOf(key);
+  if (!c || !c[1] || !col) return null;
+  return {m, key, axis:col.axis, c, f:findingOf(m, key), ev:EV.cells[`${mm.id}|${key}`] || {}, rate:c[0]/c[1]};
+}
+const typeOf = o => o.f ? o.f.kind : 'none';
+const TYPE_LABEL = {weakness:'Weakness', strength:'Strength', none:'No finding'};
+function summary(o){
+  const n = o.c[1], p = o.c[0], fails = o.c[2], r = Math.round(o.rate*100);
+  const where = o.axis === 'dim' ? `when ${DIM_LABEL[o.key].toLowerCase()} is high` : `on ${KIND_LABEL[o.key].toLowerCase()} queries`;
+  const worst = (o.ev.conc || [])[0];
+  if (o.f && o.f.kind === 'weakness') return `Fails ${fmt(fails)} of ${fmt(n)} scored trials ${where}${worst ? `, worst at ${concLabel(worst)} (${pct(worst[4], worst[5])}%)` : ''}.`;
+  if (o.f && o.f.kind === 'strength') return fails === 0 ? `Passes all ${fmt(n)} scored trials ${where}.` : `Passes ${fmt(p)} of ${fmt(n)} scored trials ${where}${worst ? `; the hardest slice is ${concLabel(worst)} (${pct(worst[4], worst[5])}%)` : ''}.`;
+  if (n < FDATA.thr.weakness_n) return `${r}% over ${fmt(n)} scored trials ${where}. That is too few trials to draw a finding (the bar is ${FDATA.thr.weakness_n}).`;
+  return `${r}% over ${fmt(n)} scored trials ${where}. That sits between the weakness bar (below ${FDATA.thr.weakness_rate*100}%) and the strength bar (${FDATA.thr.strength_rate*100}%), so no finding is drawn.`;
+}
+function insight(o){
+  const worst = (o.ev.conc || [])[0];
+  if (o.c[2] === 0) return `No failures in ${fmt(o.c[1])} trials`;
+  if (!worst) return `${fmt(o.c[2])} failures, no concentration`;
+  return `${typeOf(o) === 'strength' ? 'Hardest at' : 'Fails at'} ${concLabel(worst)} (${pct(worst[4], worst[5])}%)`;
+}
+
+/* ---------- route (plain-anchor hash so a finding is a linkable object) ----------
+   #findings | #findings-table [.model.key]  ·  #model.<slug>.<tab>[.<key>[.<trial>]] */
+const TABS = ['overview', 'capabilities', 'findings', 'trials', 'comparison'];
+const R = {view:'map', fv:'matrix', model:null, tab:'overview', key:null, trial:null};
+function parseHash(){
+  const p = decodeURIComponent(location.hash.slice(1)).split('.');
+  if (p[0] === 'findings' || p[0] === 'findings-table'){
+    const m = p[1] && modelBySlug(p[1]);
+    return {view:'findings', fv:p[0] === 'findings' ? 'matrix' : 'table', model:m ? m.i : null, key:m && colOf(p[2]) ? p[2] : null, trial:null, tab:'overview'};
+  }
+  if (p[0] === 'ask') return {view:'ask', model:null, key:null, trial:null};
+  if (p[0] === 'models') return {view:'model', model:null, tab:'overview', key:null, trial:null};
+  if (p[0] === 'model'){
+    const m = modelBySlug(p[1] || '');
+    if (m) return {view:'model', model:m.i, tab:TABS.includes(p[2]) ? p[2] : 'overview', key:colOf(p[3]) ? p[3] : null, trial:p[4] || null};
+  }
+  return {view:'map', model:null, key:null, trial:null};
+}
+function hashOf(){
+  if (R.view === 'findings') return (R.fv === 'table' ? 'findings-table' : 'findings') + (R.model != null && R.key ? `.${FDATA.models[R.model].slug}.${R.key}` : '');
+  if (R.view === 'ask') return 'ask';
+  if (R.view === 'model' && R.model == null) return 'models';
+  if (R.view === 'model') return `model.${FDATA.models[R.model].slug}.${R.tab}` + (R.key ? `.${R.key}` : '') + (R.key && R.trial ? `.${R.trial}` : '');
+  return '';
+}
+function writeHash(push){
+  const h = hashOf(), url = h ? '#' + h : location.pathname + location.search;
+  try { push ? history.pushState(null, '', url) : history.replaceState(null, '', url); } catch (e) {}
+}
+function go(next){ Object.assign(R, next); writeHash(true); render(); }
+addEventListener('popstate', () => { Object.assign(R, {fv:'matrix', tab:'overview', trial:null}, parseHash()); render(); });
+addEventListener('hashchange', () => { Object.assign(R, {fv:'matrix', tab:'overview', trial:null}, parseHash()); render(); });
+
+const inspectTarget = () => (R.view === 'findings' && R.model != null && R.key) || (R.view === 'model' && R.tab !== 'trials' && R.key) ? cellObj(R.model, R.key) : null;
+
+function render(){
+  state.view = R.view;
+  document.body.dataset.view = R.view;
+  const navKey = {map:'map', findings:'findings', model:'models', ask:'ask'}[R.view];
+  document.querySelectorAll('[data-nav]').forEach(b => b.classList.toggle('on', b.dataset.nav === navKey));
+  if (R.view === 'map'){ renderInspector(); relayout(); return; }
+  if (R.view === 'ask'){ renderAsk(); return; }
+  if (R.view === 'findings') renderFindingsPage(); else renderModelPage();
+  renderInspector();
+}
+
+/* ---------- Screen A: Capability Findings ---------- */
+const FV = {modelFilter:'all', cap:'all', result:'all', status:'all', q:'', page:1};
+function renderFindingsPage(){
+  $('#fReadouts').innerHTML = [[FDATA.models.length, 'Models'], [FDATA.kinds.length, 'Query kinds'], [FDATA.dims.length, 'Difficulty dials'], [FDATA.findings.length, 'Findings'], [fmt(FDATA.trials), 'Trials']]
+    .map(([v, k]) => `<div class="ro"><b>${v}</b><span>${k}</span></div>`).join('');
+  document.querySelectorAll('[data-fv]').forEach(b => { const on = b.dataset.fv === R.fv; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
+  document.querySelectorAll('#fBar [data-only]').forEach(el => { el.hidden = el.dataset.only !== R.fv; });
+  if (!$('#fModel').options.length){
+    $('#fModel').innerHTML = `<option value="all">All models</option>` + FDATA.models.map(m => `<option value="${m.i}">${esc(m.name)}</option>`).join('');
+    $('#fCap').innerHTML = `<option value="all">All capabilities</option><optgroup label="Query kind">${FDATA.kinds.map(k => `<option value="${k}">${KIND_LABEL[k]}</option>`).join('')}</optgroup><optgroup label="Difficulty, high region">${FDATA.dims.map(k => `<option value="${k}">${DIM_LABEL[k]}</option>`).join('')}</optgroup>`;
+  }
+  $('#fModel').value = FV.modelFilter; $('#fCap').value = FV.cap; $('#fResult').value = FV.result; $('#fStatus').value = FV.status; $('#fQ').value = FV.q;
+  R.fv === 'matrix' ? renderMatrix() : renderAllFindings();
+  $('#fNote').textContent = `Derived ${new Date(FDATA.generated).toLocaleString('en-US', {month:'short', day:'numeric', year:'numeric'})} from results/campaign.sqlite with the viewer's own derivation. Rates count scored trials only: errors and resample-noise failures are excluded. Difficulty columns report the hardest third of each dial. Status: Unverified = failures not yet re-run; Resample-stable = failures re-run 3× and failed again; Includes noise = some failures passed on re-run (not counted); No failures = nothing to verify.`;
+  requestAnimationFrame(() => drawSky($('#fsky')));
+}
+function renderMatrix(){
+  const ms = FDATA.models.filter(m => FV.modelFilter === 'all' || String(m.i) === FV.modelFilter);
+  const sel = inspectTarget();
+  $('#fMain').innerHTML = `<div class="tbl-wrap" id="mxWrap"><table class="mx"><thead>
+    <tr><th class="mcol" rowspan="2">Model</th><th class="gq" colspan="${FDATA.kinds.length}"><span>Query kind</span></th><th class="gd sep" colspan="${FDATA.dims.length}"><span>Difficulty dimensions</span></th></tr>
+    <tr>${COLS.map((c, i) => `<th class="${i === FDATA.kinds.length ? 'sep' : ''}" ${c.axis === 'dim' ? `title="High region: ${c.key} ≥ ${dimMin(c.key)}"` : ''}>${capName(c.key)}${c.axis === 'dim' ? '<span class="up" aria-hidden="true">↑</span>' : ''}</th>`).join('')}</tr>
+  </thead><tbody>${ms.map(m => `<tr><td class="mcol"><button class="mlink" data-model="${m.i}">${logo(m.vendor, 22)}<span class="who"><span class="org">${m.org}</span><span class="id">${esc(m.name)}</span><span class="n">${fmt(m.trials)} trials</span></span></button></td>${
+      COLS.map((c, i) => { const o = cellObj(m.i, c.key), cls = i === FDATA.kinds.length ? 'sep' : '';
+        if (!o) return `<td class="${cls}"><span class="mxc none" title="No trials measured"><b>–</b></span></td>`;
+        const hc = heat(o.rate), on = sel && sel.m === m.i && sel.key === c.key;
+        return `<td class="${cls}"><button class="mxc ${on ? 'on' : ''}" style="--hc:${hc}" data-cell="${m.i}|${c.key}" title="${o.c[0]} / ${o.c[1]} scored" aria-label="${esc(m.name)}, ${capTitle(c.key)}: ${Math.round(o.rate*100)} percent"><b>${Math.round(o.rate*100)}%</b><i><em style="width:${(o.rate*100).toFixed(0)}%"></em></i></button></td>`; }).join('')}</tr>`).join('')}
+  </tbody></table></div>
+  <div class="legend"><span class="eyebrow">Pass rate</span>${HEAT.map(h => `<span style="--hc:${h[1]}"><i></i>${h[2]} ${h[3]}</span>`).join('')}<span style="--hc:${NODATA}"><i></i>No data</span></div>`;
+}
+function filteredFindings(){
+  const q = FV.q.trim().toLowerCase();
+  return FDATA.findings.filter(f =>
+    (FV.modelFilter === 'all' || String(f.m) === FV.modelFilter) && (FV.cap === 'all' || f.key === FV.cap) &&
+    (FV.result === 'all' || f.kind === FV.result) && (FV.status === 'all' || f.c[7] === FV.status) &&
+    (!q || [capTitle(f.key), f.key, f.model.name, f.h].join(' ').toLowerCase().includes(q)))
+    .sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'weakness' ? -1 : 1) || (a.kind === 'weakness' ? a.c[0]/a.c[1] - b.c[0]/b.c[1] : b.c[0]/b.c[1] - a.c[0]/a.c[1]) || b.c[1] - a.c[1]);
+}
+function findingRows(list, {withModel}){
+  const sel = inspectTarget();
+  return list.map(f => { const o = cellObj(f.m, f.key), hc = heat(o.rate), on = sel && sel.m === f.m && sel.key === f.key;
+    return `<tr class="${on ? 'on' : ''}" data-cell="${f.m}|${f.key}" tabindex="0">
+      <td class="tt"><b>${capTitle(f.key)}</b><small>${regionText(f.key)}</small></td>
+      ${withModel ? `<td><button class="mmini" data-model="${f.m}">${logo(f.model.vendor, 15)}<span class="id">${esc(f.model.name)}</span></button></td>` : ''}
+      <td><span class="type ${f.kind}">${TYPE_LABEL[f.kind]}</span></td>
+      <td><span class="pr" style="--hc:${hc}"><b>${Math.round(o.rate*100)}%</b><i><em style="width:${(o.rate*100).toFixed(0)}%"></em></i></span></td>
+      <td class="num">${fmt(o.c[0])} / ${fmt(o.c[1])}</td>
+      <td class="ins">${esc(insight(o))}</td>
+      <td>${statusPill(o.c[7])}</td>
+      <td class="go" aria-hidden="true">→</td></tr>`; }).join('');
+}
+const PAGE = 12;
+function renderAllFindings(){
+  const list = filteredFindings(), pages = Math.max(1, Math.ceil(list.length/PAGE));
+  FV.page = clamp(FV.page, 1, pages);
+  if (!list.length){ $('#fMain').innerHTML = `<div class="empty"><b>No findings match these filters</b>Clear a filter or search for another model or capability.</div>`; return; }
+  $('#fMain').innerHTML = `<div class="tbl-wrap"><table class="dt"><thead><tr><th>Finding</th><th>Model</th><th>Type</th><th>Pass rate</th><th>Trials</th><th>Key insight</th><th>Status</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>${findingRows(list.slice((FV.page - 1)*PAGE, FV.page*PAGE), {withModel:true})}</tbody></table></div>
+    <div class="foot"><span>Showing ${(FV.page - 1)*PAGE + 1}–${Math.min(FV.page*PAGE, list.length)} of ${list.length} findings</span>${pager(FV.page, pages, 'fpg')}</div>`;
+}
+const pager = (page, pages, key) => pages < 2 ? '' : `<div class="pager"><button data-${key}="${page - 1}" ${page === 1 ? 'disabled' : ''} aria-label="Previous page">‹</button>${Array.from({length:pages}, (_, k) => `<button data-${key}="${k + 1}" class="${k + 1 === page ? 'on' : ''}">${k + 1}</button>`).join('')}<button data-${key}="${page + 1}" ${page === pages ? 'disabled' : ''} aria-label="Next page">›</button></div>`;
+
+/* ---------- Screen B: Model Findings ---------- */
+const TSTEP = 50;   // trials drawn per scroll step
+const MV = {result:'all', cap:'all', verdict:'scored', tq:'', tpage:1, open:null, shown:TSTEP};
+function modelStats(m){
+  const fs = FDATA.findings.filter(f => f.m === m.i), measured = COLS.filter(c => m.cells[c.key] && m.cells[c.key][1]).length, kinds = FDATA.kinds.filter(k => m.cells[k] && m.cells[k][1]).length;
+  return {fs, kinds, weak:fs.filter(f => f.kind === 'weakness').length, strong:fs.filter(f => f.kind === 'strength').length, measured, rate:m.scored ? m.pass/m.scored : null};
+}
+/* ---------- Ask the Cartographer: live Nemotron on Nebius Token Factory ---------- */
+const ASK_SUGGEST = ['Where does Nemotron 3 Super break, and how does Nano compare?', 'Which model handles long tool plans best?', "What is Gemma 4 31B QAT's biggest weakness?", 'How do the three Nemotron 3 models differ on belief tracking?'];
+const AV = {busy:false};
+function renderAsk(){
+  if (!$('#askChips').childElementCount){
+    $('#askChips').innerHTML = ASK_SUGGEST.map(q => `<button class="chip2" type="button" data-askq="${esc(q)}">${esc(q)}</button>`).join('');
+    $('#askChips').addEventListener('click', e => { const b = e.target.closest('[data-askq]'); if (b){ $('#askQ').value = b.dataset.askq; askRun(b.dataset.askq); } });
+    $('#askForm').addEventListener('submit', e => { e.preventDefault(); askRun($('#askQ').value); });
+  }
+  requestAnimationFrame(() => drawSky($('#asky')));
+}
+const callMeta = c => `${c.tier} · ${c.latency_s.toFixed(1)} s · ${fmt(c.tokens_in)} → ${fmt(c.tokens_out)} tokens · $${c.cost_usd.toFixed(5)} · thinking ${c.thinking ? 'on' : 'off'}`;
+function askStep(n, state, meta, body){
+  const el = $('#as' + n); el.className = 'astep ' + (state || '');
+  if (meta != null) el.querySelector('.ameta').textContent = meta;
+  if (body != null) el.querySelector('.abody').innerHTML = body;
+}
+async function askJSON(url){
+  const r = await fetch(url); const d = await r.json().catch(() => ({error:'Bad response from the server.'}));
+  if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status));
+  return d;
+}
+async function askRun(q){
+  q = (q || '').trim(); if (!q || AV.busy) return;
+  AV.busy = true; $('#askGo').disabled = true; $('#askRun').hidden = false; $('#askFoot').textContent = '';
+  [1, 2, 3, 4].forEach(n => askStep(n, '', '', ''));
+  const t0 = performance.now(); let n = 1;
+  try {
+    askStep(1, 'run', 'calling Token Factory…');
+    const p = await askJSON('/api/ask?step=plan&q=' + encodeURIComponent(q));
+    askStep(1, 'done', callMeta(p.call), (p.models.length ? p.models : ['all models']).map(m => `<span class="tag">${esc(m)}</span>`).join('') + (p.topics.length ? p.topics : ['all topics']).map(t => `<span class="tag">${esc(p.labels[t] || t)}</span>`).join('') + `<span class="tag">intent: ${esc(p.intent)}</span>`);
+    n = 3; askStep(2, 'run', 'selecting facts…'); askStep(3, 'run', 'calling Token Factory…');
+    const a = await askJSON(`/api/ask?step=answer&q=${encodeURIComponent(q)}&models=${encodeURIComponent(p.models.join('|'))}&topics=${encodeURIComponent(p.topics.join('|'))}`);
+    const cited = new Set(a.audit.cited), byId = Object.fromEntries(a.facts.map(f => [f.id, f.text]));
+    askStep(2, 'done', `${a.facts.length} facts drawn from ${fmt(FDATA.trials)} trials · ${cited.size} cited`,
+      `<details><summary class="note" style="cursor:pointer">Show the evidence Nemotron 3 Super was given</summary><ul class="facts">${a.facts.map(f => `<li class="${cited.has(f.id) ? 'hit' : ''}"><code>${f.id}</code>${esc(f.text)}</li>`).join('')}</ul></details>`);
+    let html = esc(a.answer).replace(/\[?(F\d+)\]?/g, (m, id) => byId[id] ? `<span class="cite" title="${esc(byId[id])}">${id}</span>` : m);
+    a.audit.unsupported.forEach(v => { html = html.split(esc(v)).join(`<mark>${esc(v)}</mark>`); });
+    askStep(3, 'done', callMeta(a.call) + ` · reasoning ${fmt(a.call.reasoning_chars)} chars`, `<div class="ans">${html}</div>`);
+    n = 4;
+    const ck = a.audit.checks, ok = ck.filter(c => c.status !== 'not found').length;
+    askStep(4, a.audit.unsupported.length ? 'err' : 'done',
+      ck.length ? `${ok} of ${ck.length} numbers found in the evidence${a.audit.unsupported.length ? ' · unsupported numbers are highlighted' : ''}` : 'no numbers to check',
+      `<div class="aud">${ck.map(c => `<span class="${c.status === 'cited' ? '' : c.status === 'in evidence' ? 'ev' : 'no'}" title="${c.status}">${esc(c.value)}</span>`).join('')}</div>`);
+    const total = p.call.cost_usd + a.call.cost_usd;
+    $('#askFoot').textContent = `2 calls to Nebius Token Factory · ${((performance.now() - t0)/1000).toFixed(1)} s end to end · $${total.toFixed(5)}`;
+  } catch (err){
+    askStep(n, 'err', '', `<span class="ask-err">${esc(err.message)}</span>`);
+  } finally { AV.busy = false; $('#askGo').disabled = false; }
+}
+
+function renderModelsIndex(){
+  $('#mCrumb').textContent = 'All models'; $('#mSwitch').hidden = true; $('#mTabs').innerHTML = '';
+  $('#mHead').innerHTML = `<div class="m-id"><div><div class="org">${FDATA.models.length} models · ${fmt(FDATA.trials)} trials</div><h1>Models</h1><div class="meta">Every model in the store. Province average sets globe size on the Map; scored pass rate counts every scored trial equally. Pick a model for its profile, findings and trials.</div></div></div>`;
+  const rows = FDATA.models.map(m => ({m, g:MODELS.find(x => x.id === m.id), st:modelStats(m)})).sort((a, b) => (composite(b.g) ?? -1) - (composite(a.g) ?? -1));
+  $('#mBody').innerHTML = `<section class="card"><div class="tbl-wrap"><table class="dt mi-tbl"><thead><tr><th>Model</th><th title="Mean of the measured provinces">Province avg</th><th title="Passed ÷ scored trials">Scored passed</th><th>Trials</th>${REGIONS.map(r => `<th title="${r.name}: ${r.caps.map(k => KIND_LABEL[k] || k).join(', ')}">${r.short}</th>`).join('')}<th title="Weaknesses / strengths">Findings</th></tr></thead><tbody>${rows.map(({m, g, st}) => `<tr class="mi-row" data-model="${m.i}" tabindex="0"><td><span class="mmini" style="pointer-events:none">${logo(m.vendor, 16)}<span><b style="font-weight:500">${esc(m.name)}</b><br><span class="mono" style="font-size:10.5px; color:var(--text-3)">${esc(m.id)}</span></span></span></td><td class="num">${composite(g) == null ? '–' : composite(g).toFixed(1)}<span class="mi-n">${measured(g).length} of ${REGIONS.length}</span></td><td class="num">${st.rate == null ? '–' : Math.round(st.rate*100) + '%'}</td><td class="num">${fmt(m.trials)}</td>${REGIONS.map(r => `<td class="num" style="color:${g.p[r.id] == null ? 'var(--text-3)' : heat(g.p[r.id]/100)}">${g.p[r.id] == null ? '–' : Math.round(g.p[r.id])}</td>`).join('')}<td class="num">${st.weak} / ${st.strong}</td></tr>`).join('')}</tbody></table></div></section>
+    <p class="note" style="margin-top:12px">A dash means the model was never tested in that province. ${(() => { const thin = rows.filter(x => measured(x.g).length === 1); return thin.length ? `An average over one province is not comparable with one over six: ${thin.map(x => `${esc(x.m.name)} (${measured(x.g)[0].name.toLowerCase()} only)`).join(', ')}.` : ''; })()} Findings are weaknesses / strengths.</p>`;
+  document.querySelectorAll('.mi-row').forEach(tr => tr.addEventListener('keydown', e => { if (e.key === 'Enter') tr.click(); }));
+}
+function renderModelPage(){
+  if (R.model == null) return renderModelsIndex();
+  $('#mSwitch').hidden = false;
+  const m = FDATA.models[R.model], st = modelStats(m);
+  $('#mCrumb').textContent = m.name;
+  if (!$('#mSwitch').options.length) $('#mSwitch').innerHTML = FDATA.models.map(x => `<option value="${x.i}">${esc(x.name)}</option>`).join('');
+  $('#mSwitch').value = String(m.i);
+  $('#mHead').innerHTML = `<div class="m-id"><span class="m-logo">${logo(m.vendor, 28)}</span><div><div class="org">${m.org}</div><h1>${esc(m.name)}</h1><div class="meta"><span class="mono">${esc(m.id)}</span> · ${fmt(m.trials)} trials · ${Math.round(st.rate*100)}% of ${fmt(m.scored)} scored trials passed · province average ${pavg(m)}</div></div></div>`;
+  const nScored = m.scored;
+  $('#mTabs').innerHTML = TABS.map(t => `<button class="${R.tab === t ? 'on' : ''}" data-tab="${t}" role="tab" aria-selected="${R.tab === t}">${t[0].toUpperCase() + t.slice(1)}${t === 'findings' ? `<span class="count">${st.fs.length}</span>` : t === 'trials' ? `<span class="count">${fmt(m.trials)}</span>` : ''}</button>`).join('');
+  const body = $('#mBody');
+  if (R.tab === 'overview'){
+    body.innerHTML = `${readoutsFor(m, st)}
+      <div class="m-grid" style="margin-top:16px">
+        <section class="card"><div class="card-h"><span class="eyebrow">Capability profile</span><button class="aside" data-tab="capabilities">All capabilities →</button></div>${profile(m, false)}</section>
+        <section class="card"><div class="card-h"><span class="eyebrow">Findings</span><span class="aside" style="cursor:default">${st.weak} weaknesses · ${st.strong} strengths</span></div>${modelFindingsTable(m, 8)}${st.fs.length > 8 ? `<div class="foot"><span></span><button class="btn ghost" data-tab="findings">All ${st.fs.length} findings →</button></div>` : ''}</section>
+      </div>`;
+  } else if (R.tab === 'capabilities'){
+    body.innerHTML = `<section class="card"><div class="card-h"><span class="eyebrow">Capability profile</span><span class="aside" style="cursor:default">Select a capability to see its findings</span></div>${profile(m, true)}</section>`;
+  } else if (R.tab === 'findings'){
+    body.innerHTML = `<div class="bar-row" style="margin-bottom:14px"><div class="chips">${['all','weakness','strength'].map(k => `<button class="chip2 ${MV.result === k ? 'on' : ''}" data-mres="${k}">${{all:'All', weakness:'Weaknesses', strength:'Strengths'}[k]}</button>`).join('')}</div><span class="spacer"></span><label><span class="sr-only">Capability</span><select class="ctl" id="mCap"><option value="all">All capabilities</option>${COLS.map(c => `<option value="${c.key}">${capTitle(c.key)}</option>`).join('')}</select></label></div>
+      <section class="card">${modelFindingsTable(m, Infinity)}</section>`;
+    $('#mCap').value = MV.cap;
+  } else if (R.tab === 'trials'){
+    renderTrials(m);
+  } else {
+    renderComparison(m);
+  }
+}
+function readoutsFor(m, st){
+  return `<div class="m-readouts">
+    <div class="ro" style="--hc:${heat(st.rate)}" title="Passed ÷ scored trials. Errors and resample-noise failures are not scored."><b>${Math.round(st.rate*100)}%</b><span>Scored trials passed</span><i><em style="width:${(st.rate*100).toFixed(0)}%"></em></i></div>
+    <div class="ro"><b>${fmt(m.trials)}</b><span>Total trials</span><i></i></div>
+    <div class="ro" title="Query kinds this model has scored trials in"><b>${st.kinds}<small style="font-size:14px; color:var(--text-3)"> / ${FDATA.kinds.length}</small></b><span>Query kinds measured</span><i></i></div>
+    <div class="ro"><b>${st.fs.length}</b><span>Findings</span><i></i></div>
+    <div class="ro"><b>$${m.cost.toFixed(4)}</b><span>Tracked spend</span><i></i></div></div>`;
+}
+const pavg = m => { const g = MODELS.find(x => x.id === m.id), v = g && composite(g); return v == null ? '–' : v.toFixed(1); };
+function profile(m, big){
+  const sel = inspectTarget();
+  const row = c => { const o = cellObj(m.i, c.key);
+    if (!o) return `<div class="prow nodata"><span>${capName(c.key)}</span><span class="v">–</span><span class="track"></span>${big ? '<span class="n">not measured</span>' : ''}</div>`;
+    const on = sel && sel.key === c.key;
+    return `<button class="prow ${on ? 'on' : ''}" style="--hc:${heat(o.rate)}" data-capf="${c.key}"><span>${capName(c.key)}</span><span class="v">${Math.round(o.rate*100)}%</span><span class="track"><em style="width:${(o.rate*100).toFixed(0)}%"></em></span>${big ? `<span class="n">${fmt(o.c[0])} / ${fmt(o.c[1])}</span>` : ''}</button>`; };
+  const prov = PROV.map(p => [p, FDATA.kinds.filter(k => p.kinds.includes(k))]).filter(([, ks]) => ks.length),
+        loose = FDATA.kinds.filter(k => !PROV_OF_KIND[k]);
+  return `<div class="prof ${big ? 'big' : ''}">${prov.map(([p, ks]) => `<div class="grp"><i class="gdot" style="--c:${p.color}"></i>${p.name}</div>${ks.map(k => row({key:k})).join('')}`).join('')}${loose.length ? `<div class="grp">Other</div>${loose.map(k => row({key:k})).join('')}` : ''}<div class="grp" title="Narrative tasks have difficulty dials; these rows are the hardest third of each dial">Difficulty dials, hardest third (narrative)</div>${FDATA.dims.map(k => row({key:k})).join('')}</div>`;
+}
+function modelFindingsTable(m, limit){
+  let list = FDATA.findings.filter(f => f.m === m.i && (MV.result === 'all' || f.kind === MV.result) && (MV.cap === 'all' || f.key === MV.cap));
+  list.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'weakness' ? -1 : 1) || (a.kind === 'weakness' ? a.c[0]/a.c[1] - b.c[0]/b.c[1] : b.c[0]/b.c[1] - a.c[0]/a.c[1]));
+  if (limit !== Infinity) list = FDATA.findings.filter(f => f.m === m.i).sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'weakness' ? -1 : 1) || a.c[0]/a.c[1] - b.c[0]/b.c[1]).slice(0, limit);
+  if (!list.length){
+    const o = MV.cap !== 'all' && cellObj(m.i, MV.cap);
+    return `<div class="empty"><b>No ${MV.result === 'all' ? '' : MV.result + ' '}finding${MV.cap !== 'all' ? ` for ${capTitle(MV.cap)}` : ''}</b>${o ? `It scores ${Math.round(o.rate*100)}% over ${fmt(o.c[1])} trials, which clears neither bar. <button class="btn ghost" style="margin-top:12px" data-cell="${m.i}|${MV.cap}">Inspect the cell</button>` : 'Try another filter.'}</div>`;
+  }
+  return `<div class="tbl-wrap"><table class="dt" style="min-width:760px"><thead><tr><th>Finding</th><th>Type</th><th>Pass rate</th><th>Trials</th><th>Key insight</th><th>Status</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>${findingRows(list, {withModel:false})}</tbody></table></div>`;
+}
+const VERDICTS = {scored:'Scored', F:'Failures', P:'Passes', E:'Errors', n:'Noise'};
+function trialsFor(m){
+  const col = MV.trialCap !== 'all' ? colOf(MV.trialCap) : null, bit = col && col.axis === 'dim' ? 1 << FDATA.dims.indexOf(col.key) : 0, q = MV.tq.trim().toLowerCase();
+  return EV.trials.filter(t => t[1] === m.i && (!col || (col.axis === 'kind' ? t[2] === col.key : (t[5] & bit))) &&
+    (MV.verdict === 'scored' ? (t[3] === 'P' || (t[3] === 'F' && t[4] !== 'n')) : MV.verdict === 'n' ? (t[3] === 'F' && t[4] === 'n') : MV.verdict === 'F' ? (t[3] === 'F' && t[4] !== 'n') : t[3] === MV.verdict) &&
+    (!q || t[0].startsWith(q) || (t[7] || '').toLowerCase().includes(q) || EV.runs[t[9]].toLowerCase().includes(q)));
+}
+let trialObs = null;
+function trialRow(t){
+  const hi = FDATA.dims.filter((d, i) => t[5] & (1 << i)).map(d => `${d} ${num(t[6][FDATA.dims.indexOf(d)])}`).join(', ');
+  const res = {s:'stable', n:'noise', u:'unverified'}[t[4]] || '–';
+  const main = `<tr data-trial="${t[0]}" class="${MV.open === t[0] ? 'on' : ''}" tabindex="0"><td><span class="mono" style="font-size:11.5px">${t[0].slice(0, 12)}</span></td><td>${KIND_LABEL[t[2]] || t[2] || '–'}</td><td><span class="tv ${t[3]}"><i></i>${{P:'Pass', F:'Fail', E:'Error'}[t[3]]}</span></td><td class="num">${t[3] === 'F' ? res : '–'}</td><td class="ins" style="max-width:240px">${esc(hi || t[8] || '–')}</td><td class="ins mono" style="max-width:220px; font-size:11.5px">${esc(t[7] || '–')}</td><td class="num">${esc(t[10])}</td></tr>`;
+  if (MV.open !== t[0]) return main;
+  const dims = t[6] ? FDATA.dims.map((d, i) => `<dt>${d}</dt><dd>${num(t[6][i])}${t[5] & (1 << i) ? ' <span style="color:var(--lum)">high</span>' : ''}</dd>`).join('') : '';
+  return main + `<tr class="trow-ex"><td colspan="7"><div class="tev">
+    <dl><dt>Record</dt><dd class="mono"><a class="rec-link" href="/record/${t[0]}">${t[0]}</a></dd><dt>Run</dt><dd class="mono">${esc(EV.runs[t[9]])}</dd><dt>Recorded</dt><dd>${esc(t[10])} UTC</dd><dt>Verdict</dt><dd>${{P:'Pass', F:'Fail', E:'Error'}[t[3]]}${t[3] === 'F' ? ` · resample ${res}` : ''}</dd><dt>Verifier</dt><dd>${esc(t[8] || '–')}</dd><dt>Finish</dt><dd>${esc(t[13] || '–')} · ${fmt(t[11])} tokens out · $${Number(t[12]).toFixed(5)}</dd></dl>
+    ${dims ? `<dl>${dims}</dl>` : ''}
+    <div class="ans"><span class="eyebrow" style="display:block; margin-bottom:6px; font-size:9px; color:var(--text-3)">Model answer (first 72 characters)</span>${esc(t[7] || '(empty)')}</div></div></td></tr>`;
+}
+function trialFoot(list, o){
+  const n = Math.min(MV.shown, list.length), more = list.length - n;
+  return `<span>${fmt(list.length)} ${VERDICTS[MV.verdict].toLowerCase()} trial${list.length === 1 ? '' : 's'}${o ? ` in ${capTitle(R.key)}` : ''}${MV.verdict === 'scored' && o ? ` · matches the cell's ${fmt(o.c[1])}` : ''}</span>` +
+    `<span class="tmore">${more > 0 ? `Showing ${fmt(n)} · scroll for more <button class="btn ghost" data-tall>Show all ${fmt(list.length)}</button>` : list.length > TSTEP ? `All ${fmt(list.length)} shown <button class="btn ghost" data-ttop>Back to top</button>` : ''}</span>`;
+}
+// Endless list: when the sentinel under the table scrolls into view, append the next rows in place.
+function watchTrials(m, list, o){
+  if (trialObs) trialObs.disconnect();
+  const sent = $('#tSentinel');
+  if (!sent || MV.shown >= list.length) return;
+  trialObs = new IntersectionObserver(es => {
+    if (!es.some(e => e.isIntersecting)) return;
+    const from = MV.shown; MV.shown = Math.min(list.length, MV.shown + TSTEP);
+    $('#tBody').insertAdjacentHTML('beforeend', list.slice(from, MV.shown).map(trialRow).join(''));
+    $('#tFoot').innerHTML = trialFoot(list, o);
+    if (MV.shown >= list.length){ trialObs.disconnect(); sent.remove(); return; }
+    trialObs.unobserve(sent); trialObs.observe(sent);   // re-arm: a sentinel still on screen must keep loading
+  }, {rootMargin:'600px 0px'});
+  trialObs.observe(sent);
+}
+function renderTrials(m){
+  MV.trialCap = R.key || 'all';
+  const list = trialsFor(m);
+  if (R.trial){ const ix = list.findIndex(t => t[0].startsWith(R.trial)); if (ix >= 0){ MV.shown = Math.max(MV.shown, Math.ceil((ix + 1)/TSTEP)*TSTEP); MV.open = list[ix][0]; } }
+  MV.shown = Math.max(TSTEP, MV.shown);
+  const o = R.key && cellObj(m.i, R.key);
+  const rows = list.slice(0, MV.shown).map(trialRow).join('');
+  $('#mBody').innerHTML = `<div class="bar-row" style="margin-bottom:14px">
+      <label><span class="sr-only">Capability</span><select class="ctl wide" id="tCap"><option value="all">All capabilities</option>${COLS.map(c => `<option value="${c.key}">${capTitle(c.key)}</option>`).join('')}</select></label>
+      <div class="chips">${Object.entries(VERDICTS).map(([k, v]) => `<button class="chip2 ${MV.verdict === k ? 'on' : ''}" data-tv="${k}">${v}</button>`).join('')}</div>
+      <label class="f-search"><svg width="14" height="14" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg><input id="tQ" type="text" autocomplete="off" placeholder="Record id, answer or run" aria-label="Search trials" value="${esc(MV.tq)}"></label>
+      ${o ? `<span class="spacer"></span><button class="btn ghost" data-cell="${m.i}|${R.key}">Inspect ${capTitle(R.key)}</button>` : ''}
+    </div>
+    <section class="card">${list.length ? `<div class="tbl-wrap"><table class="dt" style="min-width:860px"><thead><tr><th>Record</th><th>Query kind</th><th>Verdict</th><th>Resample</th><th>High dims / verifier</th><th>Answer</th><th>Recorded (UTC)</th></tr></thead><tbody id="tBody">${rows}</tbody></table></div>
+      ${MV.shown < list.length ? '<div id="tSentinel" class="tsent" aria-hidden="true"></div>' : ''}<div class="foot" id="tFoot">${trialFoot(list, o)}</div>` : `<div class="empty"><b>No trials match</b>Change the capability or verdict filter.</div>`}</section>`;
+  $('#tCap').value = MV.trialCap;
+  watchTrials(m, list, o);
+}
+function renderComparison(m){
+  const rows = COLS.map(c => {
+    const o = cellObj(m.i, c.key), others = FDATA.models.map(x => cellObj(x.i, c.key)).filter(Boolean);
+    const rates = others.map(x => x.rate).sort((a, b) => a - b), med = rates.length ? rates[Math.floor((rates.length - 1)/2)] : null;
+    const best = others.slice().sort((a, b) => b.rate - a.rate)[0];
+    const d = o && med != null ? Math.round((o.rate - med)*100) : null;
+    return `<tr data-capf="${c.key}" tabindex="0"><td class="tt"><b>${capTitle(c.key)}</b><small>${others.length} of ${FDATA.models.length} models measured</small></td>
+      <td>${o ? `<span class="pr" style="--hc:${heat(o.rate)}"><b>${Math.round(o.rate*100)}%</b><i><em style="width:${(o.rate*100).toFixed(0)}%"></em></i></span>` : '<span class="num">not measured</span>'}</td>
+      <td class="num">${med == null ? '–' : Math.round(med*100) + '%'}</td>
+      <td>${best ? `<button class="mmini" data-model="${best.m}" data-keep-tab="comparison">${logo(FDATA.models[best.m].vendor, 14)}<span class="id">${esc(FDATA.models[best.m].name)}</span><span class="num" style="margin-left:6px">${Math.round(best.rate*100)}%</span></button>` : '–'}</td>
+      <td class="num" style="color:${d == null ? 'var(--text-3)' : d >= 0 ? '#4FAF82' : '#D87861'}">${d == null ? '–' : (d > 0 ? '+' : '') + d + ' pts'}</td></tr>`; }).join('');
+  $('#mBody').innerHTML = `<section class="card"><div class="card-h"><span class="eyebrow">Against the atlas</span><span class="aside" style="cursor:default">Median and best across the ${FDATA.models.length} mapped models</span></div><div class="tbl-wrap"><table class="dt" style="min-width:760px"><thead><tr><th>Capability</th><th>${esc(m.name)}</th><th>Atlas median</th><th>Best model</th><th>vs median</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
+/* ---------- FindingInspector: one drawer for both pages ---------- */
+function renderInspector(){
+  const o = inspectTarget(), el = $('#insp');
+  document.body.classList.toggle('inspecting', !!o);
+  el.classList.toggle('open', !!o);
+  el.setAttribute('aria-hidden', !o);
+  if (!o) return;
+  const m = FDATA.models[o.m], hc = heat(o.rate), t = typeOf(o), ev = o.ev, f = o.f;
+  const conc = ev.conc || [];
+  el.innerHTML = `<div class="insp-scroll">
+    <div class="insp-top"><div style="min-width:0"><h2 id="inspTitle">${capTitle(o.key)}</h2><button class="insp-model" data-model="${o.m}" title="Open ${esc(m.name)} findings">${logo(m.vendor, 14)}${esc(m.name)}</button></div><button class="icon-btn x" id="inspX" aria-label="Close inspector"><svg width="16" height="16" viewBox="0 0 18 18"><path d="M4 4l10 10M14 4L4 14"/></svg></button></div>
+    <div class="insp-tags"><span class="type ${t}">${TYPE_LABEL[t]}</span>${statusPill(o.c[7])}</div>
+    <div class="insp-rate" style="--hc:${hc}"><b>${Math.round(o.rate*100)}%</b><span>${fmt(o.c[0])} / ${fmt(o.c[1])} scored trials</span></div>
+    <div class="insp-bar" style="--hc:${hc}"><em style="width:${(o.rate*100).toFixed(1)}%"></em></div>
+    <section class="insp-sec"><span class="eyebrow">Summary</span><p>${esc(summary(o))}</p></section>
+    ${conc.length ? `<section class="insp-sec"><span class="eyebrow">${t === 'strength' || o.c[2] === 0 ? 'Hardest slices' : 'Where it fails'}</span>${conc.map(c => `<div class="kvr" style="--hc:${heat(c[4]/c[5])}"><span>${esc(concLabel(c))}</span><em>${pct(c[4], c[5])}%<small>${c[4]}/${c[5]}</small></em></div>`).join('')}</section>` : ''}
+    ${ev.kb && ev.kb.length ? `<section class="insp-sec"><span class="eyebrow">By query kind</span>${ev.kb.map(k => `<div class="kvr" style="--hc:${heat(k[2]/k[1])}"><span>${esc(k[0])}</span><em>${pct(k[2], k[1])}%<small>${k[2]}/${k[1]}</small></em></div>`).join('')}</section>` : ''}
+    <section class="insp-sec"><span class="eyebrow">Traps</span>${ev.traps && ev.traps.length ? ev.traps.map(x => `<div class="kvr" style="--hc:var(--text-2)"><span>${esc(x[0])}</span><em>${x[1]}</em></div>`).join('') : '<p class="dim">None recorded</p>'}</section>
+    <section class="insp-sec"><span class="eyebrow">Example failures</span>${ev.ex && ev.ex.length ? ev.ex.map(x => `<button class="exr" data-trialid="${x[0]}"><code>trial ${x[0].slice(0, 12)}</code>${esc(x[1])}</button>`).join('') : '<p class="dim">No failures recorded</p>'}</section>
+    <section class="insp-sec"><span class="eyebrow">Replication</span><p class="dim">${f ? {'not-replicated':'Not replicated on fresh seeds yet.', 'replicated':'Replicated on fresh seeds.', 'replication-incomplete':'Replication started but incomplete.', 'replication-disagrees':'Fresh-seed replication disagrees.'}[f.rep] : 'No finding to replicate.'} ${esc(f ? f.vd : '')}</p>${f && f.form ? `<div class="insp-form" id="inspForm">${f.form}</div>` : ''}<p class="dim" style="margin-top:10px"><a href="/findings?model=${encodeURIComponent(m.id)}">Documented and retracted findings for this model →</a></p></section>
+  </div>
+  <div class="insp-actions"><button class="btn primary" id="inspTrials">View all ${fmt(o.c[1])} trials →</button>${f && f.form ? `<button class="btn ghost" id="inspRep">Replicate on fresh seeds</button>` : ''}</div>`;
+}
+function closeInspector(){
+  if (!inspectTarget()) return;
+  if (R.view === 'findings') R.model = null;
+  R.key = null; R.trial = null;
+  writeHash(false); render();
+}
+function inspect(m, key){
+  if (R.view === 'model' && R.tab === 'trials') return go({tab:'capabilities', key, trial:null});
+  if (R.view === 'findings') R.model = m;
+  R.key = key; R.trial = null;
+  writeHash(false);
+  // update selection in place so scroll positions survive
+  document.querySelectorAll('.mxc.on, .dt tr.on, .prow.on').forEach(e => e.classList.remove('on'));
+  document.querySelectorAll(`[data-cell="${m}|${key}"]`).forEach(e => e.classList.add('on'));
+  document.querySelectorAll(`.prow[data-capf="${key}"]`).forEach(e => e.classList.add('on'));
+  renderInspector();
+  setTimeout(() => { const c = document.querySelector(`.mxc[data-cell="${m}|${key}"]`); if (c) c.scrollIntoView({block:'nearest', inline:'nearest', behavior:reduced ? 'auto' : 'smooth'}); }, 220);
+}
+
+/* ---------- events (delegated, so re-renders need no rebinding) ---------- */
+document.addEventListener('click', e => {
+  const t = e.target;
+  const model = t.closest('[data-model]');
+  if (model && !t.closest('#mSwitch')){ e.stopPropagation(); const mi = +model.dataset.model;
+    const keepKey = model.closest('#insp') ? R.key : null;
+    return go({view:'model', model:mi, tab:model.dataset.keepTab || (keepKey ? 'findings' : 'overview'), key:keepKey, trial:null}); }
+  const cell = t.closest('[data-cell]');
+  if (cell){ const [m, key] = cell.dataset.cell.split('|'); return inspect(+m, key); }
+  if (t.closest('#inspX')) return closeInspector();
+  if (t.closest('#inspTrials')){ const o = inspectTarget(); MV.verdict = 'scored'; MV.tpage = 1; MV.shown = TSTEP; MV.open = null; MV.tq = ''; return go({view:'model', model:o.m, tab:'trials', key:o.key, trial:null}); }
+  if (t.closest('#inspRep')){ const d = document.querySelector('#inspForm details'); if (d){ d.open = true; d.scrollIntoView({block:'nearest', behavior:reduced ? 'auto' : 'smooth'}); const k = d.querySelector('input[name=api_key]'); if (k) k.focus(); } return; }
+  const ex = t.closest('[data-trialid]');
+  if (ex){ const o = inspectTarget(); MV.verdict = 'scored'; MV.tq = ''; return go({view:'model', model:o.m, tab:'trials', key:o.key, trial:ex.dataset.trialid.slice(0, 12)}); }
+  const capf = t.closest('[data-capf]');
+  if (capf){ MV.cap = capf.dataset.capf; MV.result = 'all'; return go({tab:'findings', key:null}); }
+  const tab = t.closest('[data-tab]');
+  if (tab){ return go({tab:tab.dataset.tab, key:null, trial:null}); }
+  if (t.closest('[data-go="models"]')) return go({view:'model', model:null, tab:'overview', key:null, trial:null});
+  const gotoF = t.closest('[data-go="findings"]');
+  if (gotoF) return go({view:'findings', model:null, key:null});
+  const fv = t.closest('[data-fv]');
+  if (fv){ R.fv = fv.dataset.fv; R.model = null; R.key = null; writeHash(false); return render(); }
+  const fpg = t.closest('[data-fpg]');
+  if (fpg && !fpg.disabled){ FV.page = +fpg.dataset.fpg; return renderFindingsPage(); }
+  if (t.closest('[data-tall]')){ MV.shown = Infinity; return renderModelPage(); }
+  if (t.closest('[data-ttop]')){ $('#mBody').scrollIntoView({behavior:'smooth', block:'start'}); return; }
+  const tpg = t.closest('[data-tpg]');
+  if (tpg && !tpg.disabled){ MV.tpage = +tpg.dataset.tpg; MV.open = null; R.trial = null; writeHash(false); return renderModelPage(); }
+  const mres = t.closest('[data-mres]');
+  if (mres){ MV.result = mres.dataset.mres; return renderModelPage(); }
+  const tv = t.closest('[data-tv]');
+  if (tv){ MV.verdict = tv.dataset.tv; MV.tpage = 1; MV.shown = TSTEP; MV.open = null; R.trial = null; writeHash(false); return renderModelPage(); }
+  const tr = t.closest('[data-trial]');
+  if (tr){ MV.open = MV.open === tr.dataset.trial ? null : tr.dataset.trial; R.trial = MV.open ? MV.open.slice(0, 12) : null; writeHash(false); return renderModelPage(); }
+  // click outside the inspector closes it
+  if (inspectTarget() && !t.closest('#insp') && !t.closest('select, input, .vseg, .chips')) closeInspector();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && inspectTarget()){ e.stopImmediatePropagation(); closeInspector(); }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('tr[data-cell], tr[data-trial], tr[data-capf]')){ e.preventDefault(); e.target.click(); }
+}, true);
+document.addEventListener('change', e => {
+  const id = e.target.id;
+  if (id === 'fModel'){ FV.modelFilter = e.target.value; FV.page = 1; renderFindingsPage(); }
+  else if (id === 'fCap'){ FV.cap = e.target.value; FV.page = 1; renderFindingsPage(); }
+  else if (id === 'fResult'){ FV.result = e.target.value; FV.page = 1; renderFindingsPage(); }
+  else if (id === 'fStatus'){ FV.status = e.target.value; FV.page = 1; renderFindingsPage(); }
+  else if (id === 'mSwitch') go({view:'model', model:+e.target.value, key:null, trial:null});
+  else if (id === 'mCap'){ MV.cap = e.target.value; renderModelPage(); }
+  else if (id === 'tCap'){ MV.tpage = 1; MV.shown = TSTEP; MV.open = null; go({key:e.target.value === 'all' ? null : e.target.value, trial:null}); }
+});
+document.addEventListener('input', e => {
+  if (e.target.id === 'fQ'){ FV.q = e.target.value; FV.page = 1; renderAllFindings(); }
+  if (e.target.id === 'tQ'){ MV.tq = e.target.value; MV.tpage = 1; MV.shown = TSTEP; MV.open = null; const pos = e.target.selectionStart; renderModelPage(); const i = $('#tQ'); i.focus(); i.setSelectionRange(pos, pos); }
+});
+$('#fCopy').addEventListener('click', async () => {
+  const list = filteredFindings(), q = s => `"${String(s).replace(/"/g, '""')}"`;
+  const csv = ['finding,model,type,pass,scored,pass_rate,status,key_insight,claim'].concat(list.map(f => { const o = cellObj(f.m, f.key); return [q(capTitle(f.key)), q(f.model.id), f.kind, o.c[0], o.c[1], o.rate.toFixed(3), o.c[7], q(insight(o)), q(f.h)].join(','); })).join('\n');
+  try { await navigator.clipboard.writeText(csv); toast(`Copied ${list.length} findings as CSV`, 'EXPORT'); }
+  catch (err) { toast('Clipboard is blocked here. Try again from a browser tab', 'EXPORT'); }
+});
+addEventListener('resize', () => { if (R.view === 'findings') drawSky($('#fsky')); });
+
+/* real-model suggestions for the command bar when outside the map */
+function realSuggest(v){
+  return [
+    ...FDATA.models.filter(m => !v || m.id.toLowerCase().includes(v) || m.org.toLowerCase().includes(v)).map(m => ({k:'Model', label:m.name, vendor:m.vendor, color:'#9B9FA5', run:() => go({view:'model', model:m.i, tab:'overview', key:null, trial:null})})),
+    ...COLS.filter(c => !v || capTitle(c.key).toLowerCase().includes(v) || c.key.includes(v)).map(c => ({k:'Capability', label:capTitle(c.key), color:'#F5B26B', run:() => { FV.cap = c.key; FV.page = 1; go({view:'findings', fv:'table', model:null, key:null}); }})),
+  ].slice(0, 8);
+}
+
+/* header sky: stars and the limb of the atlas planet */
+function drawSky(cv){
+  if (!cv) return;
+  const w = cv.clientWidth, h = cv.clientHeight; if (!w || !h) return;
+  const pr = Math.min(2, devicePixelRatio || 1); cv.width = Math.round(w*pr); cv.height = Math.round(h*pr);
+  const g = cv.getContext('2d'); g.setTransform(pr,0,0,pr,0,0); g.clearRect(0,0,w,h);
+  const r = rng(5);
+  for (let i = 0; i < w*h/1700; i++){ g.globalAlpha = .08 + r()*.45; g.fillStyle = r() < .12 ? '#f3d2a8' : '#dfe7ee'; const s = r() < .93 ? .8 : 1.4; g.fillRect(r()*w, r()*h, s, s); }
+  g.globalAlpha = 1;
+  const narrowW = w < 900, cx = narrowW ? w*.8 : w*.62, R0 = narrowW ? h*1.1 : Math.min(w*.27, h*1.45), cy = h*.32 + R0;
+  let gr = g.createRadialGradient(cx - R0*.2, cy - R0*.9, R0*.1, cx, cy, R0);
+  gr.addColorStop(0, '#1d2226'); gr.addColorStop(.35, '#0e1418'); gr.addColorStop(1, '#070c10');
+  g.fillStyle = gr; g.beginPath(); g.arc(cx, cy, R0, 0, 6.283); g.fill();
+  g.save(); g.beginPath(); g.arc(cx, cy, R0, 0, 6.283); g.clip(); g.strokeStyle = 'rgba(180,200,215,.05)'; g.lineWidth = .8;
+  for (let k = -4; k <= 4; k++){ g.beginPath(); g.ellipse(cx, cy, Math.abs(k)*R0/4.5 + 1, R0, 0, 0, 6.283); g.stroke(); }
+  g.restore();
+  gr = g.createLinearGradient(cx - R0, 0, cx + R0, 0);
+  gr.addColorStop(0, 'rgba(245,178,107,0)'); gr.addColorStop(.35, 'rgba(245,178,107,.6)'); gr.addColorStop(.6, 'rgba(232,237,241,.35)'); gr.addColorStop(1, 'rgba(130,185,250,0)');
+  g.save(); g.strokeStyle = gr; g.lineWidth = 1.2; g.shadowColor = 'rgba(245,178,107,.5)'; g.shadowBlur = 14; g.beginPath(); g.arc(cx, cy, R0, Math.PI*1.08, Math.PI*1.92); g.stroke(); g.restore();
+  g.globalCompositeOperation = 'lighter';
+  [[1.3,'#F5B26B',7],[1.47,'#ffffff',4],[1.62,'#F5B26B',6],[1.8,'#ffffff',3.5]].forEach(([a, col, s]) => { const x = cx + Math.cos(a*Math.PI)*R0, y = cy + Math.sin(a*Math.PI)*R0; g.drawImage(sprite(col), x - s, y - s, s*2, s*2); });
+  g.globalCompositeOperation = 'source-over';
+}
+
+/* ================= boot ================= */
+try { GL = initGL(); } catch (err) { console.warn('WebGL orb unavailable, using 2D map', err); GL = null; document.getElementById('orb')?.remove(); }
+buildLabels(); renderSel(); renderFocus(); renderInsights(false); renderExTabs(); renderCards();
+let rt, rt2; const relayout = () => { clearTimeout(rt); clearTimeout(rt2); rt = setTimeout(layout, 80); rt2 = setTimeout(layout, 450); };
+addEventListener('resize', relayout);
+if (window.ResizeObserver){ const ro = new ResizeObserver(relayout); ro.observe(app); ro.observe(mapbox); }
+(document.fonts ? document.fonts.ready : Promise.resolve()).then(() => { layout(); requestAnimationFrame(frame); Object.assign(R, parseHash()); render(); });
+})();
+</script>
+</body>
+</html>

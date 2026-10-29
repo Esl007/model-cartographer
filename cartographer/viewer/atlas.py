@@ -58,6 +58,7 @@ from urllib.parse import urlencode
 
 from ..schedule.estimate import fit_logistic
 from ..store.store import ResultsStore
+from .globe_data import display_name
 
 # Only look at records from campaign runs (adaptive scheduler runs), which
 # is what run_id's "camp-" prefix denotes across this codebase (see
@@ -257,14 +258,29 @@ class _Pane:
 
 
 def _campaign_records(store: ResultsStore) -> list:
-    from ..store.store import _row_to_record
+    """Campaign trials that count as evidence: the same primary set the Map
+    and Findings use (no resample checks, replications, invalidated runs or
+    renderer rejections), minus records that never stamped a query kind."""
+    from .findings import _primary_records
 
-    cur = store._conn.execute("SELECT * FROM experiments")
     return [
         r
-        for r in (_row_to_record(row) for row in cur.fetchall())
-        if r.run_id.startswith(_CAMPAIGN_RUN_PREFIX)
+        for r in _primary_records(store)
+        if r.run_id.startswith(_CAMPAIGN_RUN_PREFIX) and _query_kind_of(r) != "unknown"
     ]
+
+
+_KIND_LABEL = {"state": "State", "order": "Order", "belief": "Belief", "adversarial_belief": "Adversarial belief",
+               "tool_plan": "Tool plan", "interactive": "Interactive", "code_trace": "Code trace",
+               "code_repair": "Code repair", "code_write": "Code writing", "repo_fix": "Repository fix"}
+
+
+def _kind_label(kind: str) -> str:
+    return _KIND_LABEL.get(kind, kind.replace("_", " ").capitalize())
+
+
+def _dim_label(dim: str) -> str:
+    return dim.replace("_", " ")
 
 
 def _menu(records: list) -> dict[str, dict[str, int]]:
@@ -452,7 +468,7 @@ def _heatmap_svg(pane: _Pane) -> str:
     parts.append(
         f'<text x="{_LABEL_W}" y="12" font-size="9.5" fill="{_INK_MUTED}" '
         f'font-family="monospace" letter-spacing="0.06em">'
-        f'{html.escape(pane.dim.upper())} → HARDER</text>'
+        f'{html.escape(_dim_label(pane.dim).upper())} → HARDER</text>'
     )
 
     for r_i, model in enumerate(pane.models):
@@ -467,7 +483,7 @@ def _heatmap_svg(pane: _Pane) -> str:
         parts.append(
             f'<text x="0" y="{y + _CELL_H / 2 - 2}" font-size="11.5" fill="{label_color}" '
             f'font-family="monospace" font-weight="{label_weight}">'
-            f"{html.escape(model[:26])}</text>"
+            f"{html.escape(display_name(model)[:26])}</text>"
         )
         if row_rate is not None:
             parts.append(
@@ -585,7 +601,7 @@ def _curve_svg(pane: _Pane) -> str:
     parts.append(
         f'<text x="{_CURVE_M_L + plot_w / 2:.1f}" y="{_CURVE_H - 8}" font-size="9.5" '
         f'fill="{_INK_MUTED}" text-anchor="middle" font-family="monospace" '
-        f'letter-spacing="0.06em">{html.escape(pane.dim.upper())}</text>'
+        f'letter-spacing="0.06em">{html.escape(_dim_label(pane.dim).upper())}</text>'
     )
 
     neutral_i = 0
@@ -640,7 +656,7 @@ def _curve_svg(pane: _Pane) -> str:
         parts.append(
             f'<text x="{sx(last_c) + 9:.1f}" y="{sy(last_rate) + 3.5:.1f}" font-size="10" '
             f'fill="{color}" font-family="monospace" '
-            f'font-weight="{"650" if is_focal else "400"}">{html.escape(model[:17])}</text>'
+            f'font-weight="{"650" if is_focal else "400"}">{html.escape(display_name(model)[:17])}</text>'
         )
 
         frac = _bucket_fraction(pane.buckets, pane.fits[model]) if model in pane.fits else None
@@ -685,7 +701,7 @@ def _legend_html(pane: _Pane) -> str:
             f'<button type="button" class="legend-toggle" aria-pressed="true" '
             f'data-toggle-model="{html.escape(model)}">'
             f'<span class="swatch" style="background:{swatch}"></span>'
-            f"{html.escape(model)}</button>"
+            f"{html.escape(display_name(model))}</button>"
         )
     return f'<div class="legend js-only">{"".join(items)}</div>'
 
@@ -759,15 +775,15 @@ def atlas_html(store: ResultsStore, kind: str | None = None, dim: str | None = N
     pane = panes.get((sel_kind, sel_dim))
 
     kind_options = [
-        (k, k, sum(dims.values())) for k, dims in sorted(menu.items())
+        (k, _kind_label(k), sum(dims.values())) for k, dims in sorted(menu.items())
     ]
     dim_options = [
-        (d, d, n) for d, n in sorted(menu.get(sel_kind, {}).items(), key=lambda kv: (-kv[1], kv[0]))
+        (d, _dim_label(d), n) for d, n in sorted(menu.get(sel_kind, {}).items(), key=lambda kv: (-kv[1], kv[0]))
     ]
     controls = (
         '<div class="control-row">'
         + _selector_html("Query kind", kind_options, sel_kind, "kind", ("dim", sel_dim))
-        + _selector_html("Dimension", dim_options, sel_dim, "dim", ("kind", sel_kind))
+        + _selector_html("Difficulty dial", dim_options, sel_dim, "dim", ("kind", sel_kind))
         + "</div>"
     )
 
@@ -817,15 +833,15 @@ def atlas_html(store: ResultsStore, kind: str | None = None, dim: str | None = N
         focal = _focal_model(pane)
         if focal:
             headline = (
-                f"{html.escape(focal)} crosses its fitted frontier first, at "
-                f"{html.escape(pane.dim)} = {_fmt_num(pane.fits[focal])}."
+                f"{html.escape(display_name(focal))} breaks first: its pass rate crosses 50% at "
+                f"{html.escape(_dim_label(pane.dim))} = {_fmt_num(pane.fits[focal])}."
             )
         else:
             headline = "No model crosses a fitted frontier on this dimension — nothing broke here."
         n_cells = len(pane.cells)
         pane_html = (
             '<div class="card instrument"><div class="card-head">'
-            f'<span class="card-title">Capability map &middot; {html.escape(pane.kind)} / {html.escape(pane.dim)}</span>'
+            f'<span class="card-title">Pass rate by difficulty &middot; {html.escape(_kind_label(pane.kind))} / {html.escape(_dim_label(pane.dim))}</span>'
             f'<span class="card-meta">{len(pane.models)} models &times; {len(pane.buckets)} buckets '
             f"&middot; {pane.n_records:,} trials</span>"
             '</div><div class="card-body">'
@@ -855,7 +871,7 @@ def atlas_html(store: ResultsStore, kind: str | None = None, dim: str | None = N
         sub = "{0}/{1}".format(agg["pass"], agg["scored"])
         table_rows.append(
             "<tr>"
-            f'<td class="mono">{html.escape(model)}</td>'
+            f'<td title="{html.escape(model)}">{html.escape(display_name(model))}</td>'
             f'<td>{_chip_link(kind_name, sel_dim)}</td>'
             f'<td class="num">{_rate_bar(rate, sub=sub, decimals=1)}</td>'
             f'<td class="num">{agg["n"]}</td>'

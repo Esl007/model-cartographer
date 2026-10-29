@@ -22,6 +22,7 @@ confirmation and replication are not in `FrontierRow`, so they always read
 from __future__ import annotations
 
 import html
+import re
 from collections import Counter
 from urllib.parse import quote
 
@@ -38,6 +39,7 @@ from ..report.frontier import (
     frontier_summaries,
 )
 from .findings import _HEAT_STEPS, heat_class
+from .globe_data import display_name
 
 _SPEC_BY_KEY = {s.key: s for s in SPECS}
 _PROVINCES = list(dict.fromkeys(s.province for s in SPECS))
@@ -81,6 +83,11 @@ _CSS = """
 .fm-verdict:first-child { border-top: 0; }
 .fm-verdict a { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
 .fm-verdict-text { color: var(--ink-secondary); }
+.fm-vline { display: block; margin: 0 0 4px; line-height: 1.5; }
+.fm-vk { font-weight: 500; margin-right: 4px; }
+.fm-vk.breaks { color: #D95563; }
+.fm-vk.slips { color: #D3A957; }
+.fm-vrest { color: var(--ink-tertiary, var(--ink-secondary)); }
 .fm-verdict.is-selected { background: rgba(255,255,255,0.04); box-shadow: inset 2px 0 0 var(--ink); }
 .fm-verdict.is-selected .fm-verdict-text { color: var(--ink); }
 
@@ -238,8 +245,8 @@ def _q(value: str) -> str:
 
 def _map_href(model: str | None = None, compare: bool = False) -> str:
     if compare:
-        return "/?compare=1"
-    return f"/?model={_q(model)}" if model else "/"
+        return "/capability-map?compare=1"
+    return f"/capability-map?model={_q(model)}" if model else "/capability-map"
 
 
 def _frontier_href(model: str, key: str) -> str:
@@ -270,6 +277,31 @@ def _verdict_text(mf: ModelFrontier) -> str:
     prefix = f"{mf.name}: "
     text = mf.verdict[len(prefix):] if mf.verdict.startswith(prefix) else mf.verdict
     return text[:1].upper() + text[1:]
+
+
+def _verdict_html(text: str) -> str:
+    """The verdict sentence ("Breaks on a; breaks on b; slips on c. Holds on
+    n of m capabilities tested.") as three short labelled lines."""
+    groups: dict[str, list[str]] = {"breaks": [], "slips": []}
+    rest: list[str] = []
+    for sentence in [x.strip() for x in re.split(r"\.\s+(?=[A-Z])", text.strip()) if x.strip()]:
+        for part in [x.strip().rstrip(".") for x in sentence.split(";") if x.strip()]:
+            low = part.lower()
+            for key in groups:
+                if low.startswith(key + " on "):
+                    groups[key].append(part[len(key) + 4:])
+                    break
+            else:
+                rest.append(part)
+    if not any(groups.values()):
+        return _e(text)
+    lines = [
+        f'<span class="fm-vline"><b class="fm-vk {key}">{label} ({len(groups[key])})</b> '
+        + " &middot; ".join(_e(x) for x in groups[key]) + "</span>"
+        for key, label in (("breaks", "Breaks"), ("slips", "Slips")) if groups[key]
+    ]
+    lines += [f'<span class="fm-vline fm-vrest">{_e(x)}.</span>' for x in rest]
+    return "".join(lines)
 
 
 def _status_chip(status: str) -> str:
@@ -467,7 +499,7 @@ def _compare_body(summaries: list[ModelFrontier]) -> str:
                 lines.append(
                     f'<a class="fm-cmp-row{" is-untested" if r.status == "NOT TESTED" else ""}" '
                     f'href="{_e(_frontier_href(mf.model, r.key))}" data-model="{_e(mf.model)}" data-cap="{_e(r.key)}">'
-                    f'<div class="fm-cmp-model">{_e(mf.name)}</div>'
+                    f'<div class="fm-cmp-model">{_e(display_name(mf.model))}</div>'
                     f"<div>{_status_chip(r.status)}</div>"
                     f'<div class="fm-cmp-main"><span class="fm-cmp-text">{_e(r.headline)}{_grade(r)}</span>'
                     f'{_where_span(where)}{strip}</div></a>'
@@ -497,7 +529,7 @@ def capability_map_html(store, model: str | None = None, compare: bool = False) 
             "No trials in the store yet, so there is nothing to map.",
             '<p class="meta"><a href="/launch">Launch a campaign &rarr;</a></p>',
         )
-        return _shell("Capability map", "capmap", body, trial_count=trials)
+        return _shell("Breaking points", "capmap", body, trial_count=trials)
 
     selected = _resolve(summaries, model)
     unknown = bool(model) and selected is None and not compare
@@ -506,12 +538,12 @@ def capability_map_html(store, model: str | None = None, compare: bool = False) 
 
     verdicts = "".join(
         f'<li class="fm-verdict{" is-selected" if (mf is selected and not compare and not unknown) else ""}">'
-        f'<a href="{_e(_map_href(mf.model))}">{_e(mf.name)}</a>'
-        f'<span class="fm-verdict-text">{_e(_verdict_text(mf))}</span></li>'
+        f'<a href="{_e(_map_href(mf.model))}">{_e(display_name(mf.model))}</a>'
+        f'<span class="fm-verdict-text">{_verdict_html(_verdict_text(mf))}</span></li>'
         for mf in summaries
     )
     head = (
-        '<div class="page-head"><div class="page-head-main"><h1>Capability map</h1>'
+        '<div class="page-head"><div class="page-head-main"><h1>Breaking points</h1>'
         '<p class="subtitle fm-lede">Each row is one capability, scored against a deterministic simulation '
         "that knows the right answer. Where a capability has a difficulty dial, the dial is turned up until "
         "the model stops passing, and the point where it stopped is reported in the task&rsquo;s own units.</p>"
@@ -521,16 +553,16 @@ def capability_map_html(store, model: str | None = None, compare: bool = False) 
     )
     tabs = "".join(
         f'<a class="model-tab{" active" if (mf is selected and not compare and not unknown) else ""}" '
-        f'href="{_e(_map_href(mf.model))}">{_e(mf.name)}</a>'
+        f'href="{_e(_map_href(mf.model))}">{_e(display_name(mf.model))}</a>'
         for mf in summaries
     )
-    one_href = _map_href(selected.model) if selected else "/"
+    one_href = _map_href(selected.model) if selected else "/capability-map"
     controls = (
         '<div class="fm-controls">'
         f'<nav class="model-tabs" aria-label="Model">{tabs}</nav>'
         '<span class="seg-control" role="group" aria-label="View">'
         f'<a class="seg-item{"" if compare else " active"}" href="{_e(one_href)}">One model</a>'
-        f'<a class="seg-item{" active" if compare else ""}" href="/?compare=1">Compare all models</a>'
+        f'<a class="seg-item{" active" if compare else ""}" href="/capability-map?compare=1">Compare all models</a>'
         "</span></div>"
     )
     if compare:
@@ -541,7 +573,7 @@ def capability_map_html(store, model: str | None = None, compare: bool = False) 
     else:
         main = _single_model_body(selected)
     body = _css() + head + controls + _key_html() + main
-    return _shell("Capability map", "capmap", body, trial_count=trials)
+    return _shell("Breaking points", "capmap", body, trial_count=trials)
 
 
 # ---------------------------------------------------------------------------
@@ -824,7 +856,7 @@ def frontier_html(store, model: str | None = None, cap: str | None = None) -> st
     from .serve import _shell, _trial_count
 
     trials = _trial_count(store)
-    back = '<p class="meta"><a href="/">Back to the capability map &rarr;</a></p>'
+    back = '<p class="meta"><a href="/capability-map">Back to the capability map &rarr;</a></p>'
     summaries = frontier_summaries(store)
     mf = _resolve(summaries, model)
     spec = _SPEC_BY_KEY.get(cap or "")
@@ -838,13 +870,13 @@ def frontier_html(store, model: str | None = None, cap: str | None = None) -> st
         return _shell("Capability not found", "capmap", body, trial_count=trials)
 
     row = next(r for r in mf.rows if r.key == spec.key)
-    crumb = (f'<a href="/">Capability map</a><span class="sep">/</span>'
-             f'<a href="{_e(_map_href(mf.model))}">{_e(mf.name)}</a><span class="sep">/</span>{_e(row.label)}')
+    crumb = (f'<a href="/capability-map">Capability map</a><span class="sep">/</span>'
+             f'<a href="{_e(_map_href(mf.model))}">{_e(display_name(mf.model))}</a><span class="sep">/</span>{_e(row.label)}')
     where = _where(row)
     head = (
         '<div class="page-head"><div class="page-head-main">'
         f'<div class="eyebrow">{_e(row.province)}</div><h1>{_e(row.label)}</h1>'
-        f'<p class="subtitle" style="margin:0">{_e(mf.name)}</p></div></div>'
+        f'<p class="subtitle" style="margin:0">{_e(display_name(mf.model))}</p></div></div>'
         '<section class="panel fm-finding" aria-label="Finding">'
         f'<div class="fm-finding-line"><span>Finding:</span>{_status_chip(row.status)}'
         + (f'<span title="Confidence grade: A strong, B moderate, C thin">&middot; grade {_e(row.confidence)}</span>'

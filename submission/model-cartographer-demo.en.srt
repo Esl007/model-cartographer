@@ -1,0 +1,87 @@
+1
+00:00:04,302 --> 00:00:06,349
+Benchmarks give a model one score.
+
+2
+00:00:06,399 --> 00:00:09,495
+Model Cartographer finds where a model breaks, and why.
+
+3
+00:00:09,545 --> 00:00:19,632
+Each globe is one model, and each flame is its pass rate in one province of skill, from tracking a story to fixing a bug in a real repository.
+
+4
+00:00:21,882 --> 00:00:27,727
+Every task is generated from a simulated world, so the right answer comes from running that world.
+
+5
+00:00:27,777 --> 00:00:29,461
+There is no LLM judge.
+
+6
+00:00:29,511 --> 00:00:32,582
+Difficulty dials go up until the model stops passing.
+
+7
+00:00:34,831 --> 00:00:39,698
+NVIDIA's open Nemotron 3 models are both the subjects and the engine.
+
+8
+00:00:39,748 --> 00:00:49,941
+Nano, Super and Ultra ran forty-five hundred trials through Nebius Token Factory for under six dollars, on identical tasks, so their breaking points compare directly.
+
+9
+00:00:52,194 --> 00:00:56,488
+Breaking points reports each result in the task's own units.
+
+10
+00:00:56,538 --> 00:01:01,265
+Nemotron 3 Super breaks at twenty-four-call plans with look-alike tool names.
+
+11
+00:01:01,315 --> 00:01:03,003
+Nano breaks at thirteen.
+
+12
+00:01:03,053 --> 00:01:05,174
+Ultra only slips, at twenty-five.
+
+13
+00:01:07,424 --> 00:01:11,589
+Inside the app, Nemotron does the analysis live, through Token Factory.
+
+14
+00:01:11,639 --> 00:01:12,739
+Ask a question.
+
+15
+00:01:12,789 --> 00:01:17,720
+Nemotron 3 Nano, with thinking turned off, routes it in about a second.
+
+16
+00:01:17,770 --> 00:01:21,551
+The app pulls the matching facts from the results store.
+
+17
+00:01:21,601 --> 00:01:29,214
+Nemotron 3 Super answers from those facts only, citing each one, and a deterministic audit checks every number it used.
+
+18
+00:01:31,466 --> 00:01:37,663
+Findings link every weakness to the trials behind it, and each trial to its full transcript.
+
+19
+00:01:37,713 --> 00:01:48,596
+On a failed trial, Nemotron 3 Ultra, the reasoning tier, explains the mistake from the prompt and the verified answer, with the verifier's own classification shown beside it.
+
+20
+00:01:50,990 --> 00:01:57,970
+Nemotron 3 Super also writes the capability report, and every figure it quotes is audited against the store.
+
+21
+00:02:00,224 --> 00:02:06,853
+Model Cartographer is open source under the MIT license, and it's live at model-cartographer dot vercel dot app.
+
+22
+00:02:06,903 --> 00:02:10,564
+Find out where your model breaks, before your users do.

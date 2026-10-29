@@ -40,6 +40,7 @@ denominator, one definition, reused -- not reimplemented.
 from __future__ import annotations
 
 import html
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -151,6 +152,13 @@ def short_model_name(model_name: str) -> str:
         if name.startswith(prefix):
             return name[len(prefix):]
     return name
+
+
+def _display(model_name: str) -> str:
+    """The Map's display name for a model ("Gemma 4 31B QAT"); labels only, never a key."""
+    from .globe_data import display_name  # deferred: globe_data imports this module
+
+    return display_name(model_name)
 
 
 def model_slug(model_name: str) -> str:
@@ -903,8 +911,8 @@ def capability_trials_html(store: ResultsStore, params: dict) -> str:
         '<div class="page-head"><div class="page-head-main">'
         f"<h1>Trials &middot; {html.escape(cell.label)}</h1>"
         f'<p class="subtitle">Every trial behind one square of the capability map: '
-        f"{html.escape(short_model_name(model))} on {html.escape(cell.label)}.</p>"
-        f'<p class="meta">{_chip(short_model_name(model), "chip-muted")} '
+        f"{html.escape(_display(model))} on {html.escape(cell.label)}.</p>"
+        f'<p class="meta">{_chip(_display(model), "chip-muted")} '
         f'{_chip(cell.label, "chip-muted")} '
         f'{_chip(cell.verification, "chip-muted")}</p>'
         "</div><div class=\"page-head-actions\">"
@@ -1234,7 +1242,7 @@ def _capability_map_html(data: FindingsData, selected: str | None) -> str:
             f'<tr class="cap-row{" cap-row-selected" if selected_row else ""}" '
             f'data-model="{html.escape(mf.model)}">'
             f'<th class="cap-model"><a href="/findings?model={_q(mf.model)}">'
-            f'{html.escape(short_model_name(mf.model))}</a>'
+            f'{html.escape(_display(mf.model))}</a>'
             f'<span class="cap-model-meta">{overall} overall &middot; {mf.n_trials:,} trials</span></th>'
             f"{cells}</tr>"
         )
@@ -1303,9 +1311,9 @@ def _comparison_html(data: FindingsData) -> str:
             rows.append(
                 "<tr>"
                 f"<td>{html.escape(label)}</td>"
-                f'<td class="mono">{html.escape(short_model_name(best_model))}</td>'
+                f'<td>{html.escape(_display(best_model))}</td>'
                 f'<td class="num">{(best.pass_rate or 0) * 100:.0f}% <span class="meta">n={best.n_scored}</span></td>'
-                f'<td class="mono">{html.escape(short_model_name(worst_model))}</td>'
+                f'<td>{html.escape(_display(worst_model))}</td>'
                 f'<td class="num">{(worst.pass_rate or 0) * 100:.0f}% <span class="meta">n={worst.n_scored}</span></td>'
                 f'<td class="num">{spread * 100:.0f} pts</td>'
                 "</tr>"
@@ -1332,6 +1340,8 @@ def _comparison_html(data: FindingsData) -> str:
 
 
 def _replicate_form_html(finding: DerivedFinding, store: ResultsStore) -> str:
+    if os.environ.get("CARTOGRAPHER_HOSTED") == "1":
+        return ""  # public read-only copy: no billed re-runs
     cell = finding.cell
     config = finding.failing_config or dict(BASELINE_CONFIG)
     query_kind = cell.key if cell.axis == "kind" else (
@@ -1512,7 +1522,7 @@ def _model_section_html(mf: ModelFindings, store: ResultsStore, visible: bool) -
     rate = mf.pass_rate
     return f"""
     <section class="model-findings" data-model="{html.escape(mf.model)}"{style}>
-      <h2>{html.escape(short_model_name(mf.model))}
+      <h2>{html.escape(_display(mf.model))}
         <span class="meta">&middot; {mf.n_trials:,} trials &middot;
         {(f"{rate * 100:.0f}% overall" if rate is not None else "no scored trials")}
         &middot; ${mf.cost_usd:.4f} spent</span></h2>
@@ -1579,7 +1589,7 @@ def _switcher_html(data: FindingsData, selected: str | None) -> str:
         tabs.append(
             f'<a class="model-tab{active}" data-model-tab="{html.escape(mf.model)}" '
             f'href="/findings?model={_q(mf.model)}">'
-            f"{html.escape(short_model_name(mf.model))}</a>"
+            f"{html.escape(_display(mf.model))}</a>"
         )
     return f'<div class="model-tabs" role="tablist">{"".join(tabs)}</div>'
 

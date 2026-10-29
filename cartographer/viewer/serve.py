@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import html
 import math
+import os
 import re
 import sys
 import threading
@@ -25,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from ..report.verdict import run_verdict
+from ..report.verdict import child_stages, run_verdict
 from ..store.schema import ExperimentRecord
 from ..store.store import ResultsStore
 from . import launch as launch_mod
@@ -33,8 +34,35 @@ from .atlas import atlas_html, trials_html
 from .coverage import coverage_html
 from .findings import capability_trials_html, findings_html
 from .frontier_page import capability_map_html, frontier_html
+from .globe_data import display_name, payload_json, search_json
+
+# The globe Map (`/`) is one static page that draws itself from
+# `/api/map.json` (see `globe_data.py`). Read per request so an edited page
+# shows on reload without restarting the viewer.
+_MAP_PAGE = Path(__file__).resolve().parent / "static" / "map.html"
 
 _DEFAULT_DB_PATH = "results/campaign.sqlite"
+
+# Hosted (public, read-only) mode: the Vercel deployment sets this. Nothing
+# that writes to the store or spends API credit is offered there; campaigns
+# run from a local install and the store is redeployed.
+HOSTED = os.environ.get("CARTOGRAPHER_HOSTED") == "1"
+
+_API_CACHE = "public, max-age=0, s-maxage=86400, stale-while-revalidate=604800" if HOSTED else "no-store"
+
+_HOSTED_LAUNCH_HTML = (
+    '<div class="page-head"><div class="page-head-main"><h1>Launch a campaign</h1>'
+    '<p class="subtitle">This is the public, read-only copy of Model Cartographer. Campaigns '
+    "run for 30 to 90 minutes against Nebius Token Factory (Nemotron Nano, Super and Ultra) and "
+    "write to the results store, so they launch from a local install.</p></div></div>"
+    '<div class="card"><div class="card-head"><span class="card-title">Run it yourself</span></div>'
+    '<div class="card-body"><ol class="prose-list">'
+    "<li>Clone the repo and put a Nebius key in <span class=\"mono\">env/</span>.</li>"
+    "<li>Start the viewer: <span class=\"mono\">python3 -m cartographer.viewer.serve results/campaign.sqlite</span></li>"
+    "<li>Open Launch there, pick a provider and model, and start the <span class=\"mono\">full_map</span> preset.</li>"
+    "</ol><p class=\"prose-p\">Everything you see on this site (Map, Findings, Breaking points, Atlas, Runs, "
+    "every trial transcript) comes from that same store.</p></div></div>"
+)
 _DEFAULT_PORT = 8788
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -52,25 +80,7 @@ _KNOWN_RUN_BUDGETS = {
 # Shared shell: design system + nav.
 # ---------------------------------------------------------------------------
 
-_NAV_GROUPS = [
-    ("Results", [
-        ("capmap", "/", "Capability map"),
-        ("overview", "/overview", "Overview"),
-        ("findings", "/findings", "Findings"),
-        ("report", "/report", "Report"),
-        ("runs", "/runs", "Runs"),
-    ]),
-    # "Act" renamed to "Explore". A second group with the same label would
-    # print "Explore" twice, so its items join the existing Explore group.
-    ("Explore", [
-        ("atlas", "/atlas", "Atlas"),
-        ("coverage", "/coverage", "Coverage"),
-        ("launch", "/launch", "Launch"),
-        ("live", "/live", "Live"),
-    ]),
-]
-# Flat lookup kept for call sites that only need "is this key active".
-_NAV_ITEMS = [item for _, items in _NAV_GROUPS for item in items]
+# Nav lives with the shell below (_NAV_MAIN / _NAV_BOTTOM).
 
 _CSS = """
 /* ---------------------------------------------------------------------
@@ -1171,6 +1181,224 @@ a.cap-block:focus-visible { outline-color: var(--ink); }
 .databar { background: rgba(255,255,255,0.07); border-radius: 2px; }
 .databar.full .databar-fill { background: var(--ink-secondary); }
 .databar-num { font-family: var(--mono); }
+
+/* =====================================================================
+   21. MAP SYSTEM ALIGNMENT -- the globe Map (`/`, static/map.html) sets the
+   app's palette and type: cool graphite surfaces, Google Sans Flex for the
+   interface, Google Sans Code for ids and numbers. These tokens bring every
+   older page onto it, so moving between the Map and these pages does not
+   change the look. Layouts, the heat ramp and the orange "broke" tag stay.
+   ===================================================================== */
+:root {
+  --surface-instrument-0: #070C10;
+  --surface-instrument-1: #0B1218;
+  --surface-instrument-2: #0F171E;
+  --well: #091017;
+  --line: rgba(180,200,215,0.10);
+  --line-strong: rgba(180,200,215,0.16);
+  --ink: #E8EDF1; --ink-secondary: #A9B4BE; --ink-muted: #8B98A4;
+  --ground-truth: #E8EDF1;
+  --accent: var(--ink);
+  --glass: rgba(11,18,24,0.72);
+  --module: rgba(7,12,16,0.6);
+  --display: "Google Sans Flex", "Google Sans", "Geist", -apple-system, "Segoe UI", sans-serif;
+  --sans: "Google Sans Flex", "Google Sans", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "Google Sans Code", "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+/* =====================================================================
+   22. MAP FRAME -- every server-rendered page now sits in the globe Map's
+   own frame (static/map.html): its sidebar, its command bar, its panels,
+   readouts and tables. Values are copied from the Map, not approximated,
+   so moving between `/` and any page here changes content, never chrome.
+   ===================================================================== */
+:root {
+  --void-950:#070C10; --void-900:#091017;
+  --surface-900:#0B1218; --surface-800:#0F171E; --surface-700:#141E26;
+  --panel: rgba(11,18,24,.86);
+  --line-subtle: rgba(180,200,215,.10); --line-visible: rgba(180,200,215,.16);
+  --text-1:#E8EDF1; --text-2:#8B98A4; --text-3:#65727D;
+  --lum:#F5B26B;
+  --f-ui: 'Google Sans Flex', 'Google Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --f-mono: 'Google Sans Code', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --ink-secondary: #A9B4BE; --ink-muted: #8B98A4;
+}
+html, body { height: auto; }
+body.mc { margin: 0; background: var(--void-950); color: var(--text-1); font: 400 13px/1.5 var(--f-ui); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+body.mc::before {
+  content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none; background:
+    radial-gradient(900px 520px at 78% -8%, rgba(127,178,229,.07), transparent 62%),
+    radial-gradient(760px 520px at 8% 108%, rgba(232,163,92,.06), transparent 60%);
+  -webkit-mask-image: none; mask-image: none; opacity: 1;
+}
+body.mc ::selection { background: rgba(245,178,107,.28); }
+body.mc a { color: var(--text-1); text-decoration-color: var(--line-visible); text-underline-offset: 3px; }
+body.mc a:hover { color: var(--lum); }
+
+/* frame */
+body.mc .app-shell { position: relative; z-index: 1; display: grid; grid-template-columns: 200px minmax(0,1fr); min-height: 100vh; }
+body.mc .side { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: 22px 0 18px;
+  background: linear-gradient(90deg, rgba(7,9,11,.94), rgba(7,9,11,.82)); border-right: 1px solid var(--line-subtle); }
+body.mc .brand { display: flex; align-items: center; gap: 14px; padding: 0 20px 34px; text-decoration: none; color: var(--text-1); }
+body.mc .brand svg { flex: none; }
+body.mc .brand-name { font: 500 10.5px/1.75 var(--f-ui); letter-spacing: .42em; color: var(--text-1); }
+body.mc .nav { display: flex; flex-direction: column; gap: 4px; }
+body.mc .nav-bottom { margin-top: auto; padding-top: 24px; }
+body.mc .nav-item { position: relative; display: flex; align-items: center; gap: 14px; height: 44px; padding: 0 22px; color: var(--text-2);
+  font-size: 12.5px; letter-spacing: .01em; text-decoration: none; transition: color .2s, background .2s; }
+body.mc .nav-item svg { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.25; opacity: .85; }
+body.mc .nav-item:hover { color: var(--text-1); background: rgba(255,255,255,.025); }
+body.mc .nav-item.on { color: var(--text-1); background: linear-gradient(90deg, rgba(245,178,107,.10), rgba(255,255,255,.02) 70%, transparent); }
+body.mc .nav-item.on::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px; border-radius: 2px; background: var(--lum); box-shadow: 0 0 10px 1px rgba(245,178,107,.6); }
+body.mc .nav-item.on svg { color: var(--lum); opacity: 1; }
+
+body.mc .shell-col { min-width: 0; display: flex; flex-direction: column; }
+body.mc .topbar { display: flex; align-items: center; gap: 14px; height: 76px; padding: 0 18px 0 40px; }
+body.mc .search { position: relative; flex: 1 1 auto; max-width: 650px; min-width: 0; }
+body.mc .search-field { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 8px 0 14px; border: 1px solid var(--line-visible); border-radius: 8px; background: rgba(11,14,17,.78); }
+body.mc .search-field svg { flex: none; display: block; width: 16px; height: 16px; stroke: var(--text-2); fill: none; stroke-width: 1.4; }
+body.mc .search-field input { flex: 1; min-width: 0; padding: 0; height: auto; text-overflow: ellipsis; background: none; border: 0; outline: 0; box-shadow: none; color: var(--text-1); font: 400 13px var(--f-ui); }
+body.mc .search-field input::placeholder { color: var(--text-3); }
+body.mc .search-field:focus-within { border-color: rgba(255,255,255,.24); }
+body.mc kbd { font: 500 10.5px var(--f-ui); color: var(--text-2); padding: 3px 6px; border: 1px solid var(--line-subtle); border-radius: 4px; background: var(--surface-800); white-space: nowrap; }
+body.mc .suggest { position: absolute; left: 0; right: 0; top: 46px; z-index: 40; padding: 6px; border: 1px solid var(--line-visible); border-radius: 8px; background: var(--surface-900); box-shadow: 0 18px 40px rgba(0,0,0,.5); }
+body.mc .suggest a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 5px; color: var(--text-2); font-size: 12.5px; text-decoration: none; }
+body.mc .suggest a:hover, body.mc .suggest a.kb { background: var(--surface-700); color: var(--text-1); }
+body.mc .suggest .kind { margin-left: auto; font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--text-3); }
+body.mc .suggest .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--c); }
+body.mc .top-right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+body.mc .epoch { display: flex; align-items: center; height: 38px; border: 1px solid var(--line-subtle); border-radius: 8px; background: rgba(11,14,17,.7); }
+body.mc .epoch .ep { display: flex; align-items: center; gap: 8px; height: 100%; padding: 0 12px; font-size: 12px; color: var(--text-1); white-space: nowrap; text-decoration: none; }
+body.mc .epoch .ep + .ep { border-left: 1px solid var(--line-subtle); }
+body.mc .epoch a.ep:hover { color: var(--lum); }
+body.mc .epoch svg { width: 14px; height: 14px; stroke: var(--text-2); fill: none; stroke-width: 1.4; }
+
+body.mc main.shell-main { flex: 1; width: 100%; max-width: 1480px; margin: 0; padding: 6px 40px 64px; min-width: 0; background: none; border: 0; box-shadow: none; }
+body.mc .crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 4px 0 6px; font-size: 12px; color: var(--text-3); }
+body.mc .crumb p, body.mc .crumb .breadcrumb { margin: 0; font: inherit; color: inherit; letter-spacing: 0; text-transform: none; }
+body.mc .crumb a { color: var(--text-2); text-decoration: none; }
+body.mc .crumb a:hover { color: var(--text-1); }
+body.mc .crumb .sep { color: var(--text-3); margin: 0 6px; }
+
+/* page header: the Map hero's voice -- eyebrow-quiet, wide-tracked title */
+body.mc .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px 32px; flex-wrap: wrap; margin: 10px 0 26px; padding: 0; border: 0; background: none; }
+body.mc .page-head-main { min-width: 0; max-width: 820px; }
+body.mc h1 { margin: 0 0 10px; font: 300 clamp(22px, 2.3vw, 30px)/1.15 var(--f-ui); letter-spacing: .2em; text-transform: uppercase; color: var(--text-1); overflow-wrap: anywhere; }
+body.mc h1.id, body.mc h1 .mono, body.mc h1 code { font-family: var(--f-mono); letter-spacing: -.01em; text-transform: none; }
+body.mc .h1-row h1 { margin: 0; }
+body.mc h2 { font: 500 15px/1.3 var(--f-ui); letter-spacing: 0; color: var(--text-1); }
+body.mc h3 { font: 500 13px/1.35 var(--f-ui); color: var(--text-1); }
+body.mc .subtitle, body.mc .page-head p { margin: 0; max-width: 680px; font-size: 13px; line-height: 1.6; color: var(--text-2); }
+body.mc p { color: inherit; }
+body.mc .eyebrow { font: 500 10px/1 var(--f-ui); letter-spacing: .24em; text-transform: uppercase; color: var(--text-2); }
+body.mc .meta, body.mc .muted { color: var(--text-2); font-size: 12px; }
+body.mc .mono, body.mc code, body.mc pre, body.mc kbd.mono { font-family: var(--f-mono); }
+body.mc td.mono, body.mc span.mono, body.mc div.mono { font-size: 12px; }
+body.mc .num { font-variant-numeric: tabular-nums; }
+
+/* buttons: the Map's .btn, primary carries the lum edge */
+body.mc .cta-primary, body.mc .btn, body.mc button, body.mc input[type=submit] {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 14px;
+  border: 1px solid var(--line-visible); border-radius: 6px; background: var(--surface-900); color: var(--text-1);
+  font: 500 12.5px var(--f-ui); letter-spacing: .01em; text-transform: none; white-space: nowrap; text-decoration: none; box-shadow: none; cursor: pointer;
+  transition: border-color .12s, background .12s; }
+body.mc .cta-primary, body.mc button[type=submit], body.mc input[type=submit] { border-color: rgba(245,178,107,.5); background: rgba(245,178,107,.08); }
+body.mc .cta-primary:hover, body.mc button[type=submit]:hover, body.mc input[type=submit]:hover { background: rgba(245,178,107,.16); color: var(--text-1); }
+body.mc .btn:hover, body.mc button:hover { border-color: rgba(180,200,215,.28); background: var(--surface-800); }
+
+/* panels: the Map's .card / .panel */
+body.mc .card { position: relative; margin: 0 0 16px; padding: 0; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--surface-900);
+  box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; overflow: hidden; }
+body.mc .card::before, body.mc .card::after { display: none; }
+body.mc .card-head { display: flex; align-items: center; gap: 12px; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--line-subtle); background: none; }
+body.mc .card-title { font: 500 9.5px/1.4 var(--f-ui); letter-spacing: .24em; text-transform: uppercase; color: var(--text-2); }
+body.mc .card-meta { margin-left: auto; font: 400 11.5px var(--f-ui); letter-spacing: 0; text-transform: none; color: var(--text-2); }
+body.mc .card-body { padding: 16px; font-size: 13px; line-height: 1.6; color: var(--ink-secondary); }
+body.mc .card > p, body.mc .card > .meta, body.mc .card > ul, body.mc .card > form, body.mc .card > div:not(.card-head):not(.card-body):not(.tbl-scroll) { padding-left: 16px; padding-right: 16px; }
+body.mc .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
+body.mc .grid-2 > .card { margin: 0; }
+
+/* readouts: the Map's Model-page strip */
+body.mc .stat-grid { display: flex; flex-wrap: wrap; gap: 0; margin: 0 0 16px; padding: 18px 20px; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--surface-900); }
+body.mc .stat-box { flex: 1 1 140px; min-width: 0; margin: 0; padding: 0 22px; border: 0; border-left: 1px solid var(--line-subtle); border-radius: 0; background: none; box-shadow: none; }
+body.mc .stat-box:first-child { padding-left: 0; border-left: 0; }
+body.mc .stat-box::before, body.mc .stat-box::after { display: none; }
+body.mc .stat-num-row { display: flex; align-items: baseline; gap: 8px; }
+body.mc .stat-num { font: 300 26px/1 var(--f-ui); letter-spacing: 0; font-variant-numeric: tabular-nums; color: var(--text-1); }
+body.mc .stat-label { margin-top: 10px; font: 500 9px/1.3 var(--f-ui); letter-spacing: .24em; text-transform: uppercase; color: var(--text-3); }
+body.mc .stat-delta { font-size: 11.5px; color: var(--text-2); }
+
+/* tables: the Map's .dt */
+body.mc table { width: 100%; border-collapse: collapse; font: 400 12.5px/1.45 var(--f-ui); background: none; }
+body.mc th { padding: 12px 12px 10px; text-align: left; font: 500 9px/1.3 var(--f-ui); letter-spacing: .22em; text-transform: uppercase; color: var(--text-3);
+  background: none; border: 0; border-bottom: 1px solid var(--line-subtle); white-space: nowrap; position: static; }
+body.mc td { padding: 11px 12px; border: 0; border-bottom: 1px solid var(--line-subtle); vertical-align: middle; color: var(--ink-secondary); background: none; }
+body.mc tbody tr { transition: background .12s; }
+body.mc tbody tr:hover { background: rgba(180,200,215,.03); }
+body.mc tbody tr:last-child td { border-bottom: 0; }
+body.mc th.num, body.mc td.num { text-align: right; }
+body.mc td a { color: var(--text-1); text-decoration: none; }
+body.mc td a:hover { color: var(--lum); }
+body.mc td .meta { font-size: 11.5px; color: var(--text-3); }
+body.mc .card > table, body.mc .tbl-scroll { display: block; overflow-x: auto; }
+body.mc .card > table { display: table; }
+
+/* forms */
+body.mc input[type=text], body.mc input[type=number], body.mc input:not([type]), body.mc select, body.mc textarea {
+  height: 36px; padding: 0 10px; border: 1px solid var(--line-visible); border-radius: 6px; background: var(--void-900); color: var(--text-1); font: 400 13px var(--f-ui); }
+body.mc textarea { height: auto; padding: 8px 10px; }
+body.mc .search-field input { height: auto; padding: 0; border: 0; background: none; }
+body.mc label { color: var(--text-2); }
+body.mc pre, body.mc .code { padding: 12px 14px; border: 1px solid var(--line-subtle); border-radius: 6px; background: var(--void-900); color: var(--ink-secondary); font-size: 12px; }
+body.mc details > summary { cursor: pointer; color: var(--text-2); }
+body.mc details > summary:hover { color: var(--text-1); }
+
+/* chips and tags keep their meaning, take the Map's shape */
+body.mc .chip, body.mc .status-tag, body.mc .badge { border-radius: 999px; font: 500 10.5px/1 var(--f-ui); letter-spacing: .04em; }
+
+/* an id in a title stays an id: code face, its own case */
+body.mc .h1-id { display: block; margin-top: 8px; font: 400 clamp(17px, 1.7vw, 22px)/1.25 var(--f-mono); letter-spacing: -.01em; text-transform: none; color: var(--text-1); overflow-wrap: anywhere; }
+body.mc .h1-row { align-items: flex-end; }
+/* ids lead a cell in code face; the sentence under them is prose */
+body.mc td.mono .meta, body.mc td .meta { font-family: var(--f-ui); font-size: 11.5px; line-height: 1.45; color: var(--text-3); }
+/* analyst prose (report) */
+body.mc .prose-h { margin: 18px 0 8px; font: 500 14px/1.35 var(--f-ui); color: var(--text-1); }
+body.mc .prose-h:first-child { margin-top: 0; }
+body.mc .prose-sub { margin: 12px 0 4px; font: 500 9.5px/1.4 var(--f-ui); letter-spacing: .22em; text-transform: uppercase; color: var(--text-3); }
+body.mc .prose-sub strong { font-weight: 500; }
+body.mc .prose-p { margin: 0 0 10px; color: var(--ink-secondary); line-height: 1.65; }
+body.mc .prose-list { margin: 0 0 10px; padding-left: 18px; color: var(--ink-secondary); line-height: 1.6; }
+body.mc .prose-list li { margin: 3px 0; }
+body.mc .callout { margin: 0 0 18px; padding: 12px 16px; border: 1px solid var(--line-visible); border-radius: 10px; background: var(--surface-800); color: var(--text-2); font-size: 13px; line-height: 1.6; }
+body.mc .callout b { color: var(--text-1); font-weight: 500; }
+body.mc .callout-warn { border-color: rgba(211,169,87,.45); background: rgba(211,169,87,.07); }
+body.mc .prose-list li::marker { color: var(--text-3); }
+body.mc strong { color: var(--text-1); font-weight: 500; }
+/* segmented pickers (atlas query kind / dimension, capability-map models) take the Map's chips */
+body.mc .seg-item, body.mc .fm-tab, body.mc .legend-toggle { font-family: var(--f-ui); }
+/* preset cards on /launch */
+body.mc .preset-card { border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--void-900); }
+body.mc .preset-title { font-family: var(--f-mono); }
+
+@media (max-width: 860px) {
+  body.mc .app-shell { grid-template-columns: minmax(0,1fr); }
+  body.mc .side { position: static; height: auto; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 0 0; border-right: 0; border-bottom: 1px solid var(--line-subtle); background: rgba(7,9,11,.86); }
+  body.mc .brand { padding: 0 16px 10px; width: 100%; }
+  body.mc .nav { flex-direction: row; overflow-x: auto; scrollbar-width: none; padding: 0 8px; width: 100%; }
+  body.mc .nav::-webkit-scrollbar { display: none; }
+  body.mc .nav-bottom { display: none; }
+  body.mc .nav-item { height: 40px; padding: 0 12px; gap: 8px; white-space: nowrap; }
+  body.mc .nav-item.on::before { left: 12px; right: 12px; top: auto; bottom: 0; width: auto; height: 2px; }
+  body.mc .topbar { flex-wrap: wrap; height: auto; gap: 10px; padding: 14px 16px; }
+  body.mc .search { flex-basis: 100%; max-width: none; }
+  body.mc .top-right { margin-left: 0; }
+  body.mc main.shell-main { padding: 4px 16px 48px; }
+  body.mc .stat-box { flex: 1 1 40%; padding: 8px 12px 8px 0; border-left: 0; }
+  body.mc .stat-num { font-size: 21px; }
+  body.mc .card { overflow-x: auto; }
+  body.mc .card > table, body.mc main table.matrix { display: block; overflow-x: auto; }
+  body.mc span.mono, body.mc code { overflow-wrap: anywhere; }
+}
 """
 
 
@@ -1263,24 +1491,55 @@ _INSTRUMENT_JS = """
 # home in an instrument's own vocabulary (readouts, brackets, marks).
 def _nav_svg(path: str) -> str:
     return (
-        '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" '
-        f'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{path}</svg>'
+        '<svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">'
+        f"{path}</svg>"
     )
 
 
-# Line icons drawn to one 16px grid and one stroke weight, so the sidebar
-# reads as a single instrument panel rather than a mix of glyph fonts.
+# The Map's own sidebar (static/map.html): same items, order, icons and
+# labels, so every page is one app. Launch and Live sit at the bottom.
+_NAV_MAIN = [
+    ("map", "/", "Map"),
+    ("ask", "/#ask", "Ask"),
+    ("findings", "/#findings", "Findings"),
+    ("models", "/#models", "Models"),
+    ("capmap", "/capability-map", "Breaking points"),
+    ("atlas", "/atlas", "Atlas"),
+    ("runs", "/runs", "Runs"),
+    ("report", "/report", "Report"),
+    ("coverage", "/coverage", "Coverage"),
+]
+_NAV_BOTTOM = [
+    ("launch", "/launch", "Launch"),
+    ("live", "/live", "Live"),
+]
 _NAV_ICONS = {
-    "capmap": _nav_svg('<path d="M2 4h5v4h3v4h4"/>'),
-    "overview": _nav_svg('<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>'),
-    "findings": _nav_svg('<circle cx="8" cy="8" r="5.5"/><path d="M5.6 8.2l1.7 1.7 3.2-3.4"/>'),
-    "report": _nav_svg('<path d="M4 2h6l2.5 2.5V14H4z"/><path d="M6.5 7.5h4M6.5 10.5h4"/>'),
-    "runs": _nav_svg('<path d="M2.5 4h11M2.5 8h11M2.5 12h11"/>'),
-    "atlas": _nav_svg('<path d="M2 12l3.5-5 3 2.5L14 3"/>'),
-    "coverage": _nav_svg('<rect x="2" y="2" width="12" height="12" rx="1.5"/><path d="M2 6.5h12M6.5 2v12"/>'),
-    "launch": _nav_svg('<path d="M5 3.5l7 4.5-7 4.5z"/>'),
-    "live": _nav_svg('<circle cx="8" cy="8" r="2.2"/><path d="M4.2 4.2a5.4 5.4 0 0 0 0 7.6M11.8 4.2a5.4 5.4 0 0 1 0 7.6"/>'),
+    "ask": _nav_svg('<path d="M3.5 4.5h13v8.5h-7l-4 3.2V13h-2z"/><path d="M7 8.2h6M7 10.6h4"/>'),
+    "map": _nav_svg('<circle cx="10" cy="10" r="6.5"/><ellipse cx="10" cy="10" rx="9" ry="3" transform="rotate(-20 10 10)"/>'),
+    "findings": _nav_svg('<circle cx="10" cy="10" r="7.5"/><circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v2.3M10 15.2v2.3M2.5 10h2.3M15.2 10h2.3"/>'),
+    "models": _nav_svg('<circle cx="10" cy="10" r="7.5"/><path d="M6 12.5c1-3 3-5 7-6M7.5 7.2l1.2 1.2M12.2 11.6l1 1"/>'),
+    "capmap": _nav_svg('<path d="M3 15l4-5 3 3 3-6 4 8"/><path d="M13 7l1.6-2.6M14.6 4.4l1.4 1"/>'),
+    "atlas": _nav_svg('<path d="M3 7h13M13 4l3 3-3 3M17 13H4M7 10l-3 3 3 3"/>'),
+    "runs": _nav_svg('<path d="M3 5h4M11 5h6M3 10h9M16 10h1M3 15h2M9 15h8"/><circle cx="9" cy="5" r="1.6"/><circle cx="14" cy="10" r="1.6"/><circle cx="7" cy="15" r="1.6"/>'),
+    "report": _nav_svg('<circle cx="10" cy="10" r="7.5"/><path d="M7 12.5V9.5M10 12.5V7M13 12.5v-2"/>'),
+    "coverage": _nav_svg('<ellipse cx="10" cy="5" rx="6.5" ry="2.5"/><path d="M3.5 5v10c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5V5M3.5 10c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5"/>'),
+    "launch": _nav_svg('<path d="M10 2.5l3 6.5h-6z"/><path d="M7.5 9v5.5h5V9M10 14.5v3"/>'),
+    "live": _nav_svg('<circle cx="10" cy="10" r="2.2"/><path d="M5.5 5.5a6.4 6.4 0 0 0 0 9M14.5 5.5a6.4 6.4 0 0 1 0 9M3.2 3.2a9.6 9.6 0 0 0 0 13.6M16.8 3.2a9.6 9.6 0 0 1 0 13.6"/>'),
 }
+# Pages that belong under a nav item without being it: the console and a
+# run's records sit under Runs; a capability detail under Breaking points.
+_NAV_ALIAS = {"overview": "runs"}
+_NAV_GROUPS = [("", _NAV_MAIN + _NAV_BOTTOM)]  # flat view kept for tests and lookups
+_NAV_ITEMS = _NAV_MAIN + _NAV_BOTTOM
+
+_BRAND_MARK = (
+    '<svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">'
+    '<defs><linearGradient id="mcLg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F5B26B"/>'
+    '<stop offset="1" stop-color="#8a5a2c"/></linearGradient></defs>'
+    '<circle cx="17" cy="17" r="10.5" fill="none" stroke="url(#mcLg)" stroke-width="1.3"/>'
+    '<ellipse cx="17" cy="17" rx="15.5" ry="5" fill="none" stroke="rgba(241,242,243,.55)" stroke-width=".9" transform="rotate(-18 17 17)"/>'
+    '<circle cx="29.2" cy="13.1" r="1.4" fill="#F5B26B"/></svg>'
+)
 
 
 def _shell(
@@ -1291,86 +1550,111 @@ def _shell(
     breadcrumb: str | None = None,
     trial_count: int | None = None,
 ) -> str:
-    """Render `body` inside the shared sidebar shell.
+    """Render `body` inside the app frame the globe Map uses.
 
-    Global navigation lives in a fixed-width LEFT SIDEBAR, not a top bar
-    (docs/design-notes.md's original top-bar skeleton was itself never
-    questioned across three passes -- every real SaaS/instrument reference
-    with this many nav items -- Linear, Grafana, Datadog, the interface-
-    design skill's own showcase examples -- uses a sidebar; a horizontal
-    strip with 7 items was always going to feel cramped/generic, a paint
-    job away from a sidebar rather than the right container). Global nav
-    (this sidebar) and page-level context (breadcrumb/title) are two
-    different jobs and now live in two different regions: the sidebar
-    never changes across pages, the slim `.page-strip` inside main is
-    page-specific.
-
-    `active_nav` is one of the keys in `_NAV_ITEMS` ("runs", "live",
-    "atlas", "launch") or "" for none highlighted. Nav is grouped into
-    Results / Explore / Act under real vertical whitespace + uppercase
-    mono group labels -- now something a sidebar can actually show AS
-    groups, not just as ordering. The active item gets a filled
-    background on its whole row (selected sidebar item), not a bottom-
-    border underline (that reads as "browser tab," which is exactly the
-    top-bar tell being removed here).
-    `breadcrumb`, if given, renders in the page strip.
-    `trial_count`, if given, renders a live mono counter in the sidebar's
-    identity block ("this is a running instrument," visible before
-    scrolling). Optional and additive: pages without a store in scope
-    (coverage/findings, the 404 handler, launch error pages) simply
-    render no counter.
+    Same sidebar (items, icons, order, Launch/Live at the bottom) and the
+    same command bar (search across models, provinces and trial ids; the
+    "Data to" and trial-count readouts) as `static/map.html`, so moving
+    between the Map and any server-rendered page never changes the frame.
+    The readouts and search fill from `/api/search.json`, the same primary-
+    trial population the Map counts. `trial_count` is accepted for call-site
+    compatibility; the readout uses the Map's count so the two never differ.
+    `breadcrumb`, if given, renders above the page body.
     """
+    active = _NAV_ALIAS.get(active_nav, active_nav)
     refresh_tag = '<meta http-equiv="refresh" content="5">' if refresh else ""
-    groups_html = []
-    for group_label, items in _NAV_GROUPS:
-        rows = "".join(
-            f'<a class="nav-row{" active" if key == active_nav else ""}" href="{href}">'
-            f'<span class="nav-icon">{_NAV_ICONS.get(key, "·")}</span>'
-            f"<span class=\"nav-label\">{label}</span></a>"
+
+    def _items(items):
+        on, off = ' class="nav-item on" aria-current="page"', ' class="nav-item"'
+        return "".join(
+            f'<a{on if key == active else off} href="{href}">{_NAV_ICONS[key]}{label}</a>'
             for key, href, label in items
         )
-        groups_html.append(
-            f'<div class="nav-group"><div class="nav-group-label">{group_label}</div>{rows}</div>'
-        )
-    nav_groups_html = "".join(groups_html)
-    counter_html = (
-        f'<span class="counter">{trial_count:,} trials recorded</span>'
-        if trial_count is not None
-        else ""
-    )
+
     sidebar = (
-        '<aside class="sidebar">'
-        '<a class="brand-block" href="/">'
-        '<span class="brand-mark"><svg width="26" height="26" viewBox="0 0 64 64" fill="none" '
-        'stroke="currentColor" stroke-width="3.5" aria-hidden="true"><circle cx="32" cy="32" r="27"/>'
-        '<circle cx="35" cy="29" r="12"/><circle cx="36" cy="28" r="4" fill="currentColor"/></svg></span>'
-        '<span class="brand-text"><span class="brand-name">Model Cartographer</span>'
-        f"{counter_html}</span>"
-        "</a>"
-        f'<nav class="sidebar-nav">{nav_groups_html}</nav>'
+        '<aside class="side">'
+        f'<a class="brand" href="/">{_BRAND_MARK}<span class="brand-name">MODEL<br>CARTOGRAPHER</span></a>'
+        f'<nav class="nav" aria-label="Primary">{_items(_NAV_MAIN)}</nav>'
+        f'<div class="nav nav-bottom">{_items(_NAV_BOTTOM)}</div>'
         "</aside>"
     )
-    breadcrumb_html = f'<div class="page-strip"><p class="breadcrumb">{breadcrumb}</p></div>' if breadcrumb else ""
+    topbar = (
+        '<header class="topbar">'
+        '<div class="search" id="mcSearch">'
+        '<label class="search-field">'
+        '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>'
+        '<input id="mcQ" type="text" autocomplete="off" placeholder="Search models, provinces, or a trial id…" '
+        'aria-label="Search models, provinces, or a trial id"><kbd>Ctrl K</kbd></label>'
+        '<div class="suggest" id="mcSuggest" hidden></div></div>'
+        '<div class="top-right"><div class="epoch">'
+        '<span class="ep"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5"/>'
+        '<path d="M7 4v3l2 1.4"/></svg><span id="mcEpoch">Data to …</span></span>'
+        '<a class="ep" href="/runs"><span id="mcTrials">… trials</span></a>'
+        "</div></div></header>"
+    )
+    crumb_html = f'<nav class="crumb" aria-label="Breadcrumb">{breadcrumb}</nav>' if breadcrumb else ""
     return (
-        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"{refresh_tag}"
-        # Manrope + JetBrains Mono -- the pairing the reference examples
-        # this design derives from actually ship. Purely additive: the
-        # --sans/--mono tokens list full system fallbacks after these, so
-        # an offline or blocked-network run degrades to the previous
-        # system-stack rendering rather than breaking. `display=swap`
-        # keeps first paint immediate.
         '<link rel="preconnect" href="https://fonts.googleapis.com">'
         '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
         '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
-        "family=Bricolage+Grotesque:opsz,wght@12..96,400..700&"
-        "family=Geist:wght@400;500;600&"
-        'family=Geist+Mono:wght@400;500&display=swap">'
-        f"<title>{html.escape(title)}</title><style>{_CSS}</style></head>"
-        f'<body><div class="app-shell">{sidebar}'
-        f'<main class="shell-main">{breadcrumb_html}{body}</main>'
-        f"</div><script>{_INSTRUMENT_JS}</script></body></html>"
+        "family=Google+Sans+Flex:wght@300..700&"
+        'family=Google+Sans+Code:wght@400;500&display=swap">'
+        f"<title>{html.escape(title)} · Model Cartographer</title><style>{_CSS}</style></head>"
+        f'<body class="mc"><div class="app-shell">{sidebar}'
+        f'<div class="shell-col">{topbar}<main class="shell-main">{crumb_html}{body}</main></div>'
+        f"</div><script>{_INSTRUMENT_JS}</script><script>{_SHELL_JS}</script></body></html>"
     )
+
+
+# The command bar's behaviour: the same search as the Map's (models,
+# provinces, a trial-id prefix) and its two readouts.
+_SHELL_JS = r"""
+(function(){
+  var q=document.getElementById('mcQ'), box=document.getElementById('mcSuggest'), idx=null, hits=[], kb=-1, seq=0;
+  var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function load(){ if(idx) return Promise.resolve(idx);
+    return fetch('/api/search.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){idx=d; return d;}); }
+  load().then(function(d){
+    if(d.newest){var p=d.newest.slice(0,10).split('-'); document.getElementById('mcEpoch').textContent='Data to '+MON[+p[1]-1]+' '+(+p[2]);}
+    else document.getElementById('mcEpoch').textContent='No data yet';
+    document.getElementById('mcTrials').textContent=d.trials.toLocaleString('en-US')+' trials';
+  }).catch(function(){ document.getElementById('mcEpoch').textContent='Data unavailable'; });
+  function draw(){
+    if(!hits.length){ box.hidden=true; box.innerHTML=''; return; }
+    box.innerHTML=hits.map(function(h,i){ return '<a href="'+h.href+'"'+(i===kb?' class="kb"':'')+'><i class="dot" style="--c:'+h.c+'"></i>'+esc(h.t)+'<span class="kind">'+h.k+'</span></a>'; }).join('');
+    box.hidden=false;
+  }
+  function run(){
+    var s=q.value.trim().toLowerCase(), my=++seq; kb=-1;
+    if(!s){ hits=[]; draw(); return; }
+    load().then(function(d){
+      if(my!==seq) return;
+      hits=d.models.filter(function(m){return (m.name+' '+m.id).toLowerCase().indexOf(s)>=0;}).slice(0,6)
+        .map(function(m){return {t:m.name, k:'model', c:'#E8EDF1', href:'/#model.'+m.slug+'.overview'};})
+        .concat(d.provinces.filter(function(p){return p.name.toLowerCase().indexOf(s)>=0;})
+        .map(function(p){return {t:p.name, k:'province', c:p.color, href:'/#findings'};}));
+      draw();
+      if(/^[0-9a-f]{4,32}$/.test(s)) fetch('/api/search.json?q='+encodeURIComponent(s),{cache:'no-store'})
+        .then(function(r){return r.json();}).then(function(t){ if(my!==seq) return;
+          hits=hits.concat(t.trials.map(function(x){return {t:x.id.slice(0,12)+' · '+x.model, k:'trial', c:'#8B98A4', href:'/record/'+x.id};})); draw(); });
+    });
+  }
+  q.addEventListener('input', run);
+  q.addEventListener('focus', function(){ load(); if(q.value) run(); });
+  q.addEventListener('keydown', function(e){
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){ if(!hits.length) return; e.preventDefault();
+      kb=(kb+(e.key==='ArrowDown'?1:-1)+hits.length)%hits.length; draw(); }
+    else if(e.key==='Enter'){ var h=hits[kb<0?0:kb]; if(h) location.href=h.href; }
+    else if(e.key==='Escape'){ hits=[]; draw(); q.blur(); }
+  });
+  document.addEventListener('click', function(e){ if(!document.getElementById('mcSearch').contains(e.target)){ hits=[]; draw(); } });
+  document.addEventListener('keydown', function(e){ if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); q.focus(); } });
+})();
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -1806,7 +2090,9 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
         counts = agg["counts"]
         total = sum(counts.values())
         passn = counts.get("PASS", 0)
-        pass_rate = (passn / total * 100.0) if total else 0.0
+        scored = passn + counts.get("FAIL", 0)
+        errn = counts.get("ERROR", 0)
+        pass_rate = (passn / scored * 100.0) if scored else 0.0
         newest = None
         if agg["created_ats"]:
             newest = _parse_created_at(max(agg["created_ats"]))
@@ -1830,16 +2116,17 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
             label=f"pass rate trend for {run_id}",
         )
         # Row edge: only a run that actually broke gets one (see _CSS 13).
-        row_cls = ' class="row-sev row-sev-fail"' if total and pass_rate < _RATE_WARN_THRESHOLD else ""
+        row_cls = ' class="row-sev row-sev-fail"' if scored and pass_rate < _RATE_WARN_THRESHOLD else ""
         status_chip = (
             _chip("live", "chip-live") if is_live else _chip("complete", "chip-done chip-muted")
         )
         rows_html.append(
             f"<tr{row_cls}>"
             f'<td class="mono"><a href="/run/{safe_run_id}">{safe_run_id}</a>{headline_html}</td>'
-            f'<td class="mono">{model_short}</td>'
+            f'<td title="{html.escape(agg["model"])}">{model_short}</td>'
             f'<td class="num">{total}</td>'
-            f'<td class="num">{_rate_bar(pass_rate, sub=f"{passn}/{total}")}</td>'
+            f'<td class="num" title="passed / scored trials; errors are not scored">'
+            f'{_rate_bar(pass_rate, sub=f"{passn}/{scored}" + (f" · {errn} err" if errn else "")) if scored else "–"}</td>'
             f'<td>{spark}</td>'
             f'<td class="mono num">${agg["cost"]:.4f}</td>'
             f"<td>{html.escape(_relative_time(newest))}</td>"
@@ -1847,6 +2134,14 @@ def _runs_table_rows(store: ResultsStore) -> tuple[list[str], dict[str, dict]]:
             "</tr>"
         )
     return rows_html, by_run
+
+
+def _primary_trial_count(store: ResultsStore) -> int:
+    """Trials that count as evidence (findings._primary_records): the number
+    the top bar, the Map and Findings all show."""
+    import json as _json
+
+    return int(_json.loads(search_json(store))["trials"])
 
 
 def _trial_count(store: ResultsStore) -> int:
@@ -1864,7 +2159,25 @@ def report_html(store: ResultsStore) -> str:
     only renders the sidecar it wrote (or an empty state if none exists)."""
     from ..analyst.report_page import load_report, report_body
 
-    body = report_body(load_report())
+    report = load_report()
+    body = report_body(report)
+    # The report is a snapshot the analyst wrote offline; say so when the
+    # store has moved on, or its rankings read as contradicting the Map.
+    snap = (report or {}).get("store_totals") or {}
+    now_trials = _primary_trial_count(store)
+    if report is not None and snap.get("n_trials") and snap["n_trials"] != now_trials:
+        import json as _json
+
+        now_models = len(_json.loads(search_json(store))["models"])
+        when = str((report.get("meta") or {}).get("generated_at", ""))[:10]
+        banner = (
+            '<div class="callout callout-warn" role="note"><b>Snapshot, not live.</b> '
+            f'The analyst wrote this on {html.escape(when)} from {snap["n_trials"]:,} trials across '
+            f'{snap.get("n_models", "?")} models. The store now holds {now_trials:,} trials across '
+            f'{now_models} models, so its rankings can differ from the Map, which is always current. '
+            'Regenerate with <span class="mono">scripts/write_report.py</span>.</div>'
+        )
+        body = body.replace("</div></div>", "</div></div>" + banner, 1)
     return _shell(
         "Capability report", "report", body, trial_count=_trial_count(store)
     )
@@ -1895,14 +2208,16 @@ def runs_html(store: ResultsStore) -> str:
     # so the numbers can never disagree with the rows beneath them.
     n_runs = len(by_run)
     n_trials = sum(sum(agg["counts"].values()) for agg in by_run.values())
+    n_primary = _primary_trial_count(store)
     total_spend = sum(agg["cost"] for agg in by_run.values())
     n_models = len({agg["model"] for agg in by_run.values() if agg["model"]})
     stat_grid = (
         '<div class="stat-grid">'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_runs}</div></div>'
         '<div class="stat-label">Runs recorded</div></div>'
-        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_trials:,}</div></div>'
-        '<div class="stat-label">Total trials</div></div>'
+        f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_primary:,}</div>'
+        f'<div class="stat-delta">+{max(n_trials - n_primary, 0):,} checks</div></div>'
+        '<div class="stat-label" title="Trials that count as evidence, the same number as the top bar. The extra records are resample checks and replications, listed under their runs below.">Trials</div></div>'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">${total_spend:.4f}</div></div>'
         '<div class="stat-label">Total spend</div></div>'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_models}</div></div>'
@@ -2225,7 +2540,7 @@ def index_html(store: ResultsStore) -> str:
     </section>
     <div class="links-grid">{links}</div>
     """
-    return _shell("Model Cartographer", "overview", body, trial_count=_trial_count(store))
+    return _shell("Console", "overview", body, trial_count=_trial_count(store))
 
 
 def _query_kind_from_detail(detail: str | None) -> str:
@@ -2240,7 +2555,8 @@ def _confirmed_findings_preview():
 
 
 def _short_model(model_name: str) -> str:
-    return model_name.split("/")[-1] if model_name else "-"
+    """The Map's display name ("Gemma 4 31B QAT"), so a model reads the same on every page."""
+    return display_name(model_name) if model_name else "-"
 
 
 def _budget_for_run(run_id: str) -> int | None:
@@ -2255,6 +2571,15 @@ def _parse_created_at(created_at: str) -> datetime | None:
         return datetime.fromisoformat(created_at)
     except (TypeError, ValueError):
         return None
+
+
+def _config_short(realized_dims: dict, keep: int = 4) -> str:
+    """The first few dims of a record's config, the rest counted (full list on hover)."""
+    if not realized_dims:
+        return "-"
+    parts = [f"{k}={v:g}" if isinstance(v, float) else f"{k}={v}" for k, v in sorted(realized_dims.items())]
+    more = len(parts) - keep
+    return ", ".join(parts[:keep]) + (f" +{more} more" if more > 0 else "")
 
 
 def _config_summary(realized_dims: dict) -> str:
@@ -2346,6 +2671,8 @@ def _format_eta(remaining: int, rate_per_min: float | None, sample_n: int) -> st
 
 
 def _stop_button_html(is_active: bool, stopping: bool) -> str:
+    if HOSTED:
+        return ""
     """Renders a "Stop campaign" form-POST button when a campaign is
     actively registered, or a "stopping..." notice once its cancel_event
     has been set but the thread hasn't exited yet. Renders nothing when no
@@ -2387,8 +2714,9 @@ def _collect_run_records(
 
     records = store.by_run(run_id)
     is_full_map_parent = False
+    stages = child_stages(store, run_id) if not records else []
     if not records:
-        for stage in _FULL_MAP_RUN_STAGES:
+        for stage in stages:
             child = store.by_run(f"{run_id}/{stage}")
             if child:
                 is_full_map_parent = True
@@ -2398,7 +2726,7 @@ def _collect_run_records(
     if is_full_map_parent:
         verify_records = [
             r
-            for stage in _FULL_MAP_RUN_STAGES
+            for stage in stages
             for r in store.by_run(f"{run_id}/{stage}{VERIFY_SUFFIX}")
         ]
     else:
@@ -2464,7 +2792,7 @@ def live_html(store: ResultsStore) -> str:
     if not records:
         body = f"""
         <div class="page-head"><div class="page-head-main">
-          <h1>Live: {safe_run_id}</h1>
+          <h1>Live <span class="h1-id">{safe_run_id}</span></h1>
           <p class="meta">starting&hellip; 0 records</p>
         </div><div class="page-head-actions">
           {_stop_button_html(active is not None, stopping)}
@@ -2478,7 +2806,7 @@ def live_html(store: ResultsStore) -> str:
     passn = sum(1 for r in records if r.verdict.name == "PASS")
     failn = sum(1 for r in records if r.verdict.name == "FAIL")
     errn = sum(1 for r in records if r.verdict.name == "ERROR")
-    pass_rate = (passn / total * 100.0) if total else 0.0
+    pass_rate = (passn / (passn + failn) * 100.0) if (passn + failn) else 0.0
     total_cost = sum(r.cost_usd for r in records)
 
     timestamps = [t for t in (_parse_created_at(r.created_at) for r in records) if t is not None]
@@ -2532,7 +2860,7 @@ def live_html(store: ResultsStore) -> str:
         f'<div class="stat-box"><div class="stat-num">{failn}</div><div class="stat-label">Fail</div></div>'
         f'<div class="stat-box"><div class="stat-num">{errn}</div><div class="stat-label">Error</div></div>'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">{pass_rate:.1f}%</div>'
-        f'<div class="stat-delta">{passn}/{total}</div></div><div class="stat-label">Pass rate</div></div>'
+        f'<div class="stat-delta">{passn}/{passn + failn}</div></div><div class="stat-label" title="passed / scored trials; errors are not scored">Pass rate</div></div>'
         f'<div class="stat-box"><div class="stat-num-row"><div class="stat-num">${total_cost:.4f}</div>'
         f'<div class="stat-delta">{overall_rate_per_min:.1f}/min</div></div>'
         '<div class="stat-label">Total cost</div></div>'
@@ -2553,7 +2881,7 @@ def live_html(store: ResultsStore) -> str:
             "<tr>"
             f'<td class="mono">{html.escape(r.created_at or "-")}</td>'
             f'<td class="claim-cell">{_claim_strip(r.verdict.name, r_evidence)}</td>'
-            f'<td class="mono">{html.escape(_config_summary(r.realized_dims))}</td>'
+            f'<td class="mono" title="{html.escape(_config_summary(r.realized_dims))}">{html.escape(_config_short(r.realized_dims))}</td>'
             "</tr>"
         )
     recent_table = (
@@ -2566,10 +2894,17 @@ def live_html(store: ResultsStore) -> str:
     # The progress block keeps a fixed slot regardless of which branch
     # rendered it (bar vs. "RUN COMPLETE" vs. budget-unknown line), so the
     # 5s meta-refresh can't shift everything below it.
+    if complete:
+        ended = _relative_time(max(timestamps)) if timestamps else "earlier"
+        live_head = (f'<h1>Last run <span class="h1-id">{safe_run_id}</span></h1>'
+                     f'<p class="subtitle">No campaign is running right now. This is the most recent run; '
+                     f'it finished {html.escape(ended)}. Start one from Launch and this page follows it live.</p>')
+    else:
+        live_head = (f'<h1>Live <span class="h1-id">{safe_run_id}</span></h1>'
+                     '<p class="subtitle">Following the running campaign; this page refreshes every few seconds.</p>')
     body = f"""
     <div class="page-head"><div class="page-head-main">
-      <h1>Live: {safe_run_id}</h1>
-      <p class="subtitle">Auto-refreshing monitor for an in-progress (or just-finished) campaign run.</p>
+      {live_head}
     </div><div class="page-head-actions">
       <a href="/run/{safe_run_id}">full run detail &rarr;</a>
       {_stop_button_html(is_active_run, stopping)}
@@ -2594,7 +2929,7 @@ def live_html(store: ResultsStore) -> str:
       {recent_table}
     </div>
     """
-    return _shell(f"Live: {run_id}", "live", body, refresh=not complete, trial_count=_trial_count(store))
+    return _shell(f"{'Last run' if complete else 'Live'}: {run_id}", "live", body, refresh=not complete, trial_count=_trial_count(store))
 
 
 def _stage_track_html(run_id: str, records: list[ExperimentRecord]) -> str:
@@ -2642,8 +2977,9 @@ def run_html(store: ResultsStore, run_id: str) -> str:
     # lives under f"{run_id}/{stage}" child run_ids. Pull those in (labeled
     # by stage) so the table still shows every trial for a full_map launch.
     is_full_map_parent = False
+    stages = child_stages(store, run_id) if not records else []
     if not records:
-        for stage in _FULL_MAP_RUN_STAGES:
+        for stage in stages:
             child = store.by_run(f"{run_id}/{stage}")
             if child:
                 is_full_map_parent = True
@@ -2654,7 +2990,7 @@ def run_html(store: ResultsStore, run_id: str) -> str:
     if not records:
         body = (
             '<div class="page-head"><div class="page-head-main">'
-            f"<h1>Run {safe_run_id}</h1></div>"
+            f'<h1>Run <span class="h1-id">{safe_run_id}</span></h1></div>'
             '<div class="page-head-actions"><a href="/runs">all runs &rarr;</a></div></div>'
             f"{verdict_panel_html(store, run_id)}"
             '<div class="empty-state"><p>No records found.</p></div>'
@@ -2669,7 +3005,7 @@ def run_html(store: ResultsStore, run_id: str) -> str:
 
     verify_status_by_record: dict[str, str] = {}
     verify_source_run_ids = (
-        [f"{run_id}/{s}" for s in _FULL_MAP_RUN_STAGES] if is_full_map_parent else [run_id]
+        [f"{run_id}/{s}" for s in stages] if is_full_map_parent else [run_id]
     )
     for src in verify_source_run_ids:
         for record_id, fv in classify_all_verified_failures(store, src).items():
@@ -2775,7 +3111,7 @@ def run_html(store: ResultsStore, run_id: str) -> str:
     )
     verify_now_html = ""
     verify_action_html = ""
-    if n_unverified_fails:
+    if n_unverified_fails and not HOSTED:
         verify_action_html = (
             f'<a class="cta-primary" href="#verify-failures">'
             f'Verify {n_unverified_fails} failure(s) &rarr;</a>'
@@ -2878,7 +3214,7 @@ def run_html(store: ResultsStore, run_id: str) -> str:
 
     body = (
         '<div class="page-head"><div class="page-head-main">'
-        f'<div class="h1-row"><h1>Run {safe_run_id}</h1>{_title_pill_html(records)}</div>'
+        f'<div class="h1-row"><h1>Run <span class="h1-id">{safe_run_id}</span></h1>{_title_pill_html(records)}</div>'
         '<p class="subtitle">What this run revealed, then every individual trial as evidence.</p>'
         '</div><div class="page-head-actions">'
         f'<a href="/live?run={safe_run_id}">watch live &rarr;</a>'
@@ -2906,13 +3242,49 @@ def _stage_from_run_id_local(run_id: str) -> str | None:
     return None
 
 
+def _explain_card(record: ExperimentRecord) -> str:
+    """On a failed trial: ask Nemotron 3 Ultra, live on Token Factory, why it failed."""
+    if record.verdict.name != "FAIL":
+        return ""
+    rid = html.escape(record.record_id)
+    return f"""
+    <div class="card" id="explain">
+      <div class="card-head"><span class="card-title">Why did it fail?</span>
+        <span class="card-meta">Nemotron 3 Ultra &middot; live on Nebius Token Factory</span></div>
+      <div class="card-body">
+        <p class="meta" style="margin:0 0 10px">Ultra reads the prompt, this answer, the verified correct answer and the difficulty settings, then explains the mistake. The verifier's own classification is shown next to it for comparison.</p>
+        <button class="cta-primary" id="explainGo" type="button">Explain with Nemotron 3 Ultra</button>
+        <div id="explainOut" style="margin-top:12px"></div>
+      </div>
+    </div>
+    <script>
+    (function(){{
+      var b = document.getElementById('explainGo'), out = document.getElementById('explainOut');
+      function esc(s){{ return String(s).replace(/[&<>"]/g, function(c){{ return {{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}}[c]; }}); }}
+      b.addEventListener('click', function(){{
+        b.disabled = true; b.textContent = 'Nemotron 3 Ultra is reasoning…'; out.innerHTML = '';
+        var t0 = performance.now();
+        fetch('/api/explain?record={rid}').then(function(r){{ return r.json().then(function(d){{ return [r.ok, d]; }}); }}).then(function(x){{
+          var ok = x[0], d = x[1];
+          if (!ok || d.error) throw new Error(d.error || 'Request failed');
+          var c = d.call;
+          out.innerHTML = '<p class="prose-p" style="color:var(--text-1);font-size:14px;white-space:pre-line">' + esc(d.explanation) + '</p>'
+            + (d.truth ? '<p class="meta">verified correct answer: <b>' + esc(d.truth) + '</b> &middot; model answered: <b>' + esc(d.answer) + '</b>' + (d.trap ? ' &middot; verifier classification: <span class="mono">' + esc(d.trap) + '</span>' : '') + '</p>' : '')
+            + '<p class="meta mono">' + esc(c.tier) + ' &middot; ' + c.latency_s.toFixed(1) + ' s &middot; ' + c.tokens_in + ' → ' + c.tokens_out + ' tokens &middot; reasoning ' + c.reasoning_chars + ' chars &middot; $' + c.cost_usd.toFixed(5) + ' &middot; ' + ((performance.now() - t0)/1000).toFixed(1) + ' s end to end</p>';
+          b.textContent = 'Explained by Nemotron 3 Ultra';
+        }}).catch(function(e){{ out.innerHTML = '<p class="meta" style="color:#F2A0A8">' + esc(e.message) + '</p>'; b.disabled = false; b.textContent = 'Explain with Nemotron 3 Ultra'; }});
+      }});
+    }})();
+    </script>"""
+
+
 def record_html(store: ResultsStore, record_id: str) -> str:
     cur = store._conn.execute("SELECT * FROM experiments WHERE record_id = ?", (record_id,))
     row = cur.fetchone()
     safe_record_id = html.escape(record_id)
 
     if row is None:
-        body = f'<h1>Record {safe_record_id}</h1><div class="empty-state"><p>Not found.</p></div>'
+        body = f'<h1>Record <span class="h1-id">{safe_record_id}</span></h1><div class="empty-state"><p>Not found.</p></div>'
         return _shell(f"Record {record_id}", "runs", body, trial_count=_trial_count(store))
 
     from ..store.store import _row_to_record
@@ -3017,7 +3389,7 @@ def record_html(store: ResultsStore, record_id: str) -> str:
 
     body = f"""
     <div class="page-head"><div class="page-head-main">
-    <div class="h1-row"><h1>Record {safe_record_id}</h1><span class="title-pill {_r_pill_cls}">{html.escape(record.verdict.name)}</span></div>
+    <div class="h1-row"><h1>Record <span class="h1-id">{safe_record_id}</span></h1><span class="title-pill {_r_pill_cls}">{html.escape(record.verdict.name)}</span></div>
     <p class="subtitle">Verdict and provenance first; raw prompt/response/reasoning below, collapsed.</p>
     </div><div class="page-head-actions">
       <a href="/run/{html.escape(record.run_id)}">back to run &rarr;</a>
@@ -3026,7 +3398,7 @@ def record_html(store: ResultsStore, record_id: str) -> str:
     <div class="panel">
       <p style="margin:0 0 0.5rem;">
         {_claim_strip(record.verdict.name, _r_evidence)}
-        <span class="meta">&middot; model <span class="mono">{html.escape(record.model_name)}</span></span>
+        <span class="meta">&middot; model <b title="{html.escape(record.model_name)}">{html.escape(display_name(record.model_name))}</b></span>
       </p>
       <p class="meta" style="margin:0;">
         finish_reason: <span class="mono">{html.escape(record.finish_reason or "-")}</span> &middot;
@@ -3041,6 +3413,8 @@ def record_html(store: ResultsStore, record_id: str) -> str:
     </div>
 
     {prev_next_html}
+
+    {_explain_card(record)}
 
     <div class="card">
       <div class="card-head">
@@ -3090,10 +3464,51 @@ class _ViewerHandler(BaseHTTPRequestHandler):
     store: ResultsStore  # set on the class before serving
     launch_deps: launch_mod.LaunchDeps  # set on the class before serving
 
+    def _send_json(self, obj: dict, status: int = 200, cache: bool = False) -> None:
+        import json as _json
+
+        payload = _json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", _API_CACHE if cache else "no-store")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _send_ask(self, path: str) -> None:
+        """Live Nemotron calls on Token Factory (see viewer/ask.py)."""
+        from . import ask
+
+        q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+        ip = (self.headers.get("x-forwarded-for") or self.headers.get("x-real-ip") or self.client_address[0]).split(",")[0].strip()
+        try:
+            ask.check_limits(ip)
+            if path == "/api/explain":
+                out = ask.explain(self.store, q.get("record", ""))
+            elif q.get("step") == "plan":
+                out = ask.plan(self.store, q.get("q", ""))
+                out["labels"] = ask.facts(self.store)[2]
+            else:
+                split = lambda v: [x for x in (v or "").split("|") if x]  # noqa: E731
+                out = ask.answer(self.store, q.get("q", ""), split(q.get("models")), split(q.get("topics")))
+        except ask.AskUnavailable as e:
+            self._send_json({"error": str(e)}, status=503)
+            return
+        self._send_json(out, cache=True)
+
+    def _redirect(self, location: str, status: int = 302) -> None:
+        self.send_response(status)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _send_html(self, body: str, status: int = 200) -> None:
         payload = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        if HOSTED and status == 200:
+            # The store is frozen per deploy; let the CDN serve repeat views.
+            self.send_header("Cache-Control", "public, max-age=0, s-maxage=86400, stale-while-revalidate=604800")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -3102,17 +3517,50 @@ class _ViewerHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
 
         if path == "/":
-            # Capability map: ?model=<id or short name>, ?compare=1.
+            # The globe Map; it fetches /api/map.json and draws client-side.
+            self._send_html(_MAP_PAGE.read_text(encoding="utf-8"))
+            return
+
+        if path == "/api/map.json":
+            payload = payload_json(self.store)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", _API_CACHE)
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        if path == "/api/search.json":
+            payload = search_json(self.store, (parse_qs(urlsplit(self.path).query).get("q") or [""])[0])
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", _API_CACHE)
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        if path in ("/api/ask", "/api/explain"):
+            self._send_ask(path)
+            return
+
+        if path == "/capability-map":
+            # Text verdicts per model ("where does it break"): ?model=<id or short name>, ?compare=1.
             q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
             self._send_html(capability_map_html(self.store, model=q.get("model"), compare=q.get("compare") == "1"))
             return
 
         if path == "/overview":
-            self._send_html(index_html(self.store))
+            # The old Console duplicated the Map with different counts; the Map is home.
+            self._redirect("/")
             return
 
         if path == "/frontier":
             q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            if not q.get("model"):
+                self._redirect("/capability-map")
+                return
             self._send_html(frontier_html(self.store, model=q.get("model"), cap=q.get("cap")))
             return
 
@@ -3142,7 +3590,7 @@ class _ViewerHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/launch":
-            body = launch_mod.handle_launch_get(self.launch_deps)
+            body = _HOSTED_LAUNCH_HTML if HOSTED else launch_mod.handle_launch_get(self.launch_deps)
             self._send_html(_shell("Launch a campaign", "launch", body, trial_count=_trial_count(self.store)))
             return
 
@@ -3183,6 +3631,10 @@ class _ViewerHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 -- required BaseHTTPRequestHandler name
         path = urlsplit(self.path).path
+
+        if HOSTED:
+            self._send_html(_shell("Read-only", "", _HOSTED_LAUNCH_HTML, trial_count=0), status=403)
+            return
 
         if path == "/stop":
             launch_mod.request_stop()

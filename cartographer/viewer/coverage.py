@@ -12,10 +12,20 @@ or foil is renamed/added, update this module alongside it.
 
 from __future__ import annotations
 
-QUERY_KINDS: tuple[tuple[str, str], ...] = (
-    ("state", "Where is the object actually located right now? Pure event-log replay, no perspective involved."),
-    ("belief", "Where does entity X believe the object is? Theory-of-mind: depends on what X actually witnessed or was told, which can diverge from the true state."),
-    ("order", "Which of two events happened first? Tests recovering true chronology from narration that may be presented out of order."),
+# (province, kind, what it asks) -- every query kind a campaign records,
+# grouped under the province whose flame it feeds on the Map. Questions
+# follow docs/campaign-catalog.md.
+QUERY_KINDS: tuple[tuple[str, str, str], ...] = (
+    ("Narrative", "state", "After a long chain of moves, where is each object really? Pure event-log replay, no perspective involved."),
+    ("Narrative", "order", "When a story is told out of order, which of two events really happened first?"),
+    ("Narrative", "belief", "Where does a person think an object is, based only on what that person saw or was told?"),
+    ("Narrative", "adversarial_belief", "Does belief tracking survive stories searched so the tempting wrong answer is planted right there?"),
+    ("Tool planning", "tool_plan", "Can the model write a whole plan of tool calls that reaches the goal, through precondition chains, decoys and look-alike tools -- and say so when no plan exists?"),
+    ("Interactive", "interactive", "Calling tools one at a time and seeing each result, can the model carry returned values forward, avoid look-alikes and retry a failed call?"),
+    ("Code tracing", "code_trace", "Given a generated program, can the model predict a variable's final value through aliasing, closures, look-alike names and declared dialects?"),
+    ("Code repair", "code_repair", "Given a function with injected bugs, its wrong output and the right one, can the model fix the cause without breaking hidden inputs?"),
+    ("Code repair", "code_write", "From a plain-English description and a few examples, can the model write a function that also gets unseen edge cases right? (Built, not yet run: the spec under-determines some answers.)"),
+    ("Repository", "repo_fix", "In a multi-file repository, can the model follow the calls to the file that holds the cause and fix it there, using coding-harness tools?"),
 )
 
 DIFFICULTY_DIMS: tuple[tuple[str, str], ...] = (
@@ -43,11 +53,10 @@ ANALYSIS_MACHINERY: tuple[tuple[str, str], ...] = (
 )
 
 NOT_YET_COVERED: tuple[str, ...] = (
-    "Tool/action planning (multi-step agentic tool use)",
     "Instruction-following under explicit constraints",
-    "Code generation or code understanding",
     "Quantitative/numeric reasoning",
     "Long-context retrieval (needle-in-haystack style)",
+    "Image or other non-text inputs",
 )
 
 
@@ -63,7 +72,13 @@ def _rows(pairs: tuple[tuple[str, str], ...]) -> str:
 def coverage_html() -> str:
     from .serve import _shell
 
-    query_rows = _rows(QUERY_KINDS)
+    import html as _html
+
+    query_rows = "".join(
+        f'<tr><td>{_html.escape(prov)}</td><td class="mono">{_html.escape(kind)}</td><td>{_html.escape(desc)}</td></tr>'
+        for prov, kind, desc in QUERY_KINDS
+    )
+    n_provinces = len({prov for prov, _k, _d in QUERY_KINDS})
     dim_rows = _rows(DIFFICULTY_DIMS)
     foil_rows = _rows(FOIL_TRAPS)
     machinery_rows = _rows(ANALYSIS_MACHINERY)
@@ -83,53 +98,52 @@ def coverage_html() -> str:
     <div class="page-head"><div class="page-head-main">
     <h1>Coverage</h1>
     <p class="subtitle">What this instrument tests, and what it honestly
-    doesn't yet -- the full inventory of query kinds, difficulty
-    dimensions, foil traps, and analysis machinery, plus a roadmap of
-    gaps.</p>
+    doesn't yet: every province and query kind behind the Map, the
+    narrative dials and traps, the analysis machinery, and the gaps.</p>
     </div><div class="page-head-actions">
       <a class="cta-primary" href="/launch">Map a model &rarr;</a>
     </div></div>
 
     <div class="stat-grid">
-      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(QUERY_KINDS)}</div></div><div class="stat-label">Query kinds</div></div>
-      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(DIFFICULTY_DIMS)}</div></div><div class="stat-label">Difficulty dims</div></div>
-      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(FOIL_TRAPS)}</div></div><div class="stat-label">Foil traps</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{n_provinces}</div></div><div class="stat-label">Provinces</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(QUERY_KINDS)}</div><div class="stat-delta">{len(QUERY_KINDS) - 1} measured</div></div><div class="stat-label" title="Code writing is built but held out of live runs">Query kinds</div></div>
+      <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(FOIL_TRAPS)}</div></div><div class="stat-label">Narrative foil traps</div></div>
       <div class="stat-box"><div class="stat-num-row"><div class="stat-num">{len(NOT_YET_COVERED)}</div></div><div class="stat-label">Known gaps</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Provinces and query kinds</span>
+        <span class="card-meta">{len(QUERY_KINDS)} kinds in {n_provinces} provinces</span>
+      </div>
+      <table><thead><tr><th>province</th><th>kind</th><th>what it asks</th></tr></thead>
+      <tbody>{query_rows}</tbody></table>
     </div>
 
     <div class="grid-2">
       <div class="card">
         <div class="card-head">
-          <span class="card-title">Query kinds</span>
-          <span class="card-meta">{len(QUERY_KINDS)}</span>
+          <span class="card-title">Narrative difficulty dials</span>
+          <span class="card-meta">{len(DIFFICULTY_DIMS)}</span>
         </div>
-        <table><thead><tr><th>kind</th><th>what it tests</th></tr></thead>
-        <tbody>{query_rows}</tbody></table>
+        <table><thead><tr><th>dial</th><th>what it varies</th></tr></thead>
+        <tbody>{dim_rows}</tbody></table>
       </div>
       <div class="card">
         <div class="card-head">
-          <span class="card-title">Foil traps</span>
+          <span class="card-title">Narrative foil traps</span>
           <span class="card-meta">{len(FOIL_TRAPS)}</span>
         </div>
         <table><thead><tr><th>trap</th><th>mechanism</th></tr></thead>
         <tbody>{foil_rows}</tbody></table>
+        <p class="meta" style="padding-bottom:14px">The plausible-but-wrong answers a shallow reader gives on a
+        belief query; adversarial seed search picks the worlds that pit a trap most sharply against the truth.
+        Every other province has its own dials and traps, listed per campaign in
+        <span class="mono">docs/campaign-catalog.md</span>.</p>
       </div>
     </div>
 
-    <p class="meta">Foil traps are the plausible-but-wrong answers a
-    shallow reasoner might give on a belief query, used by adversarial
-    seed search to select the world that most sharply pits a trap against
-    the truth.</p>
-
     <div class="grid-2">
-      <div class="card">
-        <div class="card-head">
-          <span class="card-title">Difficulty dimensions</span>
-          <span class="card-meta">{len(DIFFICULTY_DIMS)}</span>
-        </div>
-        <table><thead><tr><th>dim</th><th>what it varies</th></tr></thead>
-        <tbody>{dim_rows}</tbody></table>
-      </div>
       <div class="card">
         <div class="card-head">
           <span class="card-title">Analysis machinery</span>
@@ -138,16 +152,15 @@ def coverage_html() -> str:
         <table><thead><tr><th>tool</th><th>what it does</th></tr></thead>
         <tbody>{machinery_rows}</tbody></table>
       </div>
-    </div>
-
-    <div class="card card-gap">
-      <div class="card-head">
-        <span class="card-title">Not yet covered</span>
-        <span class="card-meta">{len(NOT_YET_COVERED)} known gaps</span>
-      </div>
-      <div class="card-body">
-        <p class="meta">Roadmap -- capabilities this instrument does not probe today.</p>
-        <ul>{roadmap_items}</ul>
+      <div class="card card-gap">
+        <div class="card-head">
+          <span class="card-title">Not yet covered</span>
+          <span class="card-meta">{len(NOT_YET_COVERED)} known gaps</span>
+        </div>
+        <div class="card-body">
+          <p class="meta" style="margin-top:0">Capabilities this instrument does not probe today.</p>
+          <ul class="prose-list">{roadmap_items}</ul>
+        </div>
       </div>
     </div>
     """

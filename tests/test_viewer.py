@@ -919,12 +919,12 @@ def test_atlas_selectors_are_real_links_and_honour_query_params(tmp_path):
     assert 'class="seg-item' in page
 
     picked = atlas_html(store, kind="belief", dim="scramble")
-    assert "belief / scramble" in picked
+    assert "Belief / scramble" in picked
     assert 'aria-current="true"' in picked
 
     # Garbage params fall back to the default pane rather than 500ing.
     junk = atlas_html(store, kind="nope", dim="also-nope")
-    assert "Capability map" in junk
+    assert "Pass rate by difficulty" in junk
     store.close()
 
 
@@ -963,7 +963,7 @@ def test_atlas_survives_one_model_one_bucket_and_empty_selections(tmp_path):
     ])
     page = atlas_html(store)
     assert "Only-Model" in page
-    assert "Capability map" in page
+    assert "Pass rate by difficulty" in page
     # One model, one bucket, one point: no polyline is drawn, but the page
     # still renders a cell and does not raise.
     assert page.count('class="heat-cell"') == 1

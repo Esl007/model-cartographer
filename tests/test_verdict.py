@@ -241,6 +241,23 @@ def test_full_map_verdict_aggregates_child_stages(tmp_path):
     store.close()
 
 
+def test_arm_run_verdict_reads_its_arms_not_full_map_stages(tmp_path):
+    """An evidence-fidelity run keeps its trials under arms (`/A`, `/B`, ...),
+    not full_map stages: the verdict must find them and call them arms."""
+    store = ResultsStore(tmp_path / "db.sqlite3")
+    parent = "camp-ef-belief-fake-001"
+    _add_passing_trials(store, f"{parent}/A", "state", "fake/model", 4, {"chain_length": 2})
+    _add_failing_trials(store, f"{parent}/B", "belief", "fake/model", 4, {"chain_length": 3}, start_seed=50)
+
+    verdict = run_verdict(store, parent)
+
+    assert set(verdict.stats["stages"]) == {"A", "B"}
+    assert verdict.stats["stages"]["B"]["pass_rate"] == pytest.approx(0.0)
+    assert "2 arms" in verdict.headline and "province" not in verdict.headline
+    assert "no records" not in verdict.headline
+    store.close()
+
+
 # --- verification (Task 2): verified counts + noise exclusion ------------
 
 

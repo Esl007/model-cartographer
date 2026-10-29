@@ -528,13 +528,38 @@ def _is_full_map_parent(store: ResultsStore, run_id: str) -> bool:
 _FULL_MAP_STAGES = ["state", "order", "belief", "adversarial_belief", "breaking_point"]
 
 
+def child_stages(store: ResultsStore, run_id: str) -> list[str]:
+    """The stage names a parent run's trials live under (`f"{run_id}/{stage}"`).
+
+    A full_map parent always reports its five stages, in order (a stage
+    with no records reads "not run"). Any other parent -- an evidence-
+    fidelity run's arms `A`..`X`, say -- reports the stages it actually has,
+    sorted. `verify` children are resample trials, never a stage.
+    """
+    cur = store._conn.execute(
+        "SELECT DISTINCT run_id FROM experiments WHERE run_id LIKE ?", (f"{run_id}/%",)
+    )
+    found: list[str] = []
+    for (rid,) in cur.fetchall():
+        if not rid.startswith(run_id + "/"):
+            continue  # LIKE treats _ and % in run_id as wildcards
+        stage = rid[len(run_id) + 1:].split("/", 1)[0]
+        if stage and stage != VERIFY_SUFFIX.strip("/") and stage not in found:
+            found.append(stage)
+    if not found or any(st in _FULL_MAP_STAGES for st in found):
+        return list(_FULL_MAP_STAGES)
+    return sorted(found)
+
+
 def _full_map_verdict(store: ResultsStore, run_id: str) -> RunVerdict:
     stage_paragraphs = []
     stats = {"stages": {}}
     all_failures: list = []
     any_records = False
 
-    for stage in _FULL_MAP_STAGES:
+    stages = child_stages(store, run_id)
+    is_full_map = stages == _FULL_MAP_STAGES  # otherwise the children are arms (A, B, ... X)
+    for stage in stages:
         child_run_id = f"{run_id}/{stage}"
         records = store.by_run(child_run_id)
         if not records:
@@ -562,12 +587,14 @@ def _full_map_verdict(store: ResultsStore, run_id: str) -> RunVerdict:
             )
         elif pass_rate >= _SATURATION_PASS_RATE:
             stage_paragraphs.append(
-                f"Passes {stage} cleanly ({pass_rate * 100:.0f}%, {n} trials)."
+                f"Passes {stage} cleanly ({pass_rate * 100:.0f}%, {n} trials)." if is_full_map
+                else f"Arm {stage} passes cleanly ({pass_rate * 100:.0f}%, {n} trials)."
             )
         else:
             stage_paragraphs.append(
                 f"{stage.capitalize()} is a weak province: {pass_rate * 100:.0f}% "
-                f"pass rate across {n} trials."
+                f"pass rate across {n} trials." if is_full_map
+                else f"Arm {stage}: {pass_rate * 100:.0f}% pass rate across {n} trials."
             )
         if stage != "breaking_point":
             verification_para = _verification_paragraph(
@@ -590,7 +617,16 @@ def _full_map_verdict(store: ResultsStore, run_id: str) -> RunVerdict:
         s for s, v in stats["stages"].items()
         if v.get("pass_rate") is not None and v["pass_rate"] < _SATURATION_PASS_RATE and s != "breaking_point"
     ]
-    if weak_stages:
+    if not is_full_map:
+        clean = [s for s in stats["stages"] if s not in weak_stages]
+        if weak_stages:
+            headline = (
+                f"Run {run_id}, {len(stats['stages'])} arms: clean on {', '.join(clean) or 'none'}; "
+                f"below {_SATURATION_PASS_RATE * 100:.0f}% on {', '.join(weak_stages)}."
+            )
+        else:
+            headline = f"Run {run_id}: every arm passes cleanly."
+    elif weak_stages:
         headline = (
             f"Full-map run {run_id}: clean on "
             f"{', '.join(s for s in stats['stages'] if s not in weak_stages) or 'nothing'}, "

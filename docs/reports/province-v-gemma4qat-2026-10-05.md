@@ -9,7 +9,7 @@ All numbers come from `results/campaign.sqlite` (read-only queries) or from the 
 | item | value |
 |---|---|
 | session start | 2026-10-05 22:57:19 PDT |
-| `modal deploy` | 4.4 s; URL host matched the key file's `modal_url` host (`<redacted>`) |
+| `modal deploy` | 4.4 s; URL host matched the key file's `modal_url` host (`<modal-host redacted>`) |
 | warm-up (`/models` until HTTP 200) | 368 s (cold start) |
 | tiny `Client.chat` confirm | `'ready'`, finish `stop`, 2 tokens out, 2.6 s |
 | app stopped | 2026-10-06 00:09 PDT (07:09 UTC); `modal app list` shows `gemma4-qat` **stopped, 0 tasks** |

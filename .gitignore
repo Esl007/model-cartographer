@@ -18,3 +18,9 @@ results/*.bak-*
 results/logs/
 results/consistency/
 results/hunt/
+
+# Vercel bundle (scripts/build_vercel.py)
+dist/
+
+# Demo video renders (submission/); large binaries stay out of git
+submission/*.mp4

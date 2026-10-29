@@ -48,6 +48,30 @@ def _log_loss(points: list[tuple[float, bool]], midpoint: float, slope: float) -
     return total / len(points) if points else 0.0
 
 
+def _grouped(points: list[tuple[float, bool]]) -> tuple[list[tuple[float, int, int]], int]:
+    """(x, n_pass, n_fail) per distinct x. Difficulty dims repeat values
+    heavily (integer chain lengths, a handful of levels), so the fit's
+    hundreds of loss evaluations touch a few dozen x's instead of every trial."""
+    by_x: dict[float, list[int]] = {}
+    for x, passed in points:
+        c = by_x.setdefault(x, [0, 0])
+        c[0 if passed else 1] += 1
+    return [(x, c[0], c[1]) for x, c in by_x.items()], len(points)
+
+
+def _log_loss_grouped(groups: list[tuple[float, int, int]], n: int, midpoint: float, slope: float) -> float:
+    """`_log_loss` over `_grouped` points: the same sum, one exp per distinct x."""
+    total = 0.0
+    for x, n_pass, n_fail in groups:
+        z = min(max(slope * (x - midpoint), -700.0), 700.0)
+        p_pass = min(max(1.0 / (1.0 + math.exp(z)), _EPS), 1.0 - _EPS)
+        if n_pass:
+            total += -math.log(p_pass) * n_pass
+        if n_fail:
+            total += -math.log(1.0 - p_pass) * n_fail
+    return total / n if n else 0.0
+
+
 def _has_crossing(points: list[tuple[float, bool]]) -> bool:
     passed = {p for _, p in points}
     return len(passed) > 1
@@ -67,7 +91,8 @@ def fit_logistic(points: list[tuple[float, bool]]) -> LogisticFit | None:
     if len(points) < 2 or not _has_crossing(points):
         return None
 
-    xs = [x for x, _ in points]
+    groups, n = _grouped(points)
+    xs = [x for x, _, _ in groups]
     lo, hi = min(xs), max(xs)
     span = hi - lo if hi > lo else 1.0
 
@@ -81,7 +106,7 @@ def fit_logistic(points: list[tuple[float, bool]]) -> LogisticFit | None:
     best_mid, best_slope, best_loss = midpoints[0], slopes[0], math.inf
     for m in midpoints:
         for s in slopes:
-            loss = _log_loss(points, m, s)
+            loss = _log_loss_grouped(groups, n, m, s)
             if loss < best_loss:
                 best_mid, best_slope, best_loss = m, s, loss
 
@@ -98,7 +123,7 @@ def fit_logistic(points: list[tuple[float, bool]]) -> LogisticFit | None:
         for s in refine_slopes:
             if s <= 0:
                 continue
-            loss = _log_loss(points, m, s)
+            loss = _log_loss_grouped(groups, n, m, s)
             if loss < best_loss:
                 best_mid, best_slope, best_loss = m, s, loss
 

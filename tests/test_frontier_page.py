@@ -1,4 +1,5 @@
-"""Capability map (`/`) and discovery page (`/frontier`) on synthetic stores.
+"""Capability map (`/capability-map`), globe Map (`/` + `/api/map.json`) and
+discovery page (`/frontier`) on synthetic stores.
 
 Pages are rendered both directly and through the real request handler on an
 in-process server, so the route wiring in `serve.py` is covered too."""
@@ -6,6 +7,7 @@ in-process server, so the route wiring in `serve.py` is covered too."""
 from __future__ import annotations
 
 import html
+import json
 import re
 import threading
 import urllib.error
@@ -98,8 +100,9 @@ def test_map_shows_frontier_data_not_invented_text(store):
     text = _text(page)
     assert row.headline in text and row.boundary in text  # "25-call plans"
     assert "grade B" in text
-    verdict = mf.verdict.split(": ", 1)[1]
-    assert verdict[:1].upper() + verdict[1:] in text
+    # the verdict sentence is shown as labelled lines: Breaks (n) / Slips (n) / Holds
+    assert "Breaks (1) long plans with look-alike tool names (25-call plans)" in text
+    assert "Holds on 1 of 2 capabilities tested." in text
     # status chip = icon + word, never colour alone
     assert re.search(r'class="fm-status heat-1" data-status="BREAKS"><svg[^>]*>.*?</svg>BREAKS', page)
 
@@ -269,32 +272,67 @@ def _get(base: str, path: str) -> tuple[int, str]:
 
 def test_routes(server):
     status, home = _get(server, "/")
-    assert status == 200 and "<h1>Capability map</h1>" in home
-    status, page = _get(server, "/?model=test-model")  # short name works too
+    assert status == 200 and "<title>Model Cartographer · Map</title>" in home
+    assert "/api/map.json" in home  # the globe draws itself from the live payload
+    status, page = _get(server, "/capability-map")
+    assert status == 200 and "<h1>Breaking points</h1>" in page
+    status, page = _get(server, "/capability-map?model=test-model")  # short name works too
     assert status == 200 and 'data-cap="plan_length_lookalike" data-status="BREAKS"' in page
-    status, page = _get(server, "/?compare=1")
+    status, page = _get(server, "/capability-map?compare=1")
     assert status == 200 and 'class="fm-cmp"' in page
+    assert 'href="/?' not in page  # no link still points at the old root map
     status, page = _get(server, "/frontier?model=nvidia%2Ftest-model&cap=plan_length_lookalike")
     assert status == 200 and "Why it breaks" in page
-    for bad in ("/frontier?model=nope&cap=state", "/frontier?model=nvidia%2Ftest-model&cap=nope", "/frontier"):
+    for bad in ("/frontier?model=nope&cap=state", "/frontier?model=nvidia%2Ftest-model&cap=nope"):
         status, page = _get(server, bad)
         assert status == 200 and "Capability not found" in page
+    status, page = _get(server, "/frontier")  # no model: straight to Breaking points
+    assert status == 200 and "<h1>Breaking points</h1>" in page
 
 
-def test_overview_still_renders(server):
+def test_overview_redirects_to_the_map(server):
+    # the old Console repeated the Map with its own counts; the Map is home now
     status, page = _get(server, "/overview")
+    assert status == 200 and "<title>Model Cartographer · Map</title>" in page
+
+
+def test_every_page_uses_the_maps_sidebar(server):
+    """Server-rendered pages and the globe Map share one sidebar: same
+    labels in the same order, so moving between them never changes the frame."""
+    from pathlib import Path
+
+    map_page = (Path(__file__).resolve().parents[1] / "cartographer/viewer/static/map.html").read_text()
+    map_labels = re.findall(r'<button class="nav-item[^"]*" data-nav="[^"]+"><svg.*?</svg>([^<]+)</button>', map_page)
+    for path in ("/capability-map", "/runs", "/atlas", "/coverage", "/report", "/launch", "/live"):
+        _status, page = _get(server, path)
+        items = re.findall(r'<a class="nav-item[^"]*"(?: aria-current="page")? href="([^"]+)"><svg.*?</svg>([^<]+)</a>', page)
+        assert [label for _h, label in items] == map_labels, path
+        assert items[0] == ("/", "Map")
+        assert 'id="mcQ"' in page and 'id="mcEpoch"' in page  # the Map's command bar
+    _status, page = _get(server, "/capability-map")
+    assert 'class="nav-item on" aria-current="page" href="/capability-map"' in page
+
+
+def test_search_api_feeds_the_command_bar(server):
+    status, raw = _get(server, "/api/search.json")
     assert status == 200
-    assert "Capability frontiers" in page and 'class="console"' in page
+    data = json.loads(raw)
+    assert [p["id"] for p in data["provinces"]][:2] == ["narrative", "tool"]
+    assert data["trials"] > 0 and data["newest"]
+    assert all(m["slug"] and m["name"] for m in data["models"])
+    _status, raw = _get(server, "/api/search.json?q=zz")  # not an id prefix: no trial lookup
+    assert json.loads(raw) == {"trials": []}
 
 
-def test_nav_says_explore_not_act_and_capability_map_comes_first(server):
-    _status, page = _get(server, "/")
-    labels = re.findall(r'<div class="nav-group-label">([^<]+)</div>', page)
-    assert "Explore" in labels and "Act" not in labels
-    assert len(labels) == len(set(labels))
-    items = re.findall(r'<a class="nav-row[^"]*" href="([^"]+)">.*?<span class="nav-label">([^<]+)</span>', page)
-    assert items[0] == ("/", "Capability map")
-    hrefs = {h for h, _ in items}
-    for href in ("/overview", "/findings", "/report", "/runs", "/atlas", "/coverage", "/launch", "/live"):
-        assert href in hrefs
-    assert 'class="nav-row active" href="/"' in page
+def test_map_api_serves_the_live_payload(server):
+    status, raw = _get(server, "/api/map.json")
+    assert status == 200
+    data = json.loads(raw)
+    by_id = {m["id"]: m for m in data["models"]}
+    assert set(by_id) == {M, M2}
+    # M: 30 state passes (narrative province) + 40 tool-plan trials, 26 of them passes
+    assert by_id[M]["prov"]["narrative"] == [30, 30]
+    assert by_id[M]["prov"]["tool"] == [24, 40]
+    assert "narrative" not in by_id[M2]["prov"]  # never measured there, so no number at all
+    assert by_id[M]["display"] and by_id[M]["vendor"] == "nvidia"
+    assert {p["id"] for p in data["provinces"]} == {"narrative", "tool", "code_trace", "code_repair", "repo", "interactive"}

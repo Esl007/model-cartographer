@@ -22,6 +22,7 @@ code out of the request path.
 from __future__ import annotations
 
 import html
+import re
 import json
 from pathlib import Path
 
@@ -46,21 +47,57 @@ def load_report(sidecar_path: str | Path | None = None) -> dict | None:
         return None
 
 
+def _inline_md(line: str) -> str:
+    """Escape, then render the two inline marks the analyst writes:
+    **bold** and `code`."""
+    out = html.escape(line)
+    out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", out)
+    out = re.sub(r"`([^`]+)`", r'<code class="mono">\1</code>', out)
+    return out
+
+
 def _prose_html(text: str) -> str:
-    """Render analyst prose as escaped paragraphs, preserving blank-line
-    breaks. No markdown interpretation beyond paragraphs -- the analyst's
-    own headers are already split out into sections."""
+    """Render analyst prose: paragraphs, `#`-headings, `-`/`*` bullet
+    lists, **bold** and `code`. Everything is escaped first; nothing else
+    the analyst writes is interpreted."""
     text = (text or "").strip()
     if not text:
         return ""
-    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
-    paras = []
-    for b in blocks:
-        # collapse single newlines within a block into <br> so list-like
-        # lines stay on their own line without needing a markdown parser.
-        inner = "<br>".join(html.escape(line) for line in b.splitlines())
-        paras.append(f'<p style="margin:0 0 0.6rem;">{inner}</p>')
-    return "".join(paras)
+    parts: list[str] = []
+    para: list[str] = []
+    items: list[str] = []
+
+    def flush() -> None:
+        if para:
+            parts.append(f'<p class="prose-p">{"<br>".join(para)}</p>')
+            para.clear()
+        if items:
+            parts.append('<ul class="prose-list">' + "".join(f"<li>{i}</li>" for i in items) + "</ul>")
+            items.clear()
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            flush()
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.*)$", line)
+        bullet = re.match(r"^[-*\u2022]\s+(.*)$", line)
+        if heading:
+            flush()
+            parts.append(f'<h3 class="prose-h">{_inline_md(heading.group(2))}</h3>')
+        elif bullet:
+            if para:
+                flush()
+            items.append(_inline_md(bullet.group(1)))
+        elif re.fullmatch(r"\*\*[^*]+\*\*:?", line):  # a bold-only line is a subheading
+            flush()
+            parts.append(f'<div class="prose-sub">{_inline_md(line)}</div>')
+        else:
+            if items:
+                flush()
+            para.append(_inline_md(line))
+    flush()
+    return "".join(parts)
 
 
 def _diagnosis_card(report: dict) -> str:
@@ -87,7 +124,8 @@ def _diagnosis_card(report: dict) -> str:
     return (
         '<div class="card">'
         '<div class="card-head"><span class="card-title">Capability diagnosis</span>'
-        f'<span class="card-meta"><span class="chip chip-muted">{html.escape(model)}</span></span>'
+        f'<span class="card-meta" title="The model that wrote this diagnosis, not a model under test">'
+        f'written by <span class="chip chip-muted">{html.escape(model)}</span></span>'
         "</div>"
         '<div class="card-body">'
         '<p class="meta" style="margin-top:0;">Written by the analyst model, '

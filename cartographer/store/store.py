@@ -150,7 +150,7 @@ class ResultsStore:
     that a record read today will read identically tomorrow.
     """
 
-    def __init__(self, path: str | Path, read_only: bool = False) -> None:
+    def __init__(self, path: str | Path, read_only: bool = False, immutable: bool = False) -> None:
         # check_same_thread=False + an internal write lock make appends safe
         # from worker threads: the parallel campaign scheduler (see
         # `cartographer/schedule/scheduler.py`, SchedulerConfig.parallelism)
@@ -169,7 +169,10 @@ class ResultsStore:
         # guarantee above is enforced, not merely honored.
         self._read_only = read_only
         if read_only:
-            uri = f"file:{Path(path)}?mode=ro"
+            uri = f"file:{Path(path)}?mode=ro" + ("&immutable=1" if immutable else "")
+            # immutable=1: the file can never change under us (a deployed
+            # snapshot on a read-only filesystem), so sqlite skips locking
+            # and journal checks entirely.
             self._conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
             self._write_lock = threading.Lock()
             self._conn.row_factory = sqlite3.Row
