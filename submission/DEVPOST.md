@@ -5,7 +5,7 @@
 **Track:** Best Apps and Agents
 **Demo URL:** https://model-cartographer.vercel.app
 **Repository:** https://github.com/Esl007/model-cartographer
-**Video:** _YouTube link_
+**Video:** https://youtu.be/eTcULrzXMpk
 **New or existing:** New. The first commit is dated Sep 16, 2026, inside the submission period.
 
 ---

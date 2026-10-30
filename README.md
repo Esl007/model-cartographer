@@ -5,7 +5,7 @@
 Benchmarks give a model one score. Model Cartographer generates tasks from simulated worlds, turns their difficulty up along real dials until a model stops passing, and reports where it broke in the task's own units ("breaks on 24-call plans with look-alike tool names"). The right answer always comes from running the world, never from another model's opinion: there is no LLM judge.
 
 - **Live demo:** https://model-cartographer.vercel.app
-- **Demo video (2:10):** _YouTube link_
+- **Demo video (2:10):** https://youtu.be/eTcULrzXMpk
 - **Track:** Best Apps and Agents (Nebius × NVIDIA hackathon)
 - **License:** MIT
 
